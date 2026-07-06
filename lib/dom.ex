@@ -66,6 +66,7 @@ defmodule DOM do
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
+  @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
@@ -348,6 +349,31 @@ defmodule DOM do
     true = :ets.insert(nodes, subtree)
   end
 
+  def _node_remove_child(server, parent_id, %{id: child_id} = child) do
+    case GenServer.call(server, {:remove_child, parent_id, child_id}) do
+      :ok -> child
+      {:error, :not_found} -> raise DOM.NotFoundError
+    end
+  end
+
+  defp remove_child_impl(parent_id, child_id, state) do
+    parent_data = fetch_node!(state.nodes, parent_id)
+
+    if child_id in parent_data.children do
+      child_data = fetch_node!(state.nodes, child_id)
+
+      put_node(state.nodes, parent_id, %{
+        parent_data
+        | children: List.delete(parent_data.children, child_id)
+      })
+
+      put_node(state.nodes, child_id, %{child_data | parent: nil})
+      {:reply, :ok, state}
+    else
+      {:reply, {:error, :not_found}, state}
+    end
+  end
+
   def _export_subtree(server, node_id) do
     GenServer.call(server, {:export_subtree, node_id})
   end
@@ -579,6 +605,11 @@ defmodule DOM do
         state
       ) do
     insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, state)
+  end
+
+  @impl true
+  def handle_call({:remove_child, parent_id, child_id}, _from, state) do
+    remove_child_impl(parent_id, child_id, state)
   end
 
   @impl true
