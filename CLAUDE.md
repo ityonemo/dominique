@@ -10,6 +10,54 @@ Key semantic (see `README.md`): appending a node owned by another DOM transfers
 its whole subtree across servers, so old handles go **stale**. Callers must use
 the handle returned by `DOM.Node.append_child/2` after a cross-document transfer.
 
+## Architecture & dispatch conventions
+
+**Where a new operation lives — `Node` vs `DOM`.** Follow the Elixir "first
+argument owns the function" convention:
+
+- **Node-first operations go on the `DOM.Node` protocol.** If a DOM node is the
+  natural first argument, add it to `DOM.Node` and dispatch on the handle:
+  `Node.append_child(parent, child)`, `Node.next_sibling(node)`,
+  `Node.remove_child(parent, child)`.
+- **Document-scoped operations go on `DOM`.** When the operation conceptually
+  belongs to the document and it is more convenient for the first argument to be
+  the **DOM object itself** rather than the document node, put it on `DOM`:
+  `DOM.new()`, `DOM.create_element(document, "div")`, and future document-level
+  queries like `get_element_by_id`, `create_element_ns`.
+
+**Three call layers (the `_` prefix).** A node handle is opaque data; the owning
+node module forwards through the `DOM` server. Every operation flows:
+
+```
+app code   →  Node.local_name(el)          # public API (owner module / protocol)
+           →  DOM._element_local_name(...)  # _-prefixed internal cross-module bridge
+           →  GenServer.call → local_name_impl/2   # defp, the real logic
+```
+
+- **Public (no underscore):** the user-facing surface — `DOM.new/2`,
+  `DOM.create_*`, and the `DOM.Node` protocol functions on handles.
+- **Internal (`_`-prefixed), e.g. `DOM._node_append_child/3`,
+  `DOM._element_local_name/2`, `DOM._export_subtree/2`:** public *only* because a
+  different module (the node module) must reach into `DOM` across a module
+  boundary, so they cannot be `defp`. Treat them as private; application code
+  must not call them. `_export_subtree`/`_remove_subtree` are the cross-server
+  primitives used to move a subtree between two DOM GenServers during adoption.
+- **`defp *_impl`:** the actual behavior behind each `handle_call`, per
+  ROUTER_PATTERN.md.
+
+Name internal bridges `_node_*` when they back a `DOM.Node` protocol function;
+use a type-specific prefix (e.g. `_element_local_name`) when the public function
+is type-specific.
+
+**Protoss `after` block.** `DOM.Node` is a Protoss `defprotocol`, which supports
+an `after` block that runs after the protocol/impl definitions. Use it
+**strategically** to define shared, node-type-independent operations once instead
+of copying them into all six impls — e.g. operations derivable purely from other
+protocol callbacks (`next_sibling`/`previous_sibling` from `parent_node/1` +
+`child_nodes/1`), or a shared leaf-rejection helper. Dispatch that genuinely
+differs per node type still belongs in each module's impl clause; do not use the
+`after` block to flatten real per-type differences.
+
 ## The two guideline documents
 
 The complete guidelines live in `.claude/docs/` (copied verbatim from the repo
