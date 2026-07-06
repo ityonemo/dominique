@@ -69,6 +69,7 @@ defmodule DOM do
   @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_replace_child(GenServer.server(), reference(), Node.t(), Node.t()) :: Node.t()
   @spec _node_owner_document(GenServer.server(), reference()) :: Document.t() | nil
+  @spec _node_clone_node(GenServer.server(), reference(), boolean()) :: Node.t()
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
@@ -667,6 +668,37 @@ defmodule DOM do
     {:reply, owner, state}
   end
 
+  def _node_clone_node(server, node_id, deep?) do
+    GenServer.call(server, {:clone_node, node_id, deep?})
+  end
+
+  defp clone_node_impl(node_id, deep?, state) do
+    clone_id = clone_subtree(state.nodes, node_id, deep?)
+    {:reply, node_handle(state.nodes, clone_id), state}
+  end
+
+  # Copies node_id's data under a fresh id with no parent. When deep?, its
+  # children are cloned recursively and attached; otherwise the clone is a leaf.
+  defp clone_subtree(nodes, node_id, deep?) do
+    node_data = fetch_node!(nodes, node_id)
+    clone_id = make_ref()
+
+    children =
+      if deep? do
+        Enum.map(node_data.children, fn child_id ->
+          child_clone_id = clone_subtree(nodes, child_id, true)
+          child_clone = fetch_node!(nodes, child_clone_id)
+          put_node(nodes, child_clone_id, %{child_clone | parent: clone_id})
+          child_clone_id
+        end)
+      else
+        []
+      end
+
+    put_node(nodes, clone_id, %{node_data | parent: nil, children: children})
+    clone_id
+  end
+
   def _element_local_name(server, node_id) do
     GenServer.call(server, {:local_name, node_id})
   end
@@ -821,6 +853,11 @@ defmodule DOM do
   @impl true
   def handle_call({:owner_document, node_id}, _from, state) do
     owner_document_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:clone_node, node_id, deep?}, _from, state) do
+    clone_node_impl(node_id, deep?, state)
   end
 
   @impl true

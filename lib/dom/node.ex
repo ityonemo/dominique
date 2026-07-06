@@ -66,4 +66,14 @@ after
   itself the document.
   """
   def owner_document(node), do: DOM._node_owner_document(node.server, node.id)
+
+  @doc """
+  Clones `node` and returns a fresh, detached handle owned by the same document.
+
+  With `deep?` false (the default) only the node itself is copied; with `deep?`
+  true its whole subtree is cloned independently of the original.
+  """
+  def clone_node(node, deep? \\ false) do
+    DOM._node_clone_node(node.server, node.id, deep?)
+  end
 end
