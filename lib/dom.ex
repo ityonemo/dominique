@@ -67,6 +67,7 @@ defmodule DOM do
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
   @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
+  @spec _node_replace_child(GenServer.server(), reference(), Node.t(), Node.t()) :: Node.t()
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
@@ -374,6 +375,132 @@ defmodule DOM do
     end
   end
 
+  def _node_replace_child(
+        server,
+        parent_id,
+        %{server: new_server, id: new_child_id},
+        %{id: old_child_id} = old_child
+      ) do
+    result =
+      if new_server == server do
+        GenServer.call(server, {:replace_child, parent_id, new_child_id, old_child_id})
+      else
+        subtree = _export_subtree(new_server, new_child_id)
+
+        result =
+          GenServer.call(
+            server,
+            {:replace_subtree, parent_id, new_child_id, old_child_id, subtree}
+          )
+
+        if match?({:ok, _replaced}, result) do
+          _remove_subtree(new_server, new_child_id)
+        end
+
+        result
+      end
+
+    case result do
+      {:ok, _replaced} -> old_child
+      {:error, :hierarchy_request} -> raise DOM.HierarchyRequestError
+      {:error, :not_found} -> raise DOM.NotFoundError
+    end
+  end
+
+  defp replace_child_impl(parent_id, new_child_id, old_child_id, state) do
+    new_child_data = fetch_node!(state.nodes, new_child_id)
+    parent_data = fetch_node!(state.nodes, parent_id)
+
+    replace_child_common(
+      parent_id,
+      parent_data,
+      new_child_id,
+      new_child_data,
+      old_child_id,
+      nil,
+      fn -> detach_from_parent(state.nodes, new_child_id, new_child_data) end,
+      state
+    )
+  end
+
+  defp replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, state) do
+    subtree_nodes = Map.new(subtree)
+    new_child_data = Map.fetch!(subtree_nodes, new_child_id)
+    parent_data = fetch_node!(state.nodes, parent_id)
+
+    replace_child_common(
+      parent_id,
+      parent_data,
+      new_child_id,
+      new_child_data,
+      old_child_id,
+      subtree_nodes,
+      fn -> materialize_subtree(state.nodes, new_child_id, subtree) end,
+      state
+    )
+  end
+
+  # Shared replaceChild body. `prepare` either detaches a same-document new
+  # child from its old parent or materializes a transferred subtree; the
+  # document validity check excludes `old_child_id`, which is leaving.
+  defp replace_child_common(
+         parent_id,
+         parent_data,
+         new_child_id,
+         new_child_data,
+         old_child_id,
+         subtree_nodes,
+         prepare,
+         state
+       ) do
+    cond do
+      old_child_id not in parent_data.children ->
+        {:reply, {:error, :not_found}, state}
+
+      new_child_id == old_child_id ->
+        {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
+
+      invalid_hierarchy?(
+        state.nodes,
+        parent_data,
+        parent_id,
+        new_child_data,
+        old_child_id,
+        old_child_id,
+        subtree_nodes
+      ) ->
+        {:reply, {:error, :hierarchy_request}, state}
+
+      :else ->
+        prepare.()
+        detach_child(state.nodes, old_child_id)
+        parent = fetch_node!(state.nodes, parent_id)
+        {before, [^old_child_id | rest]} = split_at_child(parent.children, old_child_id)
+
+        replacement =
+          if new_child_data.type == DocumentFragment do
+            reparent_fragment_children(state.nodes, parent_id, new_child_data)
+            put_node(state.nodes, new_child_id, %{new_child_data | children: []})
+            new_child_data.children
+          else
+            put_node(state.nodes, new_child_id, %{new_child_data | parent: parent_id})
+            [new_child_id]
+          end
+
+        put_node(state.nodes, parent_id, %{parent | children: before ++ replacement ++ rest})
+        {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
+    end
+  end
+
+  defp detach_child(nodes, child_id) do
+    child = fetch_node!(nodes, child_id)
+    put_node(nodes, child_id, %{child | parent: nil})
+  end
+
+  defp split_at_child(children, child_id) do
+    Enum.split_while(children, &(&1 != child_id))
+  end
+
   def _export_subtree(server, node_id) do
     GenServer.call(server, {:export_subtree, node_id})
   end
@@ -610,6 +737,20 @@ defmodule DOM do
   @impl true
   def handle_call({:remove_child, parent_id, child_id}, _from, state) do
     remove_child_impl(parent_id, child_id, state)
+  end
+
+  @impl true
+  def handle_call({:replace_child, parent_id, new_child_id, old_child_id}, _from, state) do
+    replace_child_impl(parent_id, new_child_id, old_child_id, state)
+  end
+
+  @impl true
+  def handle_call(
+        {:replace_subtree, parent_id, new_child_id, old_child_id, subtree},
+        _from,
+        state
+      ) do
+    replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, state)
   end
 
   @impl true
