@@ -134,7 +134,7 @@ defmodule DOM do
     parent_data = fetch_node!(state.nodes, parent_id)
 
     cond do
-      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil) ->
+      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil, nil) ->
         {:reply, {:error, :hierarchy_request}, state}
 
       child_data.type == DocumentFragment ->
@@ -229,7 +229,15 @@ defmodule DOM do
       reference_child_id not in parent_data.children ->
         {:reply, {:error, :not_found}, state}
 
-      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil) ->
+      invalid_hierarchy?(
+        state.nodes,
+        parent_data,
+        parent_id,
+        child_data,
+        child_id,
+        reference_child_id,
+        nil
+      ) ->
         {:reply, {:error, :hierarchy_request}, state}
 
       child_id == reference_child_id ->
@@ -267,6 +275,7 @@ defmodule DOM do
          parent_id,
          child_data,
          child_id,
+         nil,
          subtree_nodes
        ) do
       {:reply, {:error, :hierarchy_request}, state}
@@ -297,7 +306,15 @@ defmodule DOM do
       reference_child_id not in parent_data.children ->
         {:reply, {:error, :not_found}, state}
 
-      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, subtree_nodes) ->
+      invalid_hierarchy?(
+        state.nodes,
+        parent_data,
+        parent_id,
+        child_data,
+        child_id,
+        reference_child_id,
+        subtree_nodes
+      ) ->
         {:reply, {:error, :hierarchy_request}, state}
 
       :else ->
@@ -354,32 +371,66 @@ defmodule DOM do
     {:reply, :ok, state}
   end
 
-  defp invalid_hierarchy?(nodes, parent, parent_id, child, child_id, subtree_nodes) do
+  defp invalid_hierarchy?(nodes, parent, parent_id, child, child_id, reference_child_id, subtree) do
     inclusive_ancestor?(nodes, child_id, parent_id) or
       (parent.type == Document and
-         invalid_document_child?(nodes, parent, child, child_id, subtree_nodes))
+         invalid_document_child?(nodes, parent, child, child_id, reference_child_id, subtree))
   end
 
-  defp invalid_document_child?(nodes, document, %{type: Element}, child_id, _subtree_nodes) do
-    document_has_node_type?(nodes, document, Element, child_id)
+  defp invalid_document_child?(
+         nodes,
+         document,
+         %{type: Element},
+         child_id,
+         reference_child_id,
+         _sub
+       ) do
+    document_has_node_type?(nodes, document, Element, child_id) or
+      doctype_at_or_after?(nodes, document, reference_child_id)
   end
 
-  defp invalid_document_child?(nodes, document, %{type: DocumentType}, child_id, _subtree_nodes) do
+  defp invalid_document_child?(
+         nodes,
+         document,
+         %{type: DocumentType},
+         child_id,
+         reference_id,
+         _sub
+       ) do
     document_has_node_type?(nodes, document, DocumentType, child_id) or
-      document_has_node_type?(nodes, document, Element, nil)
+      element_before?(nodes, document, reference_id)
   end
 
   defp invalid_document_child?(
          nodes,
          document,
          %{type: DocumentFragment} = fragment,
-         _id,
+         _child_id,
+         _reference_child_id,
          subtree
        ) do
     invalid_document_fragment?(nodes, document, fragment, subtree)
   end
 
-  defp invalid_document_child?(_nodes, _document, _child, _child_id, _subtree_nodes), do: false
+  defp invalid_document_child?(_nodes, _document, _child, _child_id, _reference_child_id, _sub) do
+    false
+  end
+
+  # An element precedes the insertion point: with a nil reference (append), any
+  # element counts; otherwise only elements before the reference child.
+  defp element_before?(nodes, document, reference_child_id) do
+    document.children
+    |> Enum.take_while(&(&1 != reference_child_id))
+    |> Enum.any?(&(fetch_node!(nodes, &1).type == Element))
+  end
+
+  # A doctype sits at or after the insertion point: with a nil reference
+  # (append), any doctype counts; otherwise doctypes from the reference child on.
+  defp doctype_at_or_after?(nodes, document, reference_child_id) do
+    document.children
+    |> Enum.drop_while(&(&1 != reference_child_id))
+    |> Enum.any?(&(fetch_node!(nodes, &1).type == DocumentType))
+  end
 
   defp invalid_document_fragment?(nodes, document, fragment, subtree_nodes) do
     child_types =

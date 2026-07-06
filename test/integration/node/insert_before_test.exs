@@ -342,6 +342,74 @@ defmodule Integration.Node.InsertBeforeTest do
 
     @js """
     return await page.evaluate(() => {
+      const xmlDocument = document.implementation.createDocument(null, null);
+      const element = xmlDocument.createElement("element");
+      const doctype = document.implementation.createDocumentType("html", "", "");
+      xmlDocument.appendChild(element);
+
+      const returned = xmlDocument.insertBefore(doctype, element);
+
+      return {
+        returnedIsDoctype: returned === doctype,
+        childCount: xmlDocument.childNodes.length,
+        elementLocalName: xmlDocument.childNodes[1].localName
+      };
+    });
+    """
+
+    test "insertBefore allows a doctype before the document element", %{js: expected} do
+      document = DOM.new()
+      element = DOM.create_element(document, "element")
+      doctype = DOM.create_document_type(document, "html", "", "")
+      Node.append_child(document, element)
+
+      returned = Node.insert_before(document, doctype, element)
+      [inserted_doctype, inserted_element] = Node.child_nodes(document)
+
+      result = %{
+        "returnedIsDoctype" => returned.id == doctype.id and inserted_doctype.id == doctype.id,
+        "childCount" => document |> Node.child_nodes() |> length(),
+        "elementLocalName" => Element.local_name(inserted_element)
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const xmlDocument = document.implementation.createDocument(null, null);
+      const doctype = document.implementation.createDocumentType("html", "", "");
+      const element = xmlDocument.createElement("element");
+      xmlDocument.appendChild(doctype);
+
+      let errorName = null;
+
+      try {
+        xmlDocument.insertBefore(element, doctype);
+      } catch (error) {
+        errorName = error.name;
+      }
+
+      return { errorName, childCount: xmlDocument.childNodes.length };
+    });
+    """
+
+    test "insertBefore rejects the document element before the doctype", %{js: expected} do
+      document = DOM.new()
+      doctype = DOM.create_document_type(document, "html", "", "")
+      element = DOM.create_element(document, "element")
+      Node.append_child(document, doctype)
+
+      result = %{
+        "errorName" => error_name(fn -> Node.insert_before(document, element, doctype) end),
+        "childCount" => document |> Node.child_nodes() |> length()
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
       const parent = document.createElement("parent");
       const child = document.createElement("child");
       parent.appendChild(child);

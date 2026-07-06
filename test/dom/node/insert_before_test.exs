@@ -81,4 +81,30 @@ defmodule DOM.Node.InsertBeforeTest do
 
     assert Node.parent_node(inserted) == parent
   end
+
+  test "inserts a doctype before the document element" do
+    document = DOM.new()
+    element = DOM.create_element(document, "element")
+    doctype = DOM.create_document_type(document, "html", "", "")
+    Node.append_child(document, element)
+
+    Node.insert_before(document, doctype, element)
+
+    assert Node.child_nodes(document) == [doctype, element]
+    assert Node.parent_node(doctype) == document
+  end
+
+  test "rejects inserting the document element before the doctype" do
+    document = DOM.new()
+    doctype = DOM.create_document_type(document, "html", "", "")
+    element = DOM.create_element(document, "element")
+    Node.append_child(document, doctype)
+
+    assert_raise DOM.HierarchyRequestError, fn ->
+      Node.insert_before(document, element, doctype)
+    end
+
+    assert Node.child_nodes(document) == [doctype]
+    refute Node.parent_node(element)
+  end
 end
