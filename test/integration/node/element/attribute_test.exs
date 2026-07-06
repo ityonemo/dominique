@@ -73,5 +73,41 @@ defmodule Integration.Node.Element.AttributeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const xmlDocument = document.implementation.createDocument(null, null);
+      const element = xmlDocument.createElement("element");
+      element.setAttribute("b", "2");
+      element.setAttribute("a", "1");
+      element.setAttribute("c", "3");
+      element.removeAttribute("a");
+      element.removeAttribute("absent");
+
+      return {
+        names: element.getAttributeNames(),
+        hasA: element.hasAttribute("a"),
+        keptC: element.getAttribute("c")
+      };
+    });
+    """
+
+    test "removeAttribute and getAttributeNames match the browser", %{js: expected} do
+      document = DOM.new()
+      element = DOM.create_element(document, "element")
+      Element.set_attribute(element, "b", "2")
+      Element.set_attribute(element, "a", "1")
+      Element.set_attribute(element, "c", "3")
+      Element.remove_attribute(element, "a")
+      Element.remove_attribute(element, "absent")
+
+      result = %{
+        "names" => Element.get_attribute_names(element),
+        "hasA" => Element.has_attribute(element, "a"),
+        "keptC" => Element.get_attribute(element, "c")
+      }
+
+      assert result == expected
+    end
   end
 end

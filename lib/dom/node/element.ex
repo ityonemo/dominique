@@ -18,6 +18,8 @@ defmodule DOM.Node.Element do
   @spec get_attribute(t(), String.t()) :: String.t() | nil
   @spec set_attribute(t(), String.t(), String.t()) :: :ok
   @spec has_attribute(t(), String.t()) :: boolean()
+  @spec remove_attribute(t(), String.t()) :: :ok
+  @spec get_attribute_names(t()) :: [String.t()]
 
   def create(document, local_name) do
     DOM._create(document, %NodeData{type: __MODULE__, local_name: local_name})
@@ -35,6 +37,14 @@ defmodule DOM.Node.Element do
 
   def has_attribute(element, name) do
     DOM._element_has_attribute(element.server, element.id, name)
+  end
+
+  def remove_attribute(element, name) do
+    DOM._element_remove_attribute(element.server, element.id, name)
+  end
+
+  def get_attribute_names(element) do
+    DOM._element_get_attribute_names(element.server, element.id)
   end
 
   @impl DOM.Node
