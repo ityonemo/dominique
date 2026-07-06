@@ -171,6 +171,7 @@ defmodule DOM do
     case GenServer.call(server, {:insert_before, parent_id, child_id, reference_child_id}) do
       :ok -> child
       {:error, :hierarchy_request} -> raise DOM.HierarchyRequestError
+      {:error, :not_found} -> raise DOM.NotFoundError
     end
   end
 
@@ -179,6 +180,12 @@ defmodule DOM do
     parent_data = fetch_node!(state.nodes, parent_id)
 
     cond do
+      inclusive_ancestor?(state.nodes, child_id, parent_id) ->
+        {:reply, {:error, :hierarchy_request}, state}
+
+      reference_child_id not in parent_data.children ->
+        {:reply, {:error, :not_found}, state}
+
       invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil) ->
         {:reply, {:error, :hierarchy_request}, state}
 

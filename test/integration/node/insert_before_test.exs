@@ -78,5 +78,52 @@ defmodule Integration.Node.InsertBeforeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const parent = document.createElement("parent");
+      const child = document.createElement("child");
+      const stranger = document.createElement("stranger");
+
+      let errorName = null;
+
+      try {
+        parent.insertBefore(child, stranger);
+      } catch (error) {
+        errorName = error.name;
+      }
+
+      return {
+        errorName,
+        parentChildren: Array.from(parent.childNodes, node => node.localName),
+        childParent: child.parentNode?.localName ?? null
+      };
+    });
+    """
+
+    test "insertBefore rejects a reference child from another parent", %{js: expected} do
+      document = DOM.new()
+      parent = DOM.create_element(document, "parent")
+      child = DOM.create_element(document, "child")
+      stranger = DOM.create_element(document, "stranger")
+
+      result = %{
+        "errorName" => error_name(fn -> Node.insert_before(parent, child, stranger) end),
+        "parentChildren" => parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
+        "childParent" => child |> Node.parent_node() |> local_name()
+      }
+
+      assert result == expected
+    end
+  end
+
+  defp local_name(nil), do: nil
+  defp local_name(node), do: Element.local_name(node)
+
+  defp error_name(operation) do
+    operation.()
+    nil
+  rescue
+    error -> error.__struct__ |> Module.split() |> List.last()
   end
 end

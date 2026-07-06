@@ -26,4 +26,18 @@ defmodule DOM.Node.InsertBeforeTest do
     assert Node.child_nodes(parent) == [first, second]
     assert Node.parent_node(second) == parent
   end
+
+  test "raises NotFoundError when the reference child is not a child of the parent" do
+    document = DOM.new()
+    parent = DOM.create_element(document, "parent")
+    child = DOM.create_element(document, "child")
+    stranger = DOM.create_element(document, "stranger")
+
+    assert_raise DOM.NotFoundError, fn ->
+      Node.insert_before(parent, child, stranger)
+    end
+
+    refute Node.parent_node(child)
+    assert Node.child_nodes(parent) == []
+  end
 end
