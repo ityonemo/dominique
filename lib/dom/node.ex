@@ -57,4 +57,10 @@ after
       if target >= 0, do: Enum.at(siblings, target)
     end
   end
+
+  @doc """
+  Returns the `DOM.Node.Document` that owns `node`, or `nil` when `node` is
+  itself the document.
+  """
+  def owner_document(node), do: DOM._node_owner_document(node.server, node.id)
 end

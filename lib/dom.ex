@@ -68,6 +68,7 @@ defmodule DOM do
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
   @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_replace_child(GenServer.server(), reference(), Node.t(), Node.t()) :: Node.t()
+  @spec _node_owner_document(GenServer.server(), reference()) :: Document.t() | nil
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
@@ -651,6 +652,19 @@ defmodule DOM do
     {:reply, parent, state}
   end
 
+  def _node_owner_document(server, node_id) do
+    GenServer.call(server, {:owner_document, node_id})
+  end
+
+  defp owner_document_impl(node_id, state) do
+    owner =
+      if node_id != state.document_id do
+        %Document{server: self(), id: state.document_id}
+      end
+
+    {:reply, owner, state}
+  end
+
   def _element_local_name(server, node_id) do
     GenServer.call(server, {:local_name, node_id})
   end
@@ -771,6 +785,11 @@ defmodule DOM do
   @impl true
   def handle_call({:parent_node, node_id}, _from, state) do
     parent_node_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:owner_document, node_id}, _from, state) do
+    owner_document_impl(node_id, state)
   end
 
   @impl true
