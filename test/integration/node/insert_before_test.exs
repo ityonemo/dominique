@@ -201,6 +201,175 @@ defmodule Integration.Node.InsertBeforeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const text = document.createTextNode("text");
+      const reference = document.createTextNode("reference");
+      const child = document.createElement("child");
+
+      let errorName = null;
+
+      try {
+        text.insertBefore(child, reference);
+      } catch (error) {
+        errorName = error.name;
+      }
+
+      return { errorName, hasParent: child.parentNode !== null };
+    });
+    """
+
+    test "insertBefore rejects a child on a text leaf", %{js: expected} do
+      document = DOM.new()
+      text = DOM.create_text_node(document, "text")
+      child = DOM.create_element(document, "child")
+
+      result = %{
+        "errorName" => error_name(fn -> Node.insert_before(text, child, text) end),
+        "hasParent" => !!Node.parent_node(child)
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const parent = document.createElement("parent");
+      const child = document.createElement("child");
+      parent.appendChild(child);
+
+      let errorName = null;
+
+      try {
+        child.insertBefore(parent, null);
+      } catch (error) {
+        errorName = error.name;
+      }
+
+      return {
+        errorName,
+        childChildren: Array.from(child.childNodes, node => node.localName),
+        parentParent: parent.parentNode?.localName ?? null
+      };
+    });
+    """
+
+    test "insertBefore rejects an inclusive ancestor", %{js: expected} do
+      document = DOM.new()
+      parent = DOM.create_element(document, "parent")
+      child = DOM.create_element(document, "child")
+      Node.append_child(parent, child)
+
+      result = %{
+        "errorName" => error_name(fn -> Node.insert_before(child, parent, nil) end),
+        "childChildren" => child |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
+        "parentParent" => parent |> Node.parent_node() |> local_name()
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const xmlDocument = document.implementation.createDocument(null, null);
+      const first = xmlDocument.createElement("first");
+      const second = xmlDocument.createElement("second");
+      xmlDocument.appendChild(first);
+
+      let errorName = null;
+
+      try {
+        xmlDocument.insertBefore(second, first);
+      } catch (error) {
+        errorName = error.name;
+      }
+
+      return {
+        errorName,
+        documentChildren: Array.from(xmlDocument.childNodes, node => node.localName)
+      };
+    });
+    """
+
+    test "insertBefore rejects a second document element", %{js: expected} do
+      document = DOM.new()
+      first = DOM.create_element(document, "first")
+      second = DOM.create_element(document, "second")
+      Node.append_child(document, first)
+
+      result = %{
+        "errorName" => error_name(fn -> Node.insert_before(document, second, first) end),
+        "documentChildren" => document |> Node.child_nodes() |> Enum.map(&Element.local_name/1)
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const parent = document.createElement("parent");
+      const doctype = document.implementation.createDocumentType("html", "", "");
+      const reference = document.createElement("reference");
+      parent.appendChild(reference);
+
+      let errorName = null;
+
+      try {
+        parent.insertBefore(doctype, reference);
+      } catch (error) {
+        errorName = error.name;
+      }
+
+      return { errorName, parentChildCount: parent.childNodes.length };
+    });
+    """
+
+    test "insertBefore rejects a doctype beneath an element", %{js: expected} do
+      document = DOM.new()
+      parent = DOM.create_element(document, "parent")
+      doctype = DOM.create_document_type(document, "html", "", "")
+      reference = DOM.create_element(document, "reference")
+      Node.append_child(parent, reference)
+
+      result = %{
+        "errorName" => error_name(fn -> Node.insert_before(parent, doctype, reference) end),
+        "parentChildCount" => parent |> Node.child_nodes() |> length()
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const parent = document.createElement("parent");
+      const child = document.createElement("child");
+      parent.appendChild(child);
+
+      const returned = parent.insertBefore(child, child);
+
+      return {
+        returnedName: returned.localName,
+        children: Array.from(parent.childNodes, node => node.localName)
+      };
+    });
+    """
+
+    test "insertBefore before itself leaves the tree unchanged", %{js: expected} do
+      document = DOM.new()
+      parent = DOM.create_element(document, "parent")
+      child = DOM.create_element(document, "child")
+      Node.append_child(parent, child)
+
+      returned = Node.insert_before(parent, child, child)
+
+      result = %{
+        "returnedName" => Element.local_name(returned),
+        "children" => parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1)
+      }
+
+      assert result == expected
+    end
   end
 
   defp local_name(nil), do: nil
