@@ -50,4 +50,10 @@ defmodule DOM.Node.Element do
 
   @impl DOM.Node
   def value(element), do: DOM._node_value(element.server, element.id)
+
+  @impl DOM.Node
+  def node_type(_element), do: 1
+
+  @impl DOM.Node
+  def node_name(element), do: local_name(element)
 end

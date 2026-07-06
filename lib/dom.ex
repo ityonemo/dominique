@@ -74,6 +74,7 @@ defmodule DOM do
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
   @spec _node_parent_node(GenServer.server(), reference()) :: Node.t() | nil
   @spec _element_local_name(GenServer.server(), reference()) :: String.t()
+  @spec _document_type_name(GenServer.server(), reference()) :: String.t()
   @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
 
   # ==========================================================================
@@ -674,6 +675,14 @@ defmodule DOM do
     {:reply, local_name, state}
   end
 
+  def _document_type_name(server, node_id) do
+    GenServer.call(server, {:document_type_name, node_id})
+  end
+
+  defp document_type_name_impl(node_id, state) do
+    {:reply, fetch_node!(state.nodes, node_id).name, state}
+  end
+
   def _node_value(server, node_id) do
     GenServer.call(server, {:value, node_id})
   end
@@ -795,6 +804,11 @@ defmodule DOM do
   @impl true
   def handle_call({:local_name, node_id}, _from, state) do
     local_name_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:document_type_name, node_id}, _from, state) do
+    document_type_name_impl(node_id, state)
   end
 
   @impl true

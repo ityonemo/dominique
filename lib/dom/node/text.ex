@@ -29,4 +29,8 @@ defmodule DOM.Node.Text do
   def parent_node(text), do: DOM._node_parent_node(text.server, text.id)
   @impl DOM.Node
   def value(text), do: DOM._node_value(text.server, text.id)
+  @impl DOM.Node
+  def node_type(_text), do: 3
+  @impl DOM.Node
+  def node_name(_text), do: "#text"
 end

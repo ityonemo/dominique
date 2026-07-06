@@ -42,4 +42,10 @@ defmodule DOM.Node.Document do
 
   @impl DOM.Node
   def value(document), do: DOM._node_value(document.server, document.id)
+
+  @impl DOM.Node
+  def node_type(_document), do: 9
+
+  @impl DOM.Node
+  def node_name(_document), do: "#document"
 end

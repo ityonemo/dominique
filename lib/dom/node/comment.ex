@@ -29,4 +29,8 @@ defmodule DOM.Node.Comment do
   def parent_node(comment), do: DOM._node_parent_node(comment.server, comment.id)
   @impl DOM.Node
   def value(comment), do: DOM._node_value(comment.server, comment.id)
+  @impl DOM.Node
+  def node_type(_comment), do: 8
+  @impl DOM.Node
+  def node_name(_comment), do: "#comment"
 end

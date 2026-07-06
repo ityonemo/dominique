@@ -49,4 +49,10 @@ defmodule DOM.Node.DocumentFragment do
 
   @impl DOM.Node
   def value(_fragment), do: nil
+
+  @impl DOM.Node
+  def node_type(_fragment), do: 11
+
+  @impl DOM.Node
+  def node_name(_fragment), do: "#document-fragment"
 end

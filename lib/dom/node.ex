@@ -10,6 +10,8 @@ defprotocol DOM.Node do
   def child_nodes(node)
   def parent_node(node)
   def value(node)
+  def node_type(node)
+  def node_name(node)
 after
   @doc """
   Removes `child` from `node` and returns it. Raises `DOM.NotFoundError` if

@@ -42,4 +42,13 @@ defmodule DOM.Node.DocumentType do
 
   @impl DOM.Node
   def value(_document_type), do: nil
+
+  @impl DOM.Node
+  def node_type(_document_type), do: 10
+
+  @impl DOM.Node
+  def node_name(document_type), do: name(document_type)
+
+  @spec name(t()) :: String.t()
+  def name(document_type), do: DOM._document_type_name(document_type.server, document_type.id)
 end
