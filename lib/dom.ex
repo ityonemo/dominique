@@ -133,27 +133,21 @@ defmodule DOM do
     child_data = fetch_node!(state.nodes, child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
 
-    if invalid_hierarchy?(
-         state.nodes,
-         parent_data,
-         parent_id,
-         child_data,
-         child_id,
-         nil
-       ) do
-      {:reply, {:error, :hierarchy_request}, state}
-    else
-      if child_data.type == DocumentFragment do
+    cond do
+      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil) ->
+        {:reply, {:error, :hierarchy_request}, state}
+
+      child_data.type == DocumentFragment ->
         append_fragment(state.nodes, parent_id, child_id, child_data)
-      else
+        {:reply, :ok, state}
+
+      :else ->
         detach_from_parent(state.nodes, child_id, child_data)
         parent = fetch_node!(state.nodes, parent_id)
 
         put_node(state.nodes, parent_id, %{parent | children: parent.children ++ [child_id]})
         put_node(state.nodes, child_id, %{child_data | parent: parent_id})
-      end
-
-      {:reply, :ok, state}
+        {:reply, :ok, state}
     end
   end
 
@@ -180,17 +174,14 @@ defmodule DOM do
     child_data = fetch_node!(state.nodes, child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
 
-    if invalid_hierarchy?(
-         state.nodes,
-         parent_data,
-         parent_id,
-         child_data,
-         child_id,
-         nil
-       ) do
-      {:reply, {:error, :hierarchy_request}, state}
-    else
-      if child_id != reference_child_id do
+    cond do
+      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil) ->
+        {:reply, {:error, :hierarchy_request}, state}
+
+      child_id == reference_child_id ->
+        {:reply, :ok, state}
+
+      :else ->
         detach_from_parent(state.nodes, child_id, child_data)
         parent = fetch_node!(state.nodes, parent_id)
 
@@ -203,9 +194,7 @@ defmodule DOM do
         })
 
         put_node(state.nodes, child_id, %{child_data | parent: parent_id})
-      end
-
-      {:reply, :ok, state}
+        {:reply, :ok, state}
     end
   end
 
@@ -327,14 +316,15 @@ defmodule DOM do
   end
 
   defp inclusive_ancestor?(nodes, ancestor_id, node_id) do
-    if ancestor_id == node_id do
-      true
-    else
-      if parent_id = fetch_node!(nodes, node_id).parent do
+    cond do
+      ancestor_id == node_id ->
+        true
+
+      parent_id = fetch_node!(nodes, node_id).parent ->
         inclusive_ancestor?(nodes, ancestor_id, parent_id)
-      else
+
+      :else ->
         false
-      end
     end
   end
 
