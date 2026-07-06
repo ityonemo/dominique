@@ -15,12 +15,27 @@ defmodule DOM.Node.Element do
 
   @spec create(DOM.Node.Document.t(), String.t()) :: t()
   @spec local_name(t()) :: String.t()
+  @spec get_attribute(t(), String.t()) :: String.t() | nil
+  @spec set_attribute(t(), String.t(), String.t()) :: :ok
+  @spec has_attribute(t(), String.t()) :: boolean()
 
   def create(document, local_name) do
     DOM._create(document, %NodeData{type: __MODULE__, local_name: local_name})
   end
 
   def local_name(element), do: DOM._element_local_name(element.server, element.id)
+
+  def get_attribute(element, name) do
+    DOM._element_get_attribute(element.server, element.id, name)
+  end
+
+  def set_attribute(element, name, value) do
+    DOM._element_set_attribute(element.server, element.id, name, value)
+  end
+
+  def has_attribute(element, name) do
+    DOM._element_has_attribute(element.server, element.id, name)
+  end
 
   @impl DOM.Node
   def append_child(_element, %DOM.Node.Document{}), do: raise(DOM.HierarchyRequestError)

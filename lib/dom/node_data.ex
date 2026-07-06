@@ -19,7 +19,8 @@ defmodule DOM.NodeData do
             system_id: nil,
             value: nil,
             parent: nil,
-            children: []
+            children: [],
+            attributes: []
 
   @type node_type :: Comment | Document | DocumentFragment | DocumentType | Element | Text
 
@@ -31,6 +32,7 @@ defmodule DOM.NodeData do
           system_id: String.t() | nil,
           value: String.t() | nil,
           parent: reference() | nil,
-          children: [reference()]
+          children: [reference()],
+          attributes: [{String.t(), String.t()}]
         }
 end

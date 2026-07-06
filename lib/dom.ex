@@ -76,6 +76,9 @@ defmodule DOM do
   @spec _node_parent_node(GenServer.server(), reference()) :: Node.t() | nil
   @spec _element_local_name(GenServer.server(), reference()) :: String.t()
   @spec _document_type_name(GenServer.server(), reference()) :: String.t()
+  @spec _element_get_attribute(GenServer.server(), reference(), String.t()) :: String.t() | nil
+  @spec _element_set_attribute(GenServer.server(), reference(), String.t(), String.t()) :: :ok
+  @spec _element_has_attribute(GenServer.server(), reference(), String.t()) :: boolean()
   @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
   @spec _node_text_content(GenServer.server(), reference()) :: String.t()
 
@@ -708,6 +711,42 @@ defmodule DOM do
     {:reply, local_name, state}
   end
 
+  def _element_get_attribute(server, node_id, name) do
+    GenServer.call(server, {:get_attribute, node_id, name})
+  end
+
+  defp get_attribute_impl(node_id, name, state) do
+    attributes = fetch_node!(state.nodes, node_id).attributes
+
+    value =
+      case List.keyfind(attributes, name, 0) do
+        {^name, value} -> value
+        nil -> nil
+      end
+
+    {:reply, value, state}
+  end
+
+  def _element_set_attribute(server, node_id, name, value) do
+    GenServer.call(server, {:set_attribute, node_id, name, value})
+  end
+
+  defp set_attribute_impl(node_id, name, value, state) do
+    node = fetch_node!(state.nodes, node_id)
+    attributes = List.keystore(node.attributes, name, 0, {name, value})
+    put_node(state.nodes, node_id, %{node | attributes: attributes})
+    {:reply, :ok, state}
+  end
+
+  def _element_has_attribute(server, node_id, name) do
+    GenServer.call(server, {:has_attribute, node_id, name})
+  end
+
+  defp has_attribute_impl(node_id, name, state) do
+    present = List.keymember?(fetch_node!(state.nodes, node_id).attributes, name, 0)
+    {:reply, present, state}
+  end
+
   def _document_type_name(server, node_id) do
     GenServer.call(server, {:document_type_name, node_id})
   end
@@ -863,6 +902,21 @@ defmodule DOM do
   @impl true
   def handle_call({:local_name, node_id}, _from, state) do
     local_name_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:get_attribute, node_id, name}, _from, state) do
+    get_attribute_impl(node_id, name, state)
+  end
+
+  @impl true
+  def handle_call({:set_attribute, node_id, name, value}, _from, state) do
+    set_attribute_impl(node_id, name, value, state)
+  end
+
+  @impl true
+  def handle_call({:has_attribute, node_id, name}, _from, state) do
+    has_attribute_impl(node_id, name, state)
   end
 
   @impl true
