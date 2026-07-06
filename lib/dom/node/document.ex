@@ -48,4 +48,7 @@ defmodule DOM.Node.Document do
 
   @impl DOM.Node
   def node_name(_document), do: "#document"
+
+  @impl DOM.Node
+  def text_content(_document), do: nil
 end

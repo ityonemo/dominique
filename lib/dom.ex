@@ -76,6 +76,7 @@ defmodule DOM do
   @spec _element_local_name(GenServer.server(), reference()) :: String.t()
   @spec _document_type_name(GenServer.server(), reference()) :: String.t()
   @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
+  @spec _node_text_content(GenServer.server(), reference()) :: String.t()
 
   # ==========================================================================
   # Implementations
@@ -692,6 +693,27 @@ defmodule DOM do
     {:reply, value, state}
   end
 
+  def _node_text_content(server, node_id) do
+    GenServer.call(server, {:text_content, node_id})
+  end
+
+  defp text_content_impl(node_id, state) do
+    text =
+      state.nodes
+      |> descendants(node_id)
+      |> Enum.filter(&(&1.type == Text))
+      |> Enum.map_join("", & &1.value)
+
+    {:reply, text, state}
+  end
+
+  # Descendant node_data in tree order, excluding the node itself.
+  defp descendants(nodes, node_id) do
+    fetch_node!(nodes, node_id).children
+    |> Enum.flat_map(&subtree(nodes, &1))
+    |> Enum.map(fn {_id, node_data} -> node_data end)
+  end
+
   # ==========================================================================
   # Helper functions
   # ==========================================================================
@@ -814,5 +836,10 @@ defmodule DOM do
   @impl true
   def handle_call({:value, node_id}, _from, state) do
     value_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:text_content, node_id}, _from, state) do
+    text_content_impl(node_id, state)
   end
 end

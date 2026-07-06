@@ -33,4 +33,6 @@ defmodule DOM.Node.Text do
   def node_type(_text), do: 3
   @impl DOM.Node
   def node_name(_text), do: "#text"
+  @impl DOM.Node
+  def text_content(text), do: value(text)
 end

@@ -33,4 +33,6 @@ defmodule DOM.Node.Comment do
   def node_type(_comment), do: 8
   @impl DOM.Node
   def node_name(_comment), do: "#comment"
+  @impl DOM.Node
+  def text_content(comment), do: value(comment)
 end

@@ -55,4 +55,7 @@ defmodule DOM.Node.DocumentFragment do
 
   @impl DOM.Node
   def node_name(_fragment), do: "#document-fragment"
+
+  @impl DOM.Node
+  def text_content(fragment), do: DOM._node_text_content(fragment.server, fragment.id)
 end

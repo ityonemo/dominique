@@ -56,4 +56,7 @@ defmodule DOM.Node.Element do
 
   @impl DOM.Node
   def node_name(element), do: local_name(element)
+
+  @impl DOM.Node
+  def text_content(element), do: DOM._node_text_content(element.server, element.id)
 end

@@ -49,6 +49,9 @@ defmodule DOM.Node.DocumentType do
   @impl DOM.Node
   def node_name(document_type), do: name(document_type)
 
+  @impl DOM.Node
+  def text_content(_document_type), do: nil
+
   @spec name(t()) :: String.t()
   def name(document_type), do: DOM._document_type_name(document_type.server, document_type.id)
 end

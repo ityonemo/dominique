@@ -12,6 +12,7 @@ defprotocol DOM.Node do
   def value(node)
   def node_type(node)
   def node_name(node)
+  def text_content(node)
 after
   @doc """
   Removes `child` from `node` and returns it. Raises `DOM.NotFoundError` if
