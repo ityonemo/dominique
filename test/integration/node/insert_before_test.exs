@@ -43,5 +43,40 @@ defmodule Integration.Node.InsertBeforeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const parent = document.createElement("parent");
+      const first = document.createElement("first");
+      const second = document.createElement("second");
+      parent.appendChild(first);
+
+      const inserted = parent.insertBefore(second, null);
+
+      return {
+        returnedName: inserted.localName,
+        children: Array.from(parent.childNodes, node => node.localName),
+        parentName: second.parentNode.localName
+      };
+    });
+    """
+
+    test "insertBefore appends when the reference child is null", %{js: expected} do
+      document = DOM.new()
+      parent = DOM.create_element(document, "parent")
+      first = DOM.create_element(document, "first")
+      second = DOM.create_element(document, "second")
+      Node.append_child(parent, first)
+
+      inserted = Node.insert_before(parent, second, nil)
+
+      result = %{
+        "returnedName" => Element.local_name(inserted),
+        "children" => parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
+        "parentName" => second |> Node.parent_node() |> Element.local_name()
+      }
+
+      assert result == expected
+    end
   end
 end

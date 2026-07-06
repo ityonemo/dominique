@@ -65,7 +65,7 @@ defmodule DOM do
           DocumentType.t()
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
-  @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t()) :: Node.t()
+  @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
@@ -161,6 +161,10 @@ defmodule DOM do
 
     put_node(nodes, parent_id, %{parent | children: parent.children ++ fragment.children})
     put_node(nodes, fragment_id, %{fragment | children: []})
+  end
+
+  def _node_insert_before(server, parent_id, child, nil) do
+    _node_append_child(server, parent_id, child)
   end
 
   def _node_insert_before(server, parent_id, %{id: child_id} = child, %{id: reference_child_id}) do
