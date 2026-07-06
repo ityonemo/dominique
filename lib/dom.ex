@@ -185,9 +185,34 @@ defmodule DOM do
     _node_append_child(server, parent_id, child)
   end
 
-  def _node_insert_before(server, parent_id, %{id: child_id} = child, %{id: reference_child_id}) do
-    case GenServer.call(server, {:insert_before, parent_id, child_id, reference_child_id}) do
+  def _node_insert_before(
+        server,
+        parent_id,
+        %{server: child_server, id: child_id} = child,
+        %{id: reference_child_id}
+      ) do
+    result =
+      if child_server == server do
+        GenServer.call(server, {:insert_before, parent_id, child_id, reference_child_id})
+      else
+        subtree = _export_subtree(child_server, child_id)
+
+        result =
+          GenServer.call(
+            server,
+            {:insert_subtree, parent_id, child_id, reference_child_id, subtree}
+          )
+
+        if match?({:ok, _transferred_child}, result) do
+          _remove_subtree(child_server, child_id)
+        end
+
+        result
+      end
+
+    case result do
       :ok -> child
+      {:ok, transferred_child} -> transferred_child
       {:error, :hierarchy_request} -> raise DOM.HierarchyRequestError
       {:error, :not_found} -> raise DOM.NotFoundError
     end
@@ -246,13 +271,7 @@ defmodule DOM do
        ) do
       {:reply, {:error, :hierarchy_request}, state}
     else
-      subtree =
-        Enum.map(subtree, fn
-          {^child_id, node_data} -> {child_id, %{node_data | parent: nil}}
-          entry -> entry
-        end)
-
-      true = :ets.insert(state.nodes, subtree)
+      materialize_subtree(state.nodes, child_id, subtree)
 
       if child_data.type == DocumentFragment do
         append_fragment(state.nodes, parent_id, child_id, child_data)
@@ -267,6 +286,49 @@ defmodule DOM do
 
       {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
     end
+  end
+
+  defp insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, state) do
+    subtree_nodes = Map.new(subtree)
+    child_data = Map.fetch!(subtree_nodes, child_id)
+    parent_data = fetch_node!(state.nodes, parent_id)
+
+    cond do
+      reference_child_id not in parent_data.children ->
+        {:reply, {:error, :not_found}, state}
+
+      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, subtree_nodes) ->
+        {:reply, {:error, :hierarchy_request}, state}
+
+      :else ->
+        materialize_subtree(state.nodes, child_id, subtree)
+
+        if child_data.type == DocumentFragment do
+          insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
+        else
+          {before, after_reference} =
+            Enum.split_while(parent_data.children, &(&1 != reference_child_id))
+
+          put_node(state.nodes, parent_id, %{
+            parent_data
+            | children: before ++ [child_id | after_reference]
+          })
+
+          put_node(state.nodes, child_id, %{child_data | parent: parent_id})
+        end
+
+        {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
+    end
+  end
+
+  defp materialize_subtree(nodes, child_id, subtree) do
+    subtree =
+      Enum.map(subtree, fn
+        {^child_id, node_data} -> {child_id, %{node_data | parent: nil}}
+        entry -> entry
+      end)
+
+    true = :ets.insert(nodes, subtree)
   end
 
   def _export_subtree(server, node_id) do
@@ -457,6 +519,15 @@ defmodule DOM do
   @impl true
   def handle_call({:insert_before, parent_id, child_id, reference_child_id}, _from, state) do
     insert_before_impl(parent_id, child_id, reference_child_id, state)
+  end
+
+  @impl true
+  def handle_call(
+        {:insert_subtree, parent_id, child_id, reference_child_id, subtree},
+        _from,
+        state
+      ) do
+    insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, state)
   end
 
   @impl true

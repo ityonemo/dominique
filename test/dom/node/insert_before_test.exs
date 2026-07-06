@@ -59,4 +59,26 @@ defmodule DOM.Node.InsertBeforeTest do
     assert Node.parent_node(first) == parent
     assert Node.parent_node(second) == parent
   end
+
+  test "adopts a child from another document before the reference child" do
+    alias DOM.Node.Element
+
+    source = DOM.new()
+    destination = DOM.new()
+    parent = DOM.create_element(destination, "parent")
+    reference = DOM.create_element(destination, "reference")
+    child = DOM.create_element(source, "child")
+    Node.append_child(parent, reference)
+
+    inserted = Node.insert_before(parent, child, reference)
+
+    assert inserted.server == destination.server
+
+    assert parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1) == [
+             "child",
+             "reference"
+           ]
+
+    assert Node.parent_node(inserted) == parent
+  end
 end

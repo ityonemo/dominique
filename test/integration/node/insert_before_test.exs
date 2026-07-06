@@ -159,6 +159,48 @@ defmodule Integration.Node.InsertBeforeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const source = document.implementation.createDocument(null, null);
+      const destination = document.implementation.createDocument(null, null);
+      const parent = destination.createElement("parent");
+      const reference = destination.createElement("reference");
+      const child = source.createElement("child");
+      destination.appendChild(parent);
+      parent.appendChild(reference);
+
+      const inserted = parent.insertBefore(child, reference);
+
+      return {
+        returnedName: inserted.localName,
+        parentChildren: Array.from(parent.childNodes, node => node.localName),
+        childParent: child.parentNode.localName,
+        childBelongsToDestination: child.ownerDocument === destination
+      };
+    });
+    """
+
+    test "insertBefore adopts a child from another document", %{js: expected} do
+      source = DOM.new()
+      destination = DOM.new()
+      parent = DOM.create_element(destination, "parent")
+      reference = DOM.create_element(destination, "reference")
+      child = DOM.create_element(source, "child")
+      Node.append_child(destination, parent)
+      Node.append_child(parent, reference)
+
+      inserted = Node.insert_before(parent, child, reference)
+
+      result = %{
+        "returnedName" => Element.local_name(inserted),
+        "parentChildren" => parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
+        "childParent" => inserted |> Node.parent_node() |> Element.local_name(),
+        "childBelongsToDestination" => inserted.server == destination.server
+      }
+
+      assert result == expected
+    end
   end
 
   defp local_name(nil), do: nil
