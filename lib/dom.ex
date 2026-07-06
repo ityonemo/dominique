@@ -153,14 +153,32 @@ defmodule DOM do
 
   defp append_fragment(nodes, parent_id, fragment_id, fragment) do
     parent = fetch_node!(nodes, parent_id)
+    reparent_fragment_children(nodes, parent_id, fragment)
 
+    put_node(nodes, parent_id, %{parent | children: parent.children ++ fragment.children})
+    put_node(nodes, fragment_id, %{fragment | children: []})
+  end
+
+  defp insert_fragment(nodes, parent_id, fragment_id, fragment, reference_child_id) do
+    parent = fetch_node!(nodes, parent_id)
+    reparent_fragment_children(nodes, parent_id, fragment)
+
+    {before, after_reference} =
+      Enum.split_while(parent.children, &(&1 != reference_child_id))
+
+    put_node(nodes, parent_id, %{
+      parent
+      | children: before ++ fragment.children ++ after_reference
+    })
+
+    put_node(nodes, fragment_id, %{fragment | children: []})
+  end
+
+  defp reparent_fragment_children(nodes, parent_id, fragment) do
     Enum.each(fragment.children, fn child_id ->
       child = fetch_node!(nodes, child_id)
       put_node(nodes, child_id, %{child | parent: parent_id})
     end)
-
-    put_node(nodes, parent_id, %{parent | children: parent.children ++ fragment.children})
-    put_node(nodes, fragment_id, %{fragment | children: []})
   end
 
   def _node_insert_before(server, parent_id, child, nil) do
@@ -190,6 +208,10 @@ defmodule DOM do
         {:reply, {:error, :hierarchy_request}, state}
 
       child_id == reference_child_id ->
+        {:reply, :ok, state}
+
+      child_data.type == DocumentFragment ->
+        insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
         {:reply, :ok, state}
 
       :else ->

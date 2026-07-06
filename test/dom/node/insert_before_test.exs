@@ -40,4 +40,23 @@ defmodule DOM.Node.InsertBeforeTest do
     refute Node.parent_node(child)
     assert Node.child_nodes(parent) == []
   end
+
+  test "inserts a fragment's children before the reference child and empties it" do
+    document = DOM.new()
+    parent = DOM.create_element(document, "parent")
+    reference = DOM.create_element(document, "reference")
+    fragment = DOM.create_document_fragment(document)
+    first = DOM.create_element(document, "first")
+    second = DOM.create_element(document, "second")
+    Node.append_child(parent, reference)
+    Node.append_child(fragment, first)
+    Node.append_child(fragment, second)
+
+    Node.insert_before(parent, fragment, reference)
+
+    assert Node.child_nodes(parent) == [first, second, reference]
+    assert Node.child_nodes(fragment) == []
+    assert Node.parent_node(first) == parent
+    assert Node.parent_node(second) == parent
+  end
 end

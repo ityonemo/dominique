@@ -115,6 +115,50 @@ defmodule Integration.Node.InsertBeforeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const parent = document.createElement("parent");
+      const reference = document.createElement("reference");
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(document.createElement("first"));
+      fragment.appendChild(document.createElement("second"));
+      parent.appendChild(reference);
+
+      const returned = parent.insertBefore(fragment, reference);
+
+      return {
+        returnedFragment: returned === fragment,
+        parentChildren: Array.from(parent.childNodes, node => node.localName),
+        fragmentChildCount: fragment.childNodes.length,
+        firstParent: parent.firstChild.parentNode.localName
+      };
+    });
+    """
+
+    test "insertBefore inserts a fragment's children before the reference child", %{js: expected} do
+      document = DOM.new()
+      parent = DOM.create_element(document, "parent")
+      reference = DOM.create_element(document, "reference")
+      fragment = DOM.create_document_fragment(document)
+      first = DOM.create_element(document, "first")
+      second = DOM.create_element(document, "second")
+      Node.append_child(parent, reference)
+      Node.append_child(fragment, first)
+      Node.append_child(fragment, second)
+
+      returned = Node.insert_before(parent, fragment, reference)
+      [inserted_first | _] = Node.child_nodes(parent)
+
+      result = %{
+        "returnedFragment" => returned.id == fragment.id,
+        "parentChildren" => parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
+        "fragmentChildCount" => fragment |> Node.child_nodes() |> length(),
+        "firstParent" => inserted_first |> Node.parent_node() |> Element.local_name()
+      }
+
+      assert result == expected
+    end
   end
 
   defp local_name(nil), do: nil
