@@ -3,6 +3,16 @@ defmodule DOM do
   A DOM document backed by a `GenServer` that owns a private ETS table of
   `DOM.NodeData`.
 
+  `DOM` is the context module for the `DOM.Node.Document` node type, EXCLUDING
+  its `DOM.Node` protocol implementations (those live in `DOM.Node.Document`, as
+  Protoss requires). Document-level operations (creating nodes, whole-document
+  queries such as `get_elements_by_tag_name/2`) live here and take a
+  `DOM.Node.Document` handle as their first argument, rather than being methods
+  on the node struct. This mirrors the dispatch convention documented in
+  `CLAUDE.md`: node-first operations belong on the `DOM.Node` protocol, while
+  document-scoped operations belong on `DOM`. Accordingly `t/0` is the
+  `DOM.Node.Document` handle type.
+
   The public node structs returned by this module (`DOM.Node.Element`,
   `DOM.Node.Text`, and friends) are immutable handles carrying the owning
   server and a node id; they are not live objects. Mutating operations run
@@ -63,6 +73,7 @@ defmodule DOM do
   @spec create_document_fragment(Document.t()) :: DocumentFragment.t()
   @spec create_document_type(Document.t(), String.t(), String.t(), String.t()) ::
           DocumentType.t()
+  @spec get_elements_by_tag_name(Document.t(), String.t()) :: [Element.t()]
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
@@ -104,6 +115,10 @@ defmodule DOM do
 
   def create_document_type(document, name, public_id, system_id) do
     DocumentType.create(document, name, public_id, system_id)
+  end
+
+  def get_elements_by_tag_name(document, name) do
+    GenServer.call(document.server, {:get_elements_by_tag_name, document.id, name})
   end
 
   def _create(%Document{} = document, nodedata) do
@@ -713,6 +728,25 @@ defmodule DOM do
     {:reply, local_name, state}
   end
 
+  def _element_get_elements_by_tag_name(server, node_id, name) do
+    GenServer.call(server, {:get_elements_by_tag_name, node_id, name})
+  end
+
+  defp get_elements_by_tag_name_impl(node_id, name, state) do
+    matches =
+      state.nodes
+      |> descendant_ids(node_id)
+      |> Enum.filter(&tag_name_match?(state.nodes, &1, name))
+      |> Enum.map(&node_handle(state.nodes, &1))
+
+    {:reply, matches, state}
+  end
+
+  defp tag_name_match?(nodes, node_id, name) do
+    node = fetch_node!(nodes, node_id)
+    node.type == Element and (name == "*" or node.local_name == name)
+  end
+
   def _element_get_attribute(server, node_id, name) do
     GenServer.call(server, {:get_attribute, node_id, name})
   end
@@ -801,9 +835,21 @@ defmodule DOM do
 
   # Descendant node_data in tree order, excluding the node itself.
   defp descendants(nodes, node_id) do
+    nodes
+    |> descendant_entries(node_id)
+    |> Enum.map(fn {_id, node_data} -> node_data end)
+  end
+
+  # Descendant node ids in tree order, excluding the node itself.
+  defp descendant_ids(nodes, node_id) do
+    nodes
+    |> descendant_entries(node_id)
+    |> Enum.map(fn {id, _node_data} -> id end)
+  end
+
+  defp descendant_entries(nodes, node_id) do
     fetch_node!(nodes, node_id).children
     |> Enum.flat_map(&subtree(nodes, &1))
-    |> Enum.map(fn {_id, node_data} -> node_data end)
   end
 
   # ==========================================================================
@@ -923,6 +969,11 @@ defmodule DOM do
   @impl true
   def handle_call({:local_name, node_id}, _from, state) do
     local_name_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:get_elements_by_tag_name, node_id, name}, _from, state) do
+    get_elements_by_tag_name_impl(node_id, name, state)
   end
 
   @impl true
