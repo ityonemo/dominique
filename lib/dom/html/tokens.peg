@@ -8,7 +8,64 @@
 
 tokens <- token*
 
-token <- comment / doctype / end_tag / start_tag / character
+token <- comment / doctype / raw_element / end_tag / start_tag / character
+
+# --- raw-text / RCDATA elements ---------------------------------------------
+# Their interior is captured verbatim as one character run, up to the matching
+# close tag (case-insensitive). RCDATA entity decoding is a later concern.
+
+raw_element <- raw_script / raw_style / raw_textarea / raw_title / raw_xmp
+             / raw_iframe / raw_noembed / raw_noframes / raw_noscript
+
+raw_script   <- raw_open_script   raw_text_script   raw_close_script
+raw_style    <- raw_open_style    raw_text_style    raw_close_style
+raw_textarea <- raw_open_textarea raw_text_textarea raw_close_textarea
+raw_title    <- raw_open_title    raw_text_title    raw_close_title
+raw_xmp      <- raw_open_xmp      raw_text_xmp      raw_close_xmp
+raw_iframe   <- raw_open_iframe   raw_text_iframe   raw_close_iframe
+raw_noembed  <- raw_open_noembed  raw_text_noembed  raw_close_noembed
+raw_noframes <- raw_open_noframes raw_text_noframes raw_close_noframes
+raw_noscript <- raw_open_noscript raw_text_noscript raw_close_noscript
+
+raw_open_script   <- '<' raw_name_script   attributes ws '>'
+raw_open_style    <- '<' raw_name_style    attributes ws '>'
+raw_open_textarea <- '<' raw_name_textarea attributes ws '>'
+raw_open_title    <- '<' raw_name_title    attributes ws '>'
+raw_open_xmp      <- '<' raw_name_xmp      attributes ws '>'
+raw_open_iframe   <- '<' raw_name_iframe   attributes ws '>'
+raw_open_noembed  <- '<' raw_name_noembed  attributes ws '>'
+raw_open_noframes <- '<' raw_name_noframes attributes ws '>'
+raw_open_noscript <- '<' raw_name_noscript attributes ws '>'
+
+raw_name_script   <- [Ss][Cc][Rr][Ii][Pp][Tt]
+raw_name_style    <- [Ss][Tt][Yy][Ll][Ee]
+raw_name_textarea <- [Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa]
+raw_name_title    <- [Tt][Ii][Tt][Ll][Ee]
+raw_name_xmp      <- [Xx][Mm][Pp]
+raw_name_iframe   <- [Ii][Ff][Rr][Aa][Mm][Ee]
+raw_name_noembed  <- [Nn][Oo][Ee][Mm][Bb][Ee][Dd]
+raw_name_noframes <- [Nn][Oo][Ff][Rr][Aa][Mm][Ee][Ss]
+raw_name_noscript <- [Nn][Oo][Ss][Cc][Rr][Ii][Pp][Tt]
+
+raw_text_script   <- (!raw_close_script   .)*
+raw_text_style    <- (!raw_close_style    .)*
+raw_text_textarea <- (!raw_close_textarea .)*
+raw_text_title    <- (!raw_close_title    .)*
+raw_text_xmp      <- (!raw_close_xmp      .)*
+raw_text_iframe   <- (!raw_close_iframe   .)*
+raw_text_noembed  <- (!raw_close_noembed  .)*
+raw_text_noframes <- (!raw_close_noframes .)*
+raw_text_noscript <- (!raw_close_noscript .)*
+
+raw_close_script   <- '</' raw_name_script   ws '>'
+raw_close_style    <- '</' raw_name_style    ws '>'
+raw_close_textarea <- '</' raw_name_textarea ws '>'
+raw_close_title    <- '</' raw_name_title    ws '>'
+raw_close_xmp      <- '</' raw_name_xmp      ws '>'
+raw_close_iframe   <- '</' raw_name_iframe   ws '>'
+raw_close_noembed  <- '</' raw_name_noembed  ws '>'
+raw_close_noframes <- '</' raw_name_noframes ws '>'
+raw_close_noscript <- '</' raw_name_noscript ws '>'
 
 # --- comments & doctype -----------------------------------------------------
 

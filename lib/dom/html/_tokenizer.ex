@@ -15,33 +15,53 @@ defmodule DOM.HTML.Tokenizer do
   # triggers regeneration (Pegasus.parser_from_file does not register it).
   @external_resource Path.join(__DIR__, "tokens.peg")
 
-  Pegasus.parser_from_file(Path.join(__DIR__, "tokens.peg"),
-    tokens: [parser: :parse_tokens, post_traverse: :tokens],
-    token: [],
-    comment: [tag: true, post_traverse: :comment],
-    comment_data: [collect: true],
-    doctype: [tag: true, post_traverse: :doctype],
-    doctype_keyword: [ignore: true],
-    doctype_ws: [ignore: true],
-    doctype_name: [collect: true, post_traverse: :doctype_name],
-    doctype_public: [tag: true, post_traverse: :doctype_public],
-    doctype_system: [tag: true, post_traverse: :doctype_system],
-    public_kw: [ignore: true],
-    system_kw: [ignore: true],
-    doctype_str: [collect: true, post_traverse: :doctype_str],
-    start_tag: [tag: true, post_traverse: :start_tag],
-    end_tag: [tag: true, post_traverse: :end_tag],
-    self_closing: [token: :self_closing],
-    tag_name: [collect: true, post_traverse: :tag_name],
-    attributes: [tag: true, post_traverse: :attributes],
-    attribute: [tag: true, post_traverse: :attribute],
-    attr_name: [collect: true, post_traverse: :attr_name],
-    attr_value: [tag: true, post_traverse: :attr_value],
-    dq_value: [collect: true],
-    sq_value: [collect: true],
-    uq_value: [collect: true],
-    ws: [ignore: true],
-    character: [collect: true, post_traverse: :character]
+  @raw_names ~w(script style textarea title xmp iframe noembed noframes noscript)
+
+  raw_rules =
+    Enum.flat_map(@raw_names, fn name ->
+      [
+        {:"raw_#{name}", tag: true, post_traverse: :raw_element},
+        {:"raw_open_#{name}", tag: true, post_traverse: :raw_open},
+        {:"raw_name_#{name}", token: {:raw_name, name}},
+        {:"raw_text_#{name}", collect: true, post_traverse: :raw_text},
+        {:"raw_close_#{name}", tag: true, post_traverse: :raw_close}
+      ]
+    end)
+
+  Pegasus.parser_from_file(
+    Path.join(__DIR__, "tokens.peg"),
+    [
+      tokens: [parser: :parse_tokens, post_traverse: :tokens],
+      token: [],
+      raw_element: []
+    ] ++
+      raw_rules ++
+      [
+        comment: [tag: true, post_traverse: :comment],
+        comment_data: [collect: true],
+        doctype: [tag: true, post_traverse: :doctype],
+        doctype_keyword: [ignore: true],
+        doctype_ws: [ignore: true],
+        doctype_name: [collect: true, post_traverse: :doctype_name],
+        doctype_public: [tag: true, post_traverse: :doctype_public],
+        doctype_system: [tag: true, post_traverse: :doctype_system],
+        public_kw: [ignore: true],
+        system_kw: [ignore: true],
+        doctype_str: [collect: true, post_traverse: :doctype_str],
+        start_tag: [tag: true, post_traverse: :start_tag],
+        end_tag: [tag: true, post_traverse: :end_tag],
+        self_closing: [token: :self_closing],
+        tag_name: [collect: true, post_traverse: :tag_name],
+        attributes: [tag: true, post_traverse: :attributes],
+        attribute: [tag: true, post_traverse: :attribute],
+        attr_name: [collect: true, post_traverse: :attr_name],
+        attr_value: [tag: true, post_traverse: :attr_value],
+        dq_value: [collect: true],
+        sq_value: [collect: true],
+        uq_value: [collect: true],
+        ws: [ignore: true],
+        character: [collect: true, post_traverse: :character]
+      ]
   )
 
   @spec tokenize(String.t()) :: [struct()]
@@ -65,6 +85,38 @@ defmodule DOM.HTML.Tokenizer do
   # The top rule leaves the built tokens on the stack in document order.
   defp tokens(rest, tokens, context, _loc, _col) do
     {rest, tokens, context}
+  end
+
+  # The three sub-tokens (start tag, character interior, end tag) accumulate on
+  # the stack in reverse; restore document order.
+  defp raw_element(rest, [{_tag, tokens}], context, _loc, _col) do
+    {rest, Enum.reverse(tokens), context}
+  end
+
+  defp raw_open(rest, [{_open, args}], context, _loc, _col) do
+    attributes =
+      Enum.find_value(args, [], fn
+        {:attributes, a} -> a
+        _ -> nil
+      end)
+
+    {rest, [%Token.StartTag{name: find_raw_name(args), attributes: attributes}], context}
+  end
+
+  defp raw_text(rest, [data], context, _loc, _col),
+    do: {rest, [%Token.Character{data: data}], context}
+
+  defp raw_text(rest, [], context, _loc, _col), do: {rest, [%Token.Character{data: ""}], context}
+
+  defp raw_close(rest, [{_close, args}], context, _loc, _col) do
+    {rest, [%Token.EndTag{name: find_raw_name(args)}], context}
+  end
+
+  defp find_raw_name(args) do
+    Enum.find_value(args, fn
+      {:raw_name, n} -> n
+      _ -> nil
+    end)
   end
 
   defp comment(rest, [{:comment, ["<!--", data, "-->"]}], context, _loc, _col) do
