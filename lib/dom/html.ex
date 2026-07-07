@@ -27,6 +27,18 @@ after
   """
   defdelegate tokenize(html), to: DOM.HTML.Token
 
+  @doc """
+  Parses an HTML string into a `%DOM.Node{type: :document}` tree (the WHATWG
+  tree-construction algorithm). Tokenizes, decodes references, then runs the
+  insertion-mode state machine in `DOM.HTML.TreeBuilder`.
+  """
+  def parse(html) do
+    html
+    |> tokenize()
+    |> Enum.map(&DOM.HTML.Token.decode/1)
+    |> DOM.HTML.TreeBuilder.build()
+  end
+
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input link meta source track wbr)
 
