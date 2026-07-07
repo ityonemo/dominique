@@ -10,6 +10,7 @@ defmodule DOM.CSS.Query do
   use MatchSpec
 
   alias DOM.Node.Element
+  alias DOM.Node.Text
   alias DOM.NodeData
 
   @doc "Element ids in `candidates` whose local name is `name`."
@@ -99,6 +100,106 @@ defmodule DOM.CSS.Query do
         |> Enum.take_while(&(&1 != node_id))
         |> Enum.reverse()
     end
+  end
+
+  @doc "Element siblings of `node_id` (including itself), in document order."
+  @spec element_siblings(:ets.tid(), reference()) :: [reference()]
+  def element_siblings(nodes, node_id) do
+    case parent(nodes, node_id) do
+      nil -> [node_id]
+      parent_id -> element_children(nodes, parent_id)
+    end
+  end
+
+  @doc "Whether `node_id` is an element with no child element or text nodes."
+  @spec empty?(:ets.tid(), reference()) :: boolean()
+  def empty?(nodes, node_id) do
+    case select(nodes, children_spec(node_id)) do
+      [children] -> not Enum.any?(children, &content?(nodes, &1))
+      [] -> false
+    end
+  end
+
+  @doc "Whether `node_id`'s parent is not an element (the document root element)."
+  @spec root?(:ets.tid(), reference()) :: boolean()
+  def root?(nodes, node_id) do
+    case parent(nodes, node_id) do
+      nil -> true
+      parent_id -> not element?(nodes, parent_id)
+    end
+  end
+
+  @doc """
+  Whether any relative complex in `list` matches with `scope_id` as `:scope`.
+  Each relative complex leads with a combinator (default `:descendant`) that
+  bounds where matching may start relative to `scope_id`.
+  """
+  @spec has?([DOM.CSS.complex()], :ets.tid(), reference()) :: boolean()
+  def has?(list, nodes, scope_id) do
+    Enum.any?(list, &relative_match?(&1, nodes, scope_id))
+  end
+
+  # Descendant ids of `node_id` in document order (all types; matching filters
+  # to elements as needed).
+  @spec descendants(:ets.tid(), reference()) :: [reference()]
+  def descendants(nodes, node_id) do
+    nodes
+    |> element_children_and_others(node_id)
+    |> Enum.flat_map(fn child -> [child | descendants(nodes, child)] end)
+  end
+
+  defp element_children_and_others(nodes, node_id) do
+    case select(nodes, children_spec(node_id)) do
+      [children] -> children
+      [] -> []
+    end
+  end
+
+  # A relative complex (from :has): split off the leading combinator, compute the
+  # scope set relative to scope_id, then match the remaining complex over it.
+  defp relative_match?(%DOM.CSS.Complex{parts: [combinator | rest]}, nodes, scope_id)
+       when is_atom(combinator) do
+    scope = relative_scope(nodes, combinator, scope_id)
+    remainder_matches?(rest, nodes, scope)
+  end
+
+  # No leading combinator: an implicit descendant relative selector.
+  defp relative_match?(compound_or_complex, nodes, scope_id) do
+    scope = relative_scope(nodes, :descendant, scope_id)
+    remainder_matches?([compound_or_complex], nodes, scope)
+  end
+
+  defp relative_scope(nodes, :child, scope_id), do: element_children(nodes, scope_id)
+  defp relative_scope(nodes, :descendant, scope_id), do: descendants(nodes, scope_id)
+
+  defp relative_scope(nodes, :next_sibling, scope_id) do
+    nodes |> next_element_siblings(scope_id) |> Enum.take(1)
+  end
+
+  defp relative_scope(nodes, :subsequent_sibling, scope_id) do
+    next_element_siblings(nodes, scope_id)
+  end
+
+  defp next_element_siblings(nodes, node_id) do
+    case parent(nodes, node_id) do
+      nil ->
+        []
+
+      parent_id ->
+        nodes
+        |> element_children(parent_id)
+        |> Enum.drop_while(&(&1 != node_id))
+        |> Enum.drop(1)
+    end
+  end
+
+  # `rest` is [compound (comb compound)*] to match over `scope`.
+  defp remainder_matches?([compound], nodes, scope) do
+    DOM.CSS.match(compound, nodes, scope) != []
+  end
+
+  defp remainder_matches?(parts, nodes, scope) do
+    DOM.CSS.match(%DOM.CSS.Complex{parts: parts}, nodes, scope) != []
   end
 
   # ==========================================================================
@@ -203,6 +304,36 @@ defmodule DOM.CSS.Query do
       true
   end
 
+  defmatchspecp content_spec(node_id) do
+    {^node_id,
+     %NodeData{
+       type: Element,
+       local_name: _,
+       name: _,
+       public_id: _,
+       system_id: _,
+       value: _,
+       parent: _,
+       children: _,
+       attributes: _
+     }} ->
+      true
+
+    {^node_id,
+     %NodeData{
+       type: Text,
+       local_name: _,
+       name: _,
+       public_id: _,
+       system_id: _,
+       value: _,
+       parent: _,
+       children: _,
+       attributes: _
+     }} ->
+      true
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================
@@ -210,6 +341,9 @@ defmodule DOM.CSS.Query do
   defp select(nodes, spec), do: :ets.select(nodes, spec)
 
   defp element?(nodes, node_id), do: select(nodes, is_element_spec(node_id)) == [true]
+
+  # A node that counts as content for :empty — an element or a text node.
+  defp content?(nodes, node_id), do: select(nodes, content_spec(node_id)) == [true]
 
   # Keep only candidates that the spec matched, preserving candidate order.
   defp intersect(matched, candidates) do

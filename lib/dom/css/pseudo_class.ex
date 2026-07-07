@@ -10,6 +10,7 @@ defmodule DOM.CSS.PseudoClass do
     * `{:args, [ident]}` — `:lang`/`:dir(...)`
   """
 
+  alias DOM.CSS.Query
   alias DOM.CSS.Serialize
 
   @enforce_keys [:name]
@@ -27,7 +28,91 @@ defmodule DOM.CSS.PseudoClass do
   @type t :: %__MODULE__{name: String.t(), arg: arg()}
 
   @impl DOM.CSS
-  def match(_selector, _nodes, _candidate_ids), do: raise("unimplemented")
+  # Logical pseudo-classes (dispatch on arg).
+  def match(%{name: "not", arg: {:selector_list, list}}, nodes, candidates) do
+    matched = match_list(list, nodes, candidates)
+    candidates -- matched
+  end
+
+  def match(%{name: name, arg: {:selector_list, list}}, nodes, candidates)
+      when name in ["is", "where"] do
+    match_list(list, nodes, candidates)
+  end
+
+  def match(%{name: "has", arg: {:selector_list, list}}, nodes, candidates) do
+    Enum.filter(candidates, &Query.has?(list, nodes, &1))
+  end
+
+  # Structural pseudo-classes (dispatch on name).
+  def match(%{name: "root"}, nodes, candidates) do
+    Enum.filter(candidates, &Query.root?(nodes, &1))
+  end
+
+  def match(%{name: "empty"}, nodes, candidates) do
+    Enum.filter(candidates, &Query.empty?(nodes, &1))
+  end
+
+  def match(%{name: "first-child"}, nodes, candidates),
+    do: nth(nodes, candidates, {0, 1}, :forward)
+
+  def match(%{name: "last-child"}, nodes, candidates),
+    do: nth(nodes, candidates, {0, 1}, :backward)
+
+  def match(%{name: "only-child"}, nodes, candidates) do
+    Enum.filter(candidates, &(Query.element_siblings(nodes, &1) == [&1]))
+  end
+
+  def match(%{name: "nth-child", arg: {a, b}}, nodes, candidates)
+      when is_integer(a) and is_integer(b) do
+    nth(nodes, candidates, {a, b}, :forward)
+  end
+
+  def match(%{name: "nth-last-child", arg: {a, b}}, nodes, candidates)
+      when is_integer(a) and is_integer(b) do
+    nth(nodes, candidates, {a, b}, :backward)
+  end
+
+  def match(%{name: name, arg: {a, b, list}}, nodes, candidates)
+      when name in ["nth-child", "nth-last-child"] and is_integer(a) and is_integer(b) do
+    direction = if name == "nth-last-child", do: :backward, else: :forward
+    nth_of(nodes, candidates, {a, b}, list, direction)
+  end
+
+  # Anything else (UI/state pseudo-classes, unknowns) matches nothing.
+  def match(_selector, _nodes, _candidates), do: []
+
+  # An+B position test among element siblings, counting from the start
+  # (:forward) or end (:backward). Positions are 1-based.
+  defp nth(nodes, candidates, {a, b}, direction) do
+    Enum.filter(candidates, fn id ->
+      siblings = Query.element_siblings(nodes, id)
+      siblings = if direction == :backward, do: Enum.reverse(siblings), else: siblings
+      index = Enum.find_index(siblings, &(&1 == id))
+      index != nil and anb?(index + 1, a, b)
+    end)
+  end
+
+  # :nth-*(An+B of S) — index among siblings that also match the selector list S.
+  defp nth_of(nodes, candidates, {a, b}, list, direction) do
+    Enum.filter(candidates, fn id ->
+      siblings = Query.element_siblings(nodes, id)
+      matching = match_list(list, nodes, siblings)
+      matching = Enum.filter(siblings, &(&1 in matching))
+      matching = if direction == :backward, do: Enum.reverse(matching), else: matching
+      index = Enum.find_index(matching, &(&1 == id))
+      index != nil and anb?(index + 1, a, b)
+    end)
+  end
+
+  # Does `position` satisfy An+B, i.e. exists k >= 0 with position == a*k + b?
+  defp anb?(position, 0, b), do: position == b
+  defp anb?(position, a, b), do: rem(position - b, a) == 0 and div(position - b, a) >= 0
+
+  defp match_list(list, nodes, candidates) do
+    list
+    |> Enum.flat_map(&DOM.CSS.match(&1, nodes, candidates))
+    |> Enum.uniq()
+  end
 
   defimpl String.Chars do
     def to_string(%{name: name, arg: nil}), do: ":" <> Serialize.escape_ident(name)

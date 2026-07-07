@@ -239,4 +239,133 @@ defmodule DOM.CSS.MatchTest do
                MapSet.new([ctx.ids[:li1], ctx.ids[:li2]])
     end
   end
+
+  describe "structural pseudo-classes" do
+    setup do
+      {table, ids} =
+        build(
+          element(
+            "ul",
+            [],
+            [
+              element("li", [{"class", "a"}], [], as: :li1),
+              element("li", [{"class", "b"}], [], as: :li2),
+              element("li", [{"class", "a"}], [], as: :li3),
+              element("li", [{"class", "b"}], [], as: :li4)
+            ],
+            as: :ul
+          )
+        )
+
+      lis = [ids[:li1], ids[:li2], ids[:li3], ids[:li4]]
+      %{table: table, ids: ids, lis: lis, all: [ids[:ul] | lis]}
+    end
+
+    defp pc(selector), do: selector |> DOM.CSS.parse() |> hd()
+
+    test ":first-child", ctx do
+      assert matched(ctx.table, pc("li:first-child"), ctx.lis) == MapSet.new([ctx.ids[:li1]])
+    end
+
+    test ":last-child", ctx do
+      assert matched(ctx.table, pc("li:last-child"), ctx.lis) == MapSet.new([ctx.ids[:li4]])
+    end
+
+    test ":only-child (none, since ul has four)", ctx do
+      assert matched(ctx.table, pc("li:only-child"), ctx.lis) == MapSet.new()
+    end
+
+    test ":nth-child(2n) selects even positions", ctx do
+      assert matched(ctx.table, pc("li:nth-child(2n)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li2], ctx.ids[:li4]])
+    end
+
+    test ":nth-child(odd) selects odd positions", ctx do
+      assert matched(ctx.table, pc("li:nth-child(odd)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li1], ctx.ids[:li3]])
+    end
+
+    test ":nth-child(2) selects the second", ctx do
+      assert matched(ctx.table, pc("li:nth-child(2)"), ctx.lis) == MapSet.new([ctx.ids[:li2]])
+    end
+
+    test ":nth-last-child(1) selects the last", ctx do
+      assert matched(ctx.table, pc("li:nth-last-child(1)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li4]])
+    end
+
+    test ":nth-child(An+B of S) counts only matching siblings", ctx do
+      # among .a siblings (li1, li3), the 2nd is li3
+      assert matched(ctx.table, pc("li:nth-child(2 of .a)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li3]])
+    end
+
+    test ":root matches the element whose parent is not an element", ctx do
+      assert matched(ctx.table, pc(":root"), ctx.all) == MapSet.new([ctx.ids[:ul]])
+    end
+
+    test ":empty matches childless elements", ctx do
+      assert matched(ctx.table, pc("li:empty"), ctx.all) == MapSet.new(ctx.lis)
+      assert matched(ctx.table, pc("ul:empty"), ctx.all) == MapSet.new()
+    end
+
+    test ":not negates", ctx do
+      assert matched(ctx.table, pc("li:not(.a)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li2], ctx.ids[:li4]])
+    end
+
+    test ":is unions", ctx do
+      assert matched(ctx.table, pc("li:is(.a, :last-child)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li1], ctx.ids[:li3], ctx.ids[:li4]])
+    end
+
+    test ":where behaves like :is", ctx do
+      assert matched(ctx.table, pc("li:where(.b)"), ctx.lis) ==
+               MapSet.new([ctx.ids[:li2], ctx.ids[:li4]])
+    end
+
+    test "unsupported UI pseudo-class matches nothing", ctx do
+      assert matched(ctx.table, pc("li:hover"), ctx.lis) == MapSet.new()
+    end
+  end
+
+  describe ":has" do
+    setup do
+      {table, ids} =
+        build(
+          element(
+            "root",
+            [],
+            [
+              element("div", [], [element("img", [], [], as: :img)], as: :with_img),
+              element("div", [], [element("p", [], [], as: :p)], as: :with_p),
+              element("div", [], [], as: :empty_div)
+            ],
+            as: :root
+          )
+        )
+
+      divs = [ids[:with_img], ids[:with_p], ids[:empty_div]]
+      %{table: table, ids: ids, divs: divs}
+    end
+
+    defp has(selector), do: selector |> DOM.CSS.parse() |> hd()
+
+    test ":has with a descendant", ctx do
+      assert matched(ctx.table, has("div:has(img)"), ctx.divs) ==
+               MapSet.new([ctx.ids[:with_img]])
+    end
+
+    test ":has with a child combinator", ctx do
+      assert matched(ctx.table, has("div:has(> p)"), ctx.divs) ==
+               MapSet.new([ctx.ids[:with_p]])
+    end
+  end
+
+  describe "pseudo-element" do
+    test "never matches an element" do
+      {table, ids} = build(element("p", [], [], as: :p))
+      assert DOM.CSS.match(pc("p::before"), table, [ids[:p]]) == []
+    end
+  end
 end

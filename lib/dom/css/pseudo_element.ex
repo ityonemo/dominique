@@ -10,8 +10,9 @@ defmodule DOM.CSS.PseudoElement do
 
   @type t :: %__MODULE__{name: String.t()}
 
+  # A pseudo-element never matches an element node.
   @impl DOM.CSS
-  def match(_selector, _nodes, _candidate_ids), do: raise("unimplemented")
+  def match(_selector, _nodes, _candidate_ids), do: []
 
   defimpl String.Chars do
     def to_string(%{name: name}), do: "::" <> Serialize.escape_ident(name)
