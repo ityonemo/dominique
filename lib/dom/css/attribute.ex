@@ -4,6 +4,7 @@ defmodule DOM.CSS.Attribute do
   case flag `[a op v i]`, and an optional namespace `[ns|a]`.
   """
 
+  alias DOM.CSS.Query
   alias DOM.CSS.Serialize
 
   @enforce_keys [:name]
@@ -20,7 +21,9 @@ defmodule DOM.CSS.Attribute do
         }
 
   @impl DOM.CSS
-  def match(_selector, _nodes, _candidate_ids), do: raise("unimplemented")
+  def match(%{name: name, op: op, value: value, flag: flag}, nodes, candidate_ids) do
+    Query.attribute(nodes, candidate_ids, name, op, value, flag)
+  end
 
   defimpl String.Chars do
     def to_string(%{name: name, namespace: ns, op: op, value: value, flag: flag}) do
