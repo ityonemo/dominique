@@ -1,0 +1,18 @@
+# CSS selector grammar (Level 3 subset), consumed by Pegasus.
+#
+# Semantic actions in DOM.CSS turn each rule's match into the selector AST in a
+# single pass; see the parser-options keyword list there. This file is the
+# single source of truth for the grammar.
+
+selector_list <- compound
+
+compound <- simple+
+
+simple <- universal / id / class / type
+
+universal <- '*'
+id        <- '#' name
+class      <- '.' name
+type      <- name
+
+name <- [-_a-zA-Z] [-_a-zA-Z0-9]*

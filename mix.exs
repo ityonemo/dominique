@@ -29,7 +29,9 @@ defmodule Dominique.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:match_spec, "~> 1.0"},
       {:muontrap, "~> 1.0", only: :test},
-      {:protoss, "~> 1.1"}
+      {:pegasus, "~> 1.0"},
+      {:protoss, "~> 1.1"},
+      {:stream_data, "~> 1.3", only: [:dev, :test]}
     ]
   end
 

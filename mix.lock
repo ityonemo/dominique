@@ -6,5 +6,8 @@
   "jason": {:hex, :jason, "1.4.5", "2e3a008590b0b8d7388c20293e9dcc9cf3e5d642fd2a114e4cbbb52e595d940a", [:mix], [{:decimal, "~> 1.0 or ~> 2.0 or ~> 3.0", [hex: :decimal, repo: "hexpm", optional: true]}], "hexpm", "b0c823996102bcd0239b3c2444eb00409b72f6a140c1950bc8b457d836b30684"},
   "match_spec": {:hex, :match_spec, "1.0.0", "a332c917ea7d74df333ee1da19007f6395a190fecc29984ebd1f6be3556718b9", [:mix], [], "hexpm", "3dc72e9f97bba716e2a8ae0c56d27a304201996542e54d6869519f6016704d22"},
   "muontrap": {:hex, :muontrap, "1.8.0", "3c5dab5bc91d5a16d14cd85b130ae7d35a9c469564a11ba4b2ebbcd7ccf5bc05", [:make, :mix], [{:elixir_make, "~> 0.6", [hex: :elixir_make, repo: "hexpm", optional: false]}], "hexpm", "45ff36451303cbdefe1c66da3681b5aff078ee5737348f554f0017daa66284af"},
+  "nimble_parsec": {:hex, :nimble_parsec, "1.4.2", "8efba0122db06df95bfaa78f791344a89352ba04baedd3849593bfce4d0dc1c6", [:mix], [], "hexpm", "4b21398942dda052b403bbe1da991ccd03a053668d147d53fb8c4e0efe09c973"},
+  "pegasus": {:hex, :pegasus, "1.0.0", "d82dd97378d505658a462e4fd33b393a33da9317c46fa36d5e233ce3b7ba2577", [:mix], [{:nimble_parsec, "~> 1.2", [hex: :nimble_parsec, repo: "hexpm", optional: false]}], "hexpm", "52ad355d1016cc46f8ade269499868026fe0c6aff1b149b7ea4c34d2e46747f9"},
   "protoss": {:hex, :protoss, "1.1.0", "853533313989751c7da5b0e1ce71501a23f3dc41f128709478af40daccc6e959", [:mix], [], "hexpm", "c2f874383dd047fcfdf467b814dd33a208a4d24a467aef90d86185b41a0752ad"},
+  "stream_data": {:hex, :stream_data, "1.3.0", "bde37905530aff386dea1ddd86ecbf00e6642dc074ceffc10b7d4e41dfd6aac9", [:mix], [], "hexpm", "3cc552e286e817dca43c98044c706eec9318083a1480c52ae2688b08e2936e3c"},
 }
