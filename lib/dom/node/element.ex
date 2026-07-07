@@ -61,15 +61,15 @@ defmodule DOM.Node.Element do
   end
 
   def query_selector(element, selector) do
-    DOM._query_selector(element.server, element.id, selector)
+    GenServer.call(element.server, {:query_selector, element.id, selector})
   end
 
   def query_selector_all(element, selector) do
-    DOM._query_selector_all(element.server, element.id, selector)
+    GenServer.call(element.server, {:query_selector_all, element.id, selector})
   end
 
   def matches(element, selector) do
-    DOM._matches(element.server, element.id, selector)
+    GenServer.call(element.server, {:matches, element.id, selector})
   end
 
   @impl DOM.Node

@@ -78,9 +78,6 @@ defmodule DOM do
   @spec get_elements_by_class_name(Document.t(), String.t()) :: [Element.t()]
   @spec query_selector(Document.t(), String.t()) :: Element.t() | nil
   @spec query_selector_all(Document.t(), String.t()) :: [Element.t()]
-  @spec _query_selector(GenServer.server(), reference(), String.t()) :: Element.t() | nil
-  @spec _query_selector_all(GenServer.server(), reference(), String.t()) :: [Element.t()]
-  @spec _matches(GenServer.server(), reference(), String.t()) :: boolean()
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
@@ -137,23 +134,11 @@ defmodule DOM do
   end
 
   def query_selector(document, selector) do
-    _query_selector(document.server, document.id, selector)
+    GenServer.call(document.server, {:query_selector, document.id, selector})
   end
 
   def query_selector_all(document, selector) do
-    _query_selector_all(document.server, document.id, selector)
-  end
-
-  def _query_selector(server, node_id, selector) do
-    GenServer.call(server, {:query_selector, node_id, selector})
-  end
-
-  def _query_selector_all(server, node_id, selector) do
-    GenServer.call(server, {:query_selector_all, node_id, selector})
-  end
-
-  def _matches(server, node_id, selector) do
-    GenServer.call(server, {:matches, node_id, selector})
+    GenServer.call(document.server, {:query_selector_all, document.id, selector})
   end
 
   def _create(%Document{} = document, nodedata) do
