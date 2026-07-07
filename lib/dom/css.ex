@@ -1,479 +1,64 @@
-defmodule DOM.CSS do
-  @moduledoc """
-  Parses CSS selectors into a structured AST and serializes them back.
+use Protoss
 
-  `DOM.CSS` is the context module for CSS selectors. `parse/1` turns a selector
-  string into an AST; `to_string/1` renders an AST back to a canonical selector
-  string. The parser is generated at compile time by Pegasus from
-  `lib/dom/css/selector.peg`, with semantic actions (below) building the AST in a
-  single pass.
+defprotocol DOM.CSS do
+  @moduledoc """
+  CSS selectors: parse a selector string into a struct AST, match it against a
+  DOM, and serialize it back.
+
+  `DOM.CSS` is a protocol whose callback `match/3` is implemented by each
+  selector struct (`DOM.CSS.Type`, `DOM.CSS.Compound`, `DOM.CSS.Complex`, …).
+  `parse/1` and `to_string/1` are shared entry points defined in the `after`
+  block; the parser itself lives in `DOM.CSS.Parser` (kept apart so the struct
+  modules that `use DOM.CSS` do not create a compile cycle).
 
   ## AST
 
-  `parse/1` returns a **selector list**: a list of complex selectors. A complex
-  selector with no combinator collapses to its single compound; otherwise it is a
-  list alternating compounds and combinators, e.g.
-  `[compound_a, :child, compound_b]`. Combinators are `:descendant`, `:child`,
-  `:next_sibling`, `:subsequent_sibling`.
+  `parse/1` returns a **selector list**: a plain list of complex selectors. A
+  complex selector with no combinator is a `DOM.CSS.Compound`; with combinators
+  it is a `DOM.CSS.Complex` whose `parts` alternate compounds and combinator
+  atoms (`:descendant`, `:child`, `:next_sibling`, `:subsequent_sibling`).
 
-  A compound is `{:compound, [simple]}` where each simple selector is one of:
-
-    * `{:type, name}` — a type selector such as `div`
-    * `{:type, name, ns}` — a namespaced type, `ns` a prefix string, `:any`
-      (`*|`), or `:none` (`|`); likewise `{:universal, ns}` and
-      `{:attr, {ns, name}}` for namespaced universal and attribute selectors
-    * `:universal` — the `*` selector
-    * `{:id, name}` — an `#id` selector
-    * `{:class, name}` — a `.class` selector
-    * `{:attr, name}` — an attribute presence selector `[a]`
-    * `{:attr, name, op, value}` — `[a op v]`, op one of `:eq`, `:includes`,
-      `:dash`, `:prefix`, `:suffix`, `:substring`
-    * `{:attr, name, op, value, flag}` — with a case flag `:i` or `:s`
-    * `{:pseudo_class, name}` — a keyword pseudo-class such as `:first-child`
-    * `{:pseudo_class, "nth-child", {a, b}}` — a `:nth-*` selector, An+B as `{a, b}`
-    * `{:pseudo_class, name, {:selector_list, list}}` — `:is`/`:where`/`:has(...)`
-      (for `:has`, a relative complex may lead with a combinator)
-    * `{:pseudo_class, name, {:args, [ident]}}` — `:lang`/`:dir(...)`
-    * `{:not, selector_list}` — a `:not(...)` negation
-    * `{:pseudo_element, name}` — a `::pseudo-element`
-
+  A `DOM.CSS.Compound` holds `simples`, a list of simple selectors, each a
+  struct: `DOM.CSS.Type`, `DOM.CSS.Universal`, `DOM.CSS.Id`, `DOM.CSS.Class`,
+  `DOM.CSS.Attribute`, `DOM.CSS.PseudoClass`, or `DOM.CSS.PseudoElement`.
   """
-
-  import Kernel, except: [to_string: 1]
-
-  require Pegasus
-
-  Pegasus.parser_from_file(Path.join(__DIR__, "css/selector.peg"),
-    selector_list: [parser: :parse_selector, post_traverse: :selector_list],
-    comma: [ignore: true],
-    complex: [tag: true, post_traverse: :complex],
-    combinator: [post_traverse: :combinator],
-    descendant: [token: :descendant],
-    ws: [ignore: true],
-    compound: [tag: true, post_traverse: :compound],
-    universal: [tag: true, post_traverse: :universal],
-    id: [post_traverse: :id],
-    class: [post_traverse: :class],
-    type: [tag: true, post_traverse: :type],
-    namespace: [tag: true, post_traverse: :namespace],
-    ns_prefix: [collect: true],
-    pseudo_element: [post_traverse: :pseudo_element],
-    pseudo_class: [post_traverse: :pseudo_class],
-    negation: [tag: true, post_traverse: :negation],
-    functional_selector: [tag: true, post_traverse: :functional_selector],
-    func_sel_name: [collect: true],
-    has: [tag: true, post_traverse: :has],
-    relative_list: [tag: true],
-    relative_complex: [tag: true, post_traverse: :relative_complex],
-    functional_args: [tag: true, post_traverse: :functional_args],
-    selector_list_inner: [tag: true],
-    nth: [tag: true, post_traverse: :nth],
-    nth_name: [collect: true],
-    nth_of: [tag: true],
-    anb: [collect: true, post_traverse: :anb],
-    attribute: [tag: true, post_traverse: :attribute],
-    attr_op: [collect: true, post_traverse: :attr_op],
-    attr_value: [tag: true, post_traverse: :attr_value],
-    attr_string: [collect: true, post_traverse: :attr_string],
-    attr_flag: [collect: true, post_traverse: :attr_flag],
-    name: [tag: true, post_traverse: :name],
-    plain_char: [collect: true],
-    escape: [post_traverse: :escape],
-    hex_escape: [collect: true, tag: :hex_escape],
-    char_escape: [collect: true, tag: :char_escape]
-  )
-
-  # ==========================================================================
-  # API
-  # ==========================================================================
 
   @type name :: String.t()
   @type attr_op :: :eq | :includes | :dash | :prefix | :suffix | :substring
   @type combinator :: :descendant | :child | :next_sibling | :subsequent_sibling
-
   @type namespace :: String.t() | :any | :none
 
   @type simple ::
-          {:type, name()}
-          | {:type, name(), namespace()}
-          | :universal
-          | {:universal, namespace()}
-          | {:id, name()}
-          | {:class, name()}
-          | {:attr, name()}
-          | {:attr, {namespace(), name()}}
-          | {:attr, name(), attr_op(), String.t()}
-          | {:attr, name(), attr_op(), String.t(), :i | :s}
-          | {:pseudo_class, name()}
-          | {:pseudo_class, name(), {integer(), integer()}}
-          | {:pseudo_class, name(), {integer(), integer()}, [complex()]}
-          | {:pseudo_class, name(), {:selector_list, [complex()]}}
-          | {:pseudo_class, name(), {:args, [String.t()]}}
-          | {:not, t()}
-          | {:pseudo_element, name()}
+          DOM.CSS.Type.t()
+          | DOM.CSS.Universal.t()
+          | DOM.CSS.Id.t()
+          | DOM.CSS.Class.t()
+          | DOM.CSS.Attribute.t()
+          | DOM.CSS.PseudoClass.t()
+          | DOM.CSS.PseudoElement.t()
 
-  @type compound :: {:compound, [simple()]}
-  @type complex :: compound() | [compound() | combinator()]
+  @type complex :: DOM.CSS.Compound.t() | DOM.CSS.Complex.t()
   @type t :: [complex()]
 
   @doc """
-  Parses a CSS selector string into its AST.
+  Matches this selector against `nodes` (an ETS table of `DOM.NodeData`),
+  reducing `candidate_ids` to the ids that match. Not yet implemented.
+  """
+  def match(selector, nodes, candidate_ids)
+after
+  @doc """
+  Parses a CSS selector string into its struct AST.
 
   Raises `ArgumentError` when the selector is not valid.
   """
-  @spec parse(String.t()) :: t()
-  def parse(selector) do
-    case parse_selector(selector) do
-      {:ok, [ast], "", _context, _loc, _offset} ->
-        ast
-
-      {:ok, _ast, rest, _context, _loc, _offset} ->
-        raise ArgumentError,
-              "invalid CSS selector #{inspect(selector)} (unparsed: #{inspect(rest)})"
-
-      {:error, reason, _rest, _context, _loc, _offset} ->
-        raise ArgumentError, "invalid CSS selector #{inspect(selector)}: #{reason}"
-    end
-  end
+  @spec parse(String.t()) :: DOM.CSS.t()
+  defdelegate parse(selector), to: DOM.CSS.Parser
 
   @doc """
   Serializes a selector AST back to a canonical selector string.
 
   `parse/1` and `to_string/1` round-trip: `parse(to_string(ast)) == ast`.
   """
-  @spec to_string(t()) :: String.t()
-  def to_string(selector_list) do
-    Enum.map_join(selector_list, ", ", &complex_to_string/1)
-  end
-
-  defp complex_to_string({:compound, _} = compound), do: compound_to_string(compound)
-
-  # A relative complex (in :has) may lead with a combinator; render it without a
-  # leading space, e.g. "> .child".
-  defp complex_to_string([combinator | rest])
-       when is_atom(combinator) and combinator != :descendant do
-    String.trim_leading(part_to_string(combinator)) <> Enum.map_join(rest, &part_to_string/1)
-  end
-
-  defp complex_to_string(parts) when is_list(parts) do
-    Enum.map_join(parts, &part_to_string/1)
-  end
-
-  defp part_to_string(:descendant), do: " "
-  defp part_to_string(:child), do: " > "
-  defp part_to_string(:next_sibling), do: " + "
-  defp part_to_string(:subsequent_sibling), do: " ~ "
-  defp part_to_string({:compound, _} = compound), do: compound_to_string(compound)
-
-  defp compound_to_string({:compound, simples}) do
-    Enum.map_join(simples, &simple_to_string/1)
-  end
-
-  defp simple_to_string(:universal), do: "*"
-  defp simple_to_string({:universal, ns}), do: ns_to_string(ns) <> "*"
-  defp simple_to_string({:type, name}), do: escape_ident(name)
-  defp simple_to_string({:type, name, ns}), do: ns_to_string(ns) <> escape_ident(name)
-  defp simple_to_string({:id, name}), do: "#" <> escape_ident(name)
-  defp simple_to_string({:class, name}), do: "." <> escape_ident(name)
-
-  defp simple_to_string({:attr, {ns, name}}),
-    do: "[" <> ns_to_string(ns) <> escape_ident(name) <> "]"
-
-  defp simple_to_string({:attr, name}), do: "[" <> escape_ident(name) <> "]"
-
-  defp simple_to_string({:attr, name, op, value}) do
-    "[" <> escape_ident(name) <> op_to_string(op) <> quote_value(value) <> "]"
-  end
-
-  defp simple_to_string({:attr, name, op, value, flag}) do
-    "[" <>
-      escape_ident(name) <>
-      op_to_string(op) <> quote_value(value) <> " " <> Atom.to_string(flag) <> "]"
-  end
-
-  defp simple_to_string({:pseudo_class, name}), do: ":" <> escape_ident(name)
-
-  defp simple_to_string({:pseudo_class, name, {a, b}}) when is_integer(a) and is_integer(b),
-    do: ":" <> escape_ident(name) <> "(" <> anb_to_string(a, b) <> ")"
-
-  defp simple_to_string({:pseudo_class, name, {a, b}, list})
-       when is_integer(a) and is_integer(b),
-       do:
-         ":" <>
-           escape_ident(name) <> "(" <> anb_to_string(a, b) <> " of " <> to_string(list) <> ")"
-
-  defp simple_to_string({:pseudo_class, name, {:selector_list, list}}),
-    do: ":" <> escape_ident(name) <> "(" <> to_string(list) <> ")"
-
-  defp simple_to_string({:pseudo_class, name, {:args, args}}),
-    do: ":" <> escape_ident(name) <> "(" <> Enum.map_join(args, ", ", &escape_ident/1) <> ")"
-
-  defp simple_to_string({:not, list}), do: ":not(" <> to_string(list) <> ")"
-  defp simple_to_string({:pseudo_element, name}), do: "::" <> escape_ident(name)
-
-  @op_strings %{
-    eq: "=",
-    includes: "~=",
-    dash: "|=",
-    prefix: "^=",
-    suffix: "$=",
-    substring: "*="
-  }
-
-  defp op_to_string(op), do: Map.fetch!(@op_strings, op)
-
-  defp quote_value(value), do: "\"" <> value <> "\""
-
-  defp ns_to_string(:any), do: "*|"
-  defp ns_to_string(:none), do: "|"
-  defp ns_to_string(ns), do: escape_ident(ns) <> "|"
-
-  # Re-escape an identifier so it round-trips: a leading digit is hex-escaped,
-  # and any non [-_a-zA-Z0-9] character is backslash-escaped.
-  defp escape_ident(<<digit, rest::binary>>) when digit in ?0..?9 do
-    "\\3" <> <<digit>> <> " " <> escape_body(rest)
-  end
-
-  defp escape_ident(ident), do: escape_body(ident)
-
-  defp escape_body(ident) do
-    ident
-    |> String.to_charlist()
-    |> Enum.map_join(&escape_char/1)
-  end
-
-  defp escape_char(char) when char in ?a..?z or char in ?A..?Z or char in ?0..?9, do: <<char>>
-  defp escape_char(char) when char in [?-, ?_], do: <<char>>
-  defp escape_char(char), do: "\\" <> <<char::utf8>>
-
-  defp anb_to_string(0, b), do: Integer.to_string(b)
-  defp anb_to_string(a, 0), do: coeff_to_string(a) <> "n"
-  defp anb_to_string(a, b) when b > 0, do: coeff_to_string(a) <> "n+" <> Integer.to_string(b)
-  defp anb_to_string(a, b), do: coeff_to_string(a) <> "n" <> Integer.to_string(b)
-
-  defp coeff_to_string(1), do: ""
-  defp coeff_to_string(-1), do: "-"
-  defp coeff_to_string(a), do: Integer.to_string(a)
-
-  # ==========================================================================
-  # Semantic actions
-  # ==========================================================================
-
-  # Args arrive as a reversed stack; reverse back to source order.
-
-  defp selector_list(rest, complexes, context, _loc, _col) do
-    {rest, [Enum.reverse(complexes)], context}
-  end
-
-  # A complex selector with no combinator collapses to its single compound;
-  # otherwise it stays a list of alternating compounds and combinators.
-  defp complex(rest, [{:complex, [compound]}], context, _loc, _col) do
-    {rest, [compound], context}
-  end
-
-  defp complex(rest, [{:complex, parts}], context, _loc, _col) do
-    {rest, [parts], context}
-  end
-
-  @combinators %{">" => :child, "+" => :next_sibling, "~" => :subsequent_sibling}
-
-  defp combinator(rest, [:descendant], context, _loc, _col) do
-    {rest, [:descendant], context}
-  end
-
-  defp combinator(rest, [delimiter], context, _loc, _col) do
-    {rest, [Map.fetch!(@combinators, delimiter)], context}
-  end
-
-  defp compound(rest, [{:compound, simples}], context, _loc, _col) do
-    {rest, [{:compound, simples}], context}
-  end
-
-  defp id(rest, [name, "#"], context, _loc, _col) do
-    {rest, [{:id, name}], context}
-  end
-
-  defp class(rest, [name, "."], context, _loc, _col) do
-    {rest, [{:class, name}], context}
-  end
-
-  defp type(rest, [{:type, [name]}], context, _loc, _col) do
-    {rest, [{:type, name}], context}
-  end
-
-  defp type(rest, [{:type, [{:ns, ns}, name]}], context, _loc, _col) do
-    {rest, [{:type, name, ns}], context}
-  end
-
-  defp universal(rest, [{:universal, ["*"]}], context, _loc, _col) do
-    {rest, [:universal], context}
-  end
-
-  defp universal(rest, [{:universal, [{:ns, ns}, "*"]}], context, _loc, _col) do
-    {rest, [{:universal, ns}], context}
-  end
-
-  # namespace prefix -> {:ns, "svg" | :any | :none}; "|" or "" means no ns.
-  defp namespace(rest, [{:namespace, ["*", "|"]}], context, _loc, _col) do
-    {rest, [{:ns, :any}], context}
-  end
-
-  defp namespace(rest, [{:namespace, [prefix, "|"]}], context, _loc, _col) when prefix != "" do
-    {rest, [{:ns, prefix}], context}
-  end
-
-  defp namespace(rest, [{:namespace, parts}], context, _loc, _col)
-       when parts == ["|"] or parts == ["", "|"] do
-    {rest, [{:ns, :none}], context}
-  end
-
-  @attr_ops %{
-    "=" => :eq,
-    "~=" => :includes,
-    "|=" => :dash,
-    "^=" => :prefix,
-    "$=" => :suffix,
-    "*=" => :substring
-  }
-
-  defp attr_op(rest, [op], context, _loc, _col) do
-    {rest, [{:op, Map.fetch!(@attr_ops, op)}], context}
-  end
-
-  defp attr_string(rest, [quoted], context, _loc, _col) do
-    {rest, [String.slice(quoted, 1..-2//1)], context}
-  end
-
-  defp attr_value(rest, [{:attr_value, [value]}], context, _loc, _col) do
-    {rest, [{:value, value}], context}
-  end
-
-  defp attr_flag(rest, [flag], context, _loc, _col) do
-    {rest, [{:flag, String.to_atom(String.trim(flag))}], context}
-  end
-
-  defp attribute(rest, [{:attribute, parts}], context, _loc, _col) do
-    {rest, [build_attribute(namespace_attr(parts))], context}
-  end
-
-  # Fold a leading namespace prefix into the attribute name as a {ns, name} pair.
-  defp namespace_attr(["[", {:ns, ns}, name | rest]), do: ["[", {ns, name} | rest]
-  defp namespace_attr(parts), do: parts
-
-  defp build_attribute(["[", name, "]"]), do: {:attr, name}
-  defp build_attribute(["[", name, {:op, op}, {:value, value}, "]"]), do: {:attr, name, op, value}
-
-  defp build_attribute(["[", name, {:op, op}, {:value, value}, {:flag, flag}, "]"]) do
-    {:attr, name, op, value, flag}
-  end
-
-  defp pseudo_element(rest, [name, "::"], context, _loc, _col) do
-    {rest, [{:pseudo_element, name}], context}
-  end
-
-  defp pseudo_class(rest, [name, ":"], context, _loc, _col) do
-    {rest, [{:pseudo_class, name}], context}
-  end
-
-  defp nth(rest, [{:nth, [":", name, "(", {a, b}, ")"]}], context, _loc, _col) do
-    {rest, [{:pseudo_class, name, {a, b}}], context}
-  end
-
-  defp nth(
-         rest,
-         [{:nth, [":", name, "(", {a, b}, {:nth_of, of_parts}, ")"]}],
-         context,
-         _loc,
-         _col
-       ) do
-    {:selector_list_inner, list} = List.keyfind(of_parts, :selector_list_inner, 0)
-    {rest, [{:pseudo_class, name, {a, b}, list}], context}
-  end
-
-  defp negation(
-         rest,
-         [{:negation, [":not(", {:selector_list_inner, list}, ")"]}],
-         ctx,
-         _loc,
-         _col
-       ) do
-    {rest, [{:not, list}], ctx}
-  end
-
-  defp functional_selector(
-         rest,
-         [{:functional_selector, [":", name, "(", {:selector_list_inner, list}, ")"]}],
-         ctx,
-         _loc,
-         _col
-       ) do
-    {rest, [{:pseudo_class, name, {:selector_list, list}}], ctx}
-  end
-
-  # :has produces its pseudo-class directly; functional_selector just unwraps it.
-  defp functional_selector(rest, [{:functional_selector, [pseudo_class]}], ctx, _loc, _col) do
-    {rest, [pseudo_class], ctx}
-  end
-
-  defp has(rest, [{:has, [":has(", {:relative_list, complexes}, ")"]}], ctx, _loc, _col) do
-    {rest, [{:pseudo_class, "has", {:selector_list, complexes}}], ctx}
-  end
-
-  # A relative complex may lead with a combinator; a plain complex passes through.
-  defp relative_complex(rest, [{:relative_complex, [complex]}], ctx, _loc, _col) do
-    {rest, [complex], ctx}
-  end
-
-  defp relative_complex(rest, [{:relative_complex, [combinator, complex]}], ctx, _loc, _col) do
-    parts = if is_list(complex), do: [combinator | complex], else: [combinator, complex]
-    {rest, [parts], ctx}
-  end
-
-  defp functional_args(rest, [{:functional_args, [":", name, "(" | rest_parts]}], ctx, _loc, _col) do
-    args = Enum.reject(rest_parts, &(&1 == ")"))
-    {rest, [{:pseudo_class, name, {:args, args}}], ctx}
-  end
-
-  # An+B micro-syntax -> {a, b}. Whitespace inside the expression is already
-  # stripped (ws is ignored) except within the collected text, so normalize it.
-  defp anb(rest, [text], context, _loc, _col) do
-    {rest, [parse_anb(text)], context}
-  end
-
-  defp parse_anb("odd"), do: {2, 1}
-  defp parse_anb("even"), do: {2, 0}
-
-  defp parse_anb(text) do
-    text = String.replace(text, " ", "")
-
-    case String.split(text, "n", parts: 2) do
-      [b] -> {0, String.to_integer(b)}
-      [coeff, rest] -> {anb_coeff(coeff), anb_b(rest)}
-    end
-  end
-
-  defp anb_coeff(""), do: 1
-  defp anb_coeff("-"), do: -1
-  defp anb_coeff("+"), do: 1
-  defp anb_coeff(n), do: String.to_integer(n)
-
-  defp anb_b(""), do: 0
-  defp anb_b(rest), do: String.to_integer(rest)
-
-  # name_chars arrive in source order; each is a decoded single-character string
-  # (plain char) or the decoded escape. Join them into the ident value.
-  defp name(rest, [{:name, chars}], context, _loc, _col) do
-    {rest, [IO.iodata_to_binary(chars)], context}
-  end
-
-  # A hex escape ("\" + 1-6 hex digits + optional trailing space) decodes to the
-  # code point; a char escape ("\" + one non-hex char) is that literal char.
-  defp escape(rest, [{:hex_escape, [hex]}, "\\"], context, _loc, _col) do
-    codepoint = hex |> String.trim() |> String.to_integer(16)
-    {rest, [<<codepoint::utf8>>], context}
-  end
-
-  defp escape(rest, [{:char_escape, [char]}, "\\"], context, _loc, _col) do
-    {rest, [char], context}
-  end
+  @spec to_string(DOM.CSS.t()) :: String.t()
+  def to_string(selector_list), do: DOM.CSS.Serialize.selector_list(selector_list)
 end

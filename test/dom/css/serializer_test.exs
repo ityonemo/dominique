@@ -1,74 +1,120 @@
 defmodule DOM.CSS.SerializerTest do
   use ExUnit.Case, async: true
 
+  alias DOM.CSS.Attribute
+  alias DOM.CSS.Class
+  alias DOM.CSS.Complex
+  alias DOM.CSS.Compound
+  alias DOM.CSS.Id
+  alias DOM.CSS.PseudoClass
+  alias DOM.CSS.PseudoElement
+  alias DOM.CSS.Type
+  alias DOM.CSS.Universal
+
   describe "to_string/1 renders each simple selector" do
     test "type" do
-      assert DOM.CSS.to_string([{:compound, [{:type, "div"}]}]) == "div"
+      assert DOM.CSS.to_string([%Compound{simples: [%Type{name: "div"}]}]) == "div"
     end
 
     test "universal" do
-      assert DOM.CSS.to_string([{:compound, [:universal]}]) == "*"
+      assert DOM.CSS.to_string([%Compound{simples: [%Universal{}]}]) == "*"
     end
 
     test "id" do
-      assert DOM.CSS.to_string([{:compound, [{:id, "main"}]}]) == "#main"
+      assert DOM.CSS.to_string([%Compound{simples: [%Id{name: "main"}]}]) == "#main"
     end
 
     test "class" do
-      assert DOM.CSS.to_string([{:compound, [{:class, "box"}]}]) == ".box"
+      assert DOM.CSS.to_string([%Compound{simples: [%Class{name: "box"}]}]) == ".box"
     end
 
     test "attribute presence" do
-      assert DOM.CSS.to_string([{:compound, [{:attr, "disabled"}]}]) == "[disabled]"
+      assert DOM.CSS.to_string([%Compound{simples: [%Attribute{name: "disabled"}]}]) ==
+               "[disabled]"
     end
 
     test "attribute with operator" do
-      assert DOM.CSS.to_string([{:compound, [{:attr, "href", :prefix, "http"}]}]) ==
+      assert DOM.CSS.to_string([
+               %Compound{simples: [%Attribute{name: "href", op: :prefix, value: "http"}]}
+             ]) ==
                ~s([href^="http"])
     end
 
     test "attribute with case flag" do
-      assert DOM.CSS.to_string([{:compound, [{:attr, "type", :eq, "text", :i}]}]) ==
+      assert DOM.CSS.to_string([
+               %Compound{simples: [%Attribute{name: "type", op: :eq, value: "text", flag: :i}]}
+             ]) ==
                ~s([type="text" i])
     end
 
     test "keyword pseudo-class" do
-      assert DOM.CSS.to_string([{:compound, [{:pseudo_class, "hover"}]}]) == ":hover"
+      assert DOM.CSS.to_string([%Compound{simples: [%PseudoClass{name: "hover"}]}]) == ":hover"
     end
 
     test "nth-child" do
-      assert DOM.CSS.to_string([{:compound, [{:pseudo_class, "nth-child", {2, 1}}]}]) ==
+      assert DOM.CSS.to_string([
+               %Compound{simples: [%PseudoClass{name: "nth-child", arg: {2, 1}}]}
+             ]) ==
                ":nth-child(2n+1)"
     end
 
     test "negation" do
-      assert DOM.CSS.to_string([{:compound, [{:not, [{:compound, [{:class, "box"}]}]}]}]) ==
+      assert DOM.CSS.to_string([
+               %Compound{
+                 simples: [
+                   %PseudoClass{
+                     name: "not",
+                     arg: {:selector_list, [%Compound{simples: [%Class{name: "box"}]}]}
+                   }
+                 ]
+               }
+             ]) ==
                ":not(.box)"
     end
 
     test "pseudo-element" do
-      assert DOM.CSS.to_string([{:compound, [{:pseudo_element, "before"}]}]) == "::before"
+      assert DOM.CSS.to_string([%Compound{simples: [%PseudoElement{name: "before"}]}]) ==
+               "::before"
     end
   end
 
   describe "to_string/1 renders combinators and lists" do
     test "compound" do
-      assert DOM.CSS.to_string([{:compound, [{:type, "a"}, {:id, "m"}, {:class, "b"}]}]) ==
+      assert DOM.CSS.to_string([
+               %Compound{simples: [%Type{name: "a"}, %Id{name: "m"}, %Class{name: "b"}]}
+             ]) ==
                "a#m.b"
     end
 
     test "child combinator" do
-      complex = [{:compound, [{:type, "ul"}]}, :child, {:compound, [{:type, "li"}]}]
+      complex = %Complex{
+        parts: [
+          %Compound{simples: [%Type{name: "ul"}]},
+          :child,
+          %Compound{simples: [%Type{name: "li"}]}
+        ]
+      }
+
       assert DOM.CSS.to_string([complex]) == "ul > li"
     end
 
     test "descendant combinator" do
-      complex = [{:compound, [{:type, "div"}]}, :descendant, {:compound, [{:class, "box"}]}]
+      complex = %Complex{
+        parts: [
+          %Compound{simples: [%Type{name: "div"}]},
+          :descendant,
+          %Compound{simples: [%Class{name: "box"}]}
+        ]
+      }
+
       assert DOM.CSS.to_string([complex]) == "div .box"
     end
 
     test "selector list" do
-      assert DOM.CSS.to_string([{:compound, [{:class, "a"}]}, {:compound, [{:class, "b"}]}]) ==
+      assert DOM.CSS.to_string([
+               %Compound{simples: [%Class{name: "a"}]},
+               %Compound{simples: [%Class{name: "b"}]}
+             ]) ==
                ".a, .b"
     end
   end
