@@ -97,6 +97,32 @@ defmodule DOM.CSS.SelectorTest do
     end
   end
 
+  describe "namespaces" do
+    test "named namespace on a type" do
+      assert DOM.CSS.parse("svg|rect") == [{:compound, [{:type, "rect", "svg"}]}]
+    end
+
+    test "any namespace on a type" do
+      assert DOM.CSS.parse("*|div") == [{:compound, [{:type, "div", :any}]}]
+    end
+
+    test "empty namespace on a type" do
+      assert DOM.CSS.parse("|div") == [{:compound, [{:type, "div", :none}]}]
+    end
+
+    test "namespace on the universal selector" do
+      assert DOM.CSS.parse("svg|*") == [{:compound, [{:universal, "svg"}]}]
+    end
+
+    test "any-namespace universal" do
+      assert DOM.CSS.parse("*|*") == [{:compound, [{:universal, :any}]}]
+    end
+
+    test "namespace on an attribute" do
+      assert DOM.CSS.parse("[svg|href]") == [{:compound, [{:attr, {"svg", "href"}}]}]
+    end
+  end
+
   describe "compound selectors" do
     test "type with id and class" do
       assert DOM.CSS.parse("a#main.box") ==

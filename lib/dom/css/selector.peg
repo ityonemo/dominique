@@ -52,12 +52,16 @@ pseudo_class <- ':' name
 
 selector_list_inner <- complex (comma complex)*
 
-universal <- '*'
+universal <- namespace? '*'
 id        <- '#' name
 class      <- '.' name
-type      <- name
+type      <- namespace? name
 
-attribute <- '[' name (attr_op attr_value attr_flag?)? ']'
+namespace <- ns_prefix '|' !'='
+
+ns_prefix <- name / '*' / ''
+
+attribute <- '[' namespace? name (attr_op attr_value attr_flag?)? ']'
 
 attr_op <- '~=' / '|=' / '^=' / '$=' / '*=' / '='
 

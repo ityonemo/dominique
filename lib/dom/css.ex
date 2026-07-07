@@ -19,6 +19,9 @@ defmodule DOM.CSS do
   A compound is `{:compound, [simple]}` where each simple selector is one of:
 
     * `{:type, name}` — a type selector such as `div`
+    * `{:type, name, ns}` — a namespaced type, `ns` a prefix string, `:any`
+      (`*|`), or `:none` (`|`); likewise `{:universal, ns}` and
+      `{:attr, {ns, name}}` for namespaced universal and attribute selectors
     * `:universal` — the `*` selector
     * `{:id, name}` — an `#id` selector
     * `{:class, name}` — a `.class` selector
@@ -48,10 +51,12 @@ defmodule DOM.CSS do
     descendant: [token: :descendant],
     ws: [ignore: true],
     compound: [tag: true, post_traverse: :compound],
-    universal: [token: :universal],
+    universal: [tag: true, post_traverse: :universal],
     id: [post_traverse: :id],
     class: [post_traverse: :class],
-    type: [post_traverse: :type],
+    type: [tag: true, post_traverse: :type],
+    namespace: [tag: true, post_traverse: :namespace],
+    ns_prefix: [collect: true],
     pseudo_element: [post_traverse: :pseudo_element],
     pseudo_class: [post_traverse: :pseudo_class],
     negation: [tag: true, post_traverse: :negation],
@@ -86,12 +91,17 @@ defmodule DOM.CSS do
   @type attr_op :: :eq | :includes | :dash | :prefix | :suffix | :substring
   @type combinator :: :descendant | :child | :next_sibling | :subsequent_sibling
 
+  @type namespace :: String.t() | :any | :none
+
   @type simple ::
           {:type, name()}
+          | {:type, name(), namespace()}
           | :universal
+          | {:universal, namespace()}
           | {:id, name()}
           | {:class, name()}
           | {:attr, name()}
+          | {:attr, {namespace(), name()}}
           | {:attr, name(), attr_op(), String.t()}
           | {:attr, name(), attr_op(), String.t(), :i | :s}
           | {:pseudo_class, name()}
@@ -160,9 +170,15 @@ defmodule DOM.CSS do
   end
 
   defp simple_to_string(:universal), do: "*"
+  defp simple_to_string({:universal, ns}), do: ns_to_string(ns) <> "*"
   defp simple_to_string({:type, name}), do: escape_ident(name)
+  defp simple_to_string({:type, name, ns}), do: ns_to_string(ns) <> escape_ident(name)
   defp simple_to_string({:id, name}), do: "#" <> escape_ident(name)
   defp simple_to_string({:class, name}), do: "." <> escape_ident(name)
+
+  defp simple_to_string({:attr, {ns, name}}),
+    do: "[" <> ns_to_string(ns) <> escape_ident(name) <> "]"
+
   defp simple_to_string({:attr, name}), do: "[" <> escape_ident(name) <> "]"
 
   defp simple_to_string({:attr, name, op, value}) do
@@ -207,6 +223,10 @@ defmodule DOM.CSS do
   defp op_to_string(op), do: Map.fetch!(@op_strings, op)
 
   defp quote_value(value), do: "\"" <> value <> "\""
+
+  defp ns_to_string(:any), do: "*|"
+  defp ns_to_string(:none), do: "|"
+  defp ns_to_string(ns), do: escape_ident(ns) <> "|"
 
   # Re-escape an identifier so it round-trips: a leading digit is hex-escaped,
   # and any non [-_a-zA-Z0-9] character is backslash-escaped.
@@ -277,8 +297,34 @@ defmodule DOM.CSS do
     {rest, [{:class, name}], context}
   end
 
-  defp type(rest, [name], context, _loc, _col) do
+  defp type(rest, [{:type, [name]}], context, _loc, _col) do
     {rest, [{:type, name}], context}
+  end
+
+  defp type(rest, [{:type, [{:ns, ns}, name]}], context, _loc, _col) do
+    {rest, [{:type, name, ns}], context}
+  end
+
+  defp universal(rest, [{:universal, ["*"]}], context, _loc, _col) do
+    {rest, [:universal], context}
+  end
+
+  defp universal(rest, [{:universal, [{:ns, ns}, "*"]}], context, _loc, _col) do
+    {rest, [{:universal, ns}], context}
+  end
+
+  # namespace prefix -> {:ns, "svg" | :any | :none}; "|" or "" means no ns.
+  defp namespace(rest, [{:namespace, ["*", "|"]}], context, _loc, _col) do
+    {rest, [{:ns, :any}], context}
+  end
+
+  defp namespace(rest, [{:namespace, [prefix, "|"]}], context, _loc, _col) when prefix != "" do
+    {rest, [{:ns, prefix}], context}
+  end
+
+  defp namespace(rest, [{:namespace, parts}], context, _loc, _col)
+       when parts == ["|"] or parts == ["", "|"] do
+    {rest, [{:ns, :none}], context}
   end
 
   @attr_ops %{
@@ -307,8 +353,12 @@ defmodule DOM.CSS do
   end
 
   defp attribute(rest, [{:attribute, parts}], context, _loc, _col) do
-    {rest, [build_attribute(parts)], context}
+    {rest, [build_attribute(namespace_attr(parts))], context}
   end
+
+  # Fold a leading namespace prefix into the attribute name as a {ns, name} pair.
+  defp namespace_attr(["[", {:ns, ns}, name | rest]), do: ["[", {ns, name} | rest]
+  defp namespace_attr(parts), do: parts
 
   defp build_attribute(["[", name, "]"]), do: {:attr, name}
   defp build_attribute(["[", name, {:op, op}, {:value, value}, "]"]), do: {:attr, name, op, value}

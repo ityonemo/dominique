@@ -26,12 +26,14 @@ defmodule DOM.CSS.SelectorPropertyTest do
           shape <-
             one_of([
               constant(:presence),
+              gen(all(ns <- namespace(), do: {:ns_presence, ns})),
               tuple({attr_op(), ident()}),
               tuple({attr_op(), ident(), member_of([:i, :s])})
             ])
         ) do
       case shape do
         :presence -> {:attr, name}
+        {:ns_presence, ns} -> {:attr, {ns, name}}
         {op, value} -> {:attr, name, op, value}
         {op, value, flag} -> {:attr, name, op, value, flag}
       end
@@ -78,15 +80,20 @@ defmodule DOM.CSS.SelectorPropertyTest do
     ])
   end
 
-  # A compound: an optional leading type-or-universal, then zero+ subclasses,
-  # but never empty.
+  # An optional namespace prefix: a name, :any (*), or :none (|).
+  defp namespace, do: one_of([ident(), constant(:any), constant(:none)])
+
+  # A compound: an optional leading type-or-universal (optionally namespaced),
+  # then zero+ subclasses, but never empty.
   defp compound do
     gen all(
           lead <-
             one_of([
               constant([]),
               gen(all(n <- ident(), do: [{:type, n}])),
-              constant([:universal])
+              gen(all(n <- ident(), ns <- namespace(), do: [{:type, n, ns}])),
+              constant([:universal]),
+              gen(all(ns <- namespace(), do: [{:universal, ns}]))
             ]),
           subs <- list_of(subclass(), max_length: 3),
           simples = lead ++ subs,
