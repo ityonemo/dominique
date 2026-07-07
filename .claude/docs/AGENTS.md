@@ -61,8 +61,8 @@ matching, not as a verbose nil or boolean check.
 - Put `alias` and `require` declarations at the head of the module after
   `use`.
 - Prefix cross-module functions that exist only as an internal/private API
-  with `_`. Public owner modules should forward through functions such as
-  `DOM._node_*`; application callers should use the owning module's public API.
+  with `_`. Public context modules should forward through functions such as
+  `DOM._node_*`; application callers should use the context module's public API.
 - Do not add defensive type guards that duplicate specs or trusted internal
   contracts. Use guards only when they select a meaningful algorithm clause.
 - Use `tap/2` only within a pipeline whose original value must continue to the

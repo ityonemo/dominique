@@ -19,17 +19,19 @@ argument owns the function" convention:
   natural first argument, add it to `DOM.Node` and dispatch on the handle:
   `Node.append_child(parent, child)`, `Node.next_sibling(node)`,
   `Node.remove_child(parent, child)`.
-- **Document-scoped operations go on `DOM`.** When the operation conceptually
-  belongs to the document and it is more convenient for the first argument to be
-  the **DOM object itself** rather than the document node, put it on `DOM`:
-  `DOM.new()`, `DOM.create_element(document, "div")`, and future document-level
-  queries like `get_element_by_id`, `create_element_ns`.
+- **Document-scoped operations go on `DOM`.** `DOM` is the **context module** for
+  the `DOM.Node.Document` type — EXCLUDING Document's `DOM.Node` protocol
+  implementations, which must live in `DOM.Node.Document`. When the operation
+  conceptually belongs to the document and it is more convenient for the first
+  argument to be the **DOM object itself** rather than the document node, put it
+  on `DOM`: `DOM.new()`, `DOM.create_element(document, "div")`, and future
+  document-level queries like `get_element_by_id`, `create_element_ns`.
 
 **Three call layers (the `_` prefix).** A node handle is opaque data; the owning
 node module forwards through the `DOM` server. Every operation flows:
 
 ```
-app code   →  Node.local_name(el)          # public API (owner module / protocol)
+app code   →  Node.local_name(el)          # public API (context module / protocol)
            →  DOM._element_local_name(...)  # _-prefixed internal cross-module bridge
            →  GenServer.call → local_name_impl/2   # defp, the real logic
 ```
@@ -133,8 +135,8 @@ Playwright must be installed in the npx cache:
 - No side-effect-only `_ <- expr` in `with`; put the side effect in the chain.
 - `Map.get(map, key, default)` over `map[key] || default`.
 - `alias`/`require` at the module head after `use`.
-- Cross-module internal APIs are `_`-prefixed; owner modules forward via
-  `DOM._node_*`; app callers use the owning module's public API.
+- Cross-module internal APIs are `_`-prefixed; context modules forward via
+  `DOM._node_*`; app callers use the context module's public API.
 - No defensive guards duplicating specs/trusted contracts. `tap/2` only inside a
   pipeline that must forward the original value. Keep it simple, fail fast.
 - Naming: `get` → value | `nil`; `fetch` → `{:ok, v} | {:error, reason}`;
