@@ -19,6 +19,13 @@ defprotocol DOM.HTML do
   """
   def serialize(node_data, nodes)
 after
+  @doc """
+  Tokenizes an HTML string into a list of `DOM.HTML.Token.*` structs
+  (`StartTag`, `EndTag`, `Character`, `Comment`, `Doctype`). Tokenization only —
+  no tree construction; character references are left undecoded.
+  """
+  defdelegate tokenize(html), to: DOM.HTML.Tokenizer
+
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input link meta source track wbr)
 
