@@ -52,6 +52,9 @@ defmodule DOM.CSS do
     pseudo_element: [post_traverse: :pseudo_element],
     pseudo_class: [post_traverse: :pseudo_class],
     negation: [tag: true, post_traverse: :negation],
+    functional_selector: [tag: true, post_traverse: :functional_selector],
+    func_sel_name: [collect: true],
+    functional_args: [tag: true, post_traverse: :functional_args],
     selector_list_inner: [tag: true],
     nth: [tag: true, post_traverse: :nth],
     nth_name: [collect: true],
@@ -157,8 +160,14 @@ defmodule DOM.CSS do
 
   defp simple_to_string({:pseudo_class, name}), do: ":" <> escape_ident(name)
 
-  defp simple_to_string({:pseudo_class, name, {a, b}}),
+  defp simple_to_string({:pseudo_class, name, {a, b}}) when is_integer(a) and is_integer(b),
     do: ":" <> escape_ident(name) <> "(" <> anb_to_string(a, b) <> ")"
+
+  defp simple_to_string({:pseudo_class, name, {:selector_list, list}}),
+    do: ":" <> escape_ident(name) <> "(" <> to_string(list) <> ")"
+
+  defp simple_to_string({:pseudo_class, name, {:args, args}}),
+    do: ":" <> escape_ident(name) <> "(" <> Enum.map_join(args, ", ", &escape_ident/1) <> ")"
 
   defp simple_to_string({:not, list}), do: ":not(" <> to_string(list) <> ")"
   defp simple_to_string({:pseudo_element, name}), do: "::" <> escape_ident(name)
@@ -305,6 +314,21 @@ defmodule DOM.CSS do
          _col
        ) do
     {rest, [{:not, list}], ctx}
+  end
+
+  defp functional_selector(
+         rest,
+         [{:functional_selector, [":", name, "(", {:selector_list_inner, list}, ")"]}],
+         ctx,
+         _loc,
+         _col
+       ) do
+    {rest, [{:pseudo_class, name, {:selector_list, list}}], ctx}
+  end
+
+  defp functional_args(rest, [{:functional_args, [":", name, "(" | rest_parts]}], ctx, _loc, _col) do
+    args = Enum.reject(rest_parts, &(&1 == ")"))
+    {rest, [{:pseudo_class, name, {:args, args}}], ctx}
   end
 
   # An+B micro-syntax -> {a, b}. Whitespace inside the expression is already

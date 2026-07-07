@@ -18,11 +18,19 @@ compound <- simple+
 
 ws <- ' '*
 
-simple <- universal / id / class / attribute / pseudo_element / negation / nth / pseudo_class / type
+simple <- universal / id / class / attribute / pseudo_element / negation / nth / functional_selector / functional_args / pseudo_class / type
 
 pseudo_element <- '::' name
 
 negation <- ':not(' ws selector_list_inner ws ')'
+
+functional_selector <- ':' func_sel_name '(' ws selector_list_inner ws ')'
+
+func_sel_name <- 'is' / 'where' / 'has'
+
+functional_args <- ':' name '(' ws func_arg (comma func_arg)* ws ')'
+
+func_arg <- name
 
 nth <- ':' nth_name '(' ws anb ws ')'
 

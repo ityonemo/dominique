@@ -63,6 +63,8 @@ defmodule DOM.CSS.SelectorPropertyTest do
       gen(all(n <- ident(), do: {:pseudo_class, n})),
       nth(),
       gen(all(list <- compound_list(), do: {:not, list})),
+      functional_selector_pc(),
+      functional_args_pc(),
       gen(all(n <- ident(), do: {:pseudo_element, n}))
     ])
   end
@@ -82,6 +84,21 @@ defmodule DOM.CSS.SelectorPropertyTest do
           simples != []
         ) do
       {:compound, simples}
+    end
+  end
+
+  defp functional_selector_pc do
+    gen all(name <- member_of(["is", "where", "has"]), list <- compound_list()) do
+      {:pseudo_class, name, {:selector_list, list}}
+    end
+  end
+
+  defp functional_args_pc do
+    gen all(
+          name <- member_of(["lang", "dir"]),
+          args <- list_of(ident(), min_length: 1, max_length: 3)
+        ) do
+      {:pseudo_class, name, {:args, args}}
     end
   end
 

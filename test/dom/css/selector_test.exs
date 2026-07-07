@@ -170,6 +170,45 @@ defmodule DOM.CSS.SelectorTest do
     end
   end
 
+  describe "functional pseudo-classes" do
+    test ":is with a selector list" do
+      assert DOM.CSS.parse(":is(.a, #b)") ==
+               [
+                 {:compound,
+                  [
+                    {:pseudo_class, "is",
+                     {:selector_list, [{:compound, [{:class, "a"}]}, {:compound, [{:id, "b"}]}]}}
+                  ]}
+               ]
+    end
+
+    test ":where with a compound" do
+      assert DOM.CSS.parse(":where(a.x)") ==
+               [
+                 {:compound,
+                  [
+                    {:pseudo_class, "where",
+                     {:selector_list, [{:compound, [{:type, "a"}, {:class, "x"}]}]}}
+                  ]}
+               ]
+    end
+
+    test ":lang with a single ident argument" do
+      assert DOM.CSS.parse(":lang(en)") ==
+               [{:compound, [{:pseudo_class, "lang", {:args, ["en"]}}]}]
+    end
+
+    test ":lang with multiple arguments" do
+      assert DOM.CSS.parse(":lang(en, fr)") ==
+               [{:compound, [{:pseudo_class, "lang", {:args, ["en", "fr"]}}]}]
+    end
+
+    test ":dir argument" do
+      assert DOM.CSS.parse(":dir(ltr)") ==
+               [{:compound, [{:pseudo_class, "dir", {:args, ["ltr"]}}]}]
+    end
+  end
+
   describe "pseudo-elements" do
     test "double-colon pseudo-element" do
       assert DOM.CSS.parse("::before") == [{:compound, [{:pseudo_element, "before"}]}]
