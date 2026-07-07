@@ -75,6 +75,7 @@ defmodule DOM do
           DocumentType.t()
   @spec get_elements_by_tag_name(Document.t(), String.t()) :: [Element.t()]
   @spec get_element_by_id(Document.t(), String.t()) :: Element.t() | nil
+  @spec get_elements_by_class_name(Document.t(), String.t()) :: [Element.t()]
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
@@ -124,6 +125,10 @@ defmodule DOM do
 
   def get_element_by_id(document, id) do
     GenServer.call(document.server, {:get_element_by_id, document.id, id})
+  end
+
+  def get_elements_by_class_name(document, names) do
+    GenServer.call(document.server, {:get_elements_by_class_name, document.id, names})
   end
 
   def _create(%Document{} = document, nodedata) do
@@ -763,6 +768,36 @@ defmodule DOM do
     {:reply, match, state}
   end
 
+  defp get_elements_by_class_name_impl(root_id, names, state) do
+    wanted = class_tokens(names)
+
+    matches =
+      if wanted == [] do
+        []
+      else
+        state.nodes
+        |> descendant_ids(root_id)
+        |> Enum.filter(&class_name_match?(state.nodes, &1, wanted))
+        |> Enum.map(&node_handle(state.nodes, &1))
+      end
+
+    {:reply, matches, state}
+  end
+
+  defp class_name_match?(nodes, node_id, wanted) do
+    node = fetch_node!(nodes, node_id)
+
+    with true <- node.type == Element,
+         {"class", class} <- List.keyfind(node.attributes, "class", 0) do
+      present = class_tokens(class)
+      Enum.all?(wanted, &(&1 in present))
+    else
+      _ -> false
+    end
+  end
+
+  defp class_tokens(names), do: String.split(names)
+
   def _element_get_attribute(server, node_id, name) do
     GenServer.call(server, {:get_attribute, node_id, name})
   end
@@ -995,6 +1030,11 @@ defmodule DOM do
   @impl true
   def handle_call({:get_element_by_id, root_id, id}, _from, state) do
     get_element_by_id_impl(root_id, id, state)
+  end
+
+  @impl true
+  def handle_call({:get_elements_by_class_name, root_id, names}, _from, state) do
+    get_elements_by_class_name_impl(root_id, names, state)
   end
 
   @impl true

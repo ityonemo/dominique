@@ -21,6 +21,7 @@ defmodule DOM.Node.Element do
   @spec remove_attribute(t(), String.t()) :: :ok
   @spec get_attribute_names(t()) :: [String.t()]
   @spec get_elements_by_tag_name(t(), String.t()) :: [t()]
+  @spec get_elements_by_class_name(t(), String.t()) :: [t()]
 
   def create(document, local_name) do
     DOM._create(document, %NodeData{type: __MODULE__, local_name: local_name})
@@ -50,6 +51,10 @@ defmodule DOM.Node.Element do
 
   def get_elements_by_tag_name(element, name) do
     GenServer.call(element.server, {:get_elements_by_tag_name, element.id, name})
+  end
+
+  def get_elements_by_class_name(element, names) do
+    GenServer.call(element.server, {:get_elements_by_class_name, element.id, names})
   end
 
   @impl DOM.Node
