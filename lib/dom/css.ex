@@ -33,6 +33,8 @@ defmodule DOM.CSS do
 
   """
 
+  import Kernel, except: [to_string: 1]
+
   require Pegasus
 
   Pegasus.parser_from_file(Path.join(__DIR__, "css/selector.peg"),
@@ -106,6 +108,76 @@ defmodule DOM.CSS do
         raise ArgumentError, "invalid CSS selector #{inspect(selector)}: #{reason}"
     end
   end
+
+  @doc """
+  Serializes a selector AST back to a canonical selector string.
+
+  `parse/1` and `to_string/1` round-trip: `parse(to_string(ast)) == ast`.
+  """
+  @spec to_string(t()) :: String.t()
+  def to_string(selector_list) do
+    Enum.map_join(selector_list, ", ", &complex_to_string/1)
+  end
+
+  defp complex_to_string({:compound, _} = compound), do: compound_to_string(compound)
+
+  defp complex_to_string(parts) when is_list(parts) do
+    Enum.map_join(parts, &part_to_string/1)
+  end
+
+  defp part_to_string(:descendant), do: " "
+  defp part_to_string(:child), do: " > "
+  defp part_to_string(:next_sibling), do: " + "
+  defp part_to_string(:subsequent_sibling), do: " ~ "
+  defp part_to_string({:compound, _} = compound), do: compound_to_string(compound)
+
+  defp compound_to_string({:compound, simples}) do
+    Enum.map_join(simples, &simple_to_string/1)
+  end
+
+  defp simple_to_string(:universal), do: "*"
+  defp simple_to_string({:type, name}), do: name
+  defp simple_to_string({:id, name}), do: "#" <> name
+  defp simple_to_string({:class, name}), do: "." <> name
+  defp simple_to_string({:attr, name}), do: "[" <> name <> "]"
+
+  defp simple_to_string({:attr, name, op, value}) do
+    "[" <> name <> op_to_string(op) <> quote_value(value) <> "]"
+  end
+
+  defp simple_to_string({:attr, name, op, value, flag}) do
+    "[" <> name <> op_to_string(op) <> quote_value(value) <> " " <> Atom.to_string(flag) <> "]"
+  end
+
+  defp simple_to_string({:pseudo_class, name}), do: ":" <> name
+
+  defp simple_to_string({:pseudo_class, name, {a, b}}),
+    do: ":" <> name <> "(" <> anb_to_string(a, b) <> ")"
+
+  defp simple_to_string({:not, list}), do: ":not(" <> to_string(list) <> ")"
+  defp simple_to_string({:pseudo_element, name}), do: "::" <> name
+
+  @op_strings %{
+    eq: "=",
+    includes: "~=",
+    dash: "|=",
+    prefix: "^=",
+    suffix: "$=",
+    substring: "*="
+  }
+
+  defp op_to_string(op), do: Map.fetch!(@op_strings, op)
+
+  defp quote_value(value), do: "\"" <> value <> "\""
+
+  defp anb_to_string(0, b), do: Integer.to_string(b)
+  defp anb_to_string(a, 0), do: coeff_to_string(a) <> "n"
+  defp anb_to_string(a, b) when b > 0, do: coeff_to_string(a) <> "n+" <> Integer.to_string(b)
+  defp anb_to_string(a, b), do: coeff_to_string(a) <> "n" <> Integer.to_string(b)
+
+  defp coeff_to_string(1), do: ""
+  defp coeff_to_string(-1), do: "-"
+  defp coeff_to_string(a), do: Integer.to_string(a)
 
   # ==========================================================================
   # Semantic actions
