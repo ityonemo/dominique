@@ -18,7 +18,23 @@ compound <- simple+
 
 ws <- ' '*
 
-simple <- universal / id / class / attribute / type
+simple <- universal / id / class / attribute / pseudo_element / negation / nth / pseudo_class / type
+
+pseudo_element <- '::' name
+
+negation <- ':not(' ws selector_list_inner ws ')'
+
+nth <- ':' nth_name '(' ws anb ws ')'
+
+nth_name <- 'nth-child' / 'nth-last-child' / 'nth-of-type' / 'nth-last-of-type'
+
+anb <- 'odd' / 'even' / anb_expr
+
+anb_expr <- ('-' / '+')? [0-9]* 'n' (ws ('-' / '+') ws [0-9]+)? / ('-' / '+')? [0-9]+
+
+pseudo_class <- ':' name
+
+selector_list_inner <- complex (comma complex)*
 
 universal <- '*'
 id        <- '#' name

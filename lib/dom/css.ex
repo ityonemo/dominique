@@ -10,13 +10,26 @@ defmodule DOM.CSS do
 
   ## AST
 
-  A selector list is a list of compound selectors (combinators are added later).
+  `parse/1` returns a **selector list**: a list of complex selectors. A complex
+  selector with no combinator collapses to its single compound; otherwise it is a
+  list alternating compounds and combinators, e.g.
+  `[compound_a, :child, compound_b]`. Combinators are `:descendant`, `:child`,
+  `:next_sibling`, `:subsequent_sibling`.
+
   A compound is `{:compound, [simple]}` where each simple selector is one of:
 
     * `{:type, name}` — a type selector such as `div`
     * `:universal` — the `*` selector
     * `{:id, name}` — an `#id` selector
     * `{:class, name}` — a `.class` selector
+    * `{:attr, name}` — an attribute presence selector `[a]`
+    * `{:attr, name, op, value}` — `[a op v]`, op one of `:eq`, `:includes`,
+      `:dash`, `:prefix`, `:suffix`, `:substring`
+    * `{:attr, name, op, value, flag}` — with a case flag `:i` or `:s`
+    * `{:pseudo_class, name}` — a keyword pseudo-class such as `:first-child`
+    * `{:pseudo_class, "nth-child", {a, b}}` — a `:nth-*` selector, An+B as `{a, b}`
+    * `{:not, selector_list}` — a `:not(...)` negation
+    * `{:pseudo_element, name}` — a `::pseudo-element`
 
   """
 
@@ -34,6 +47,13 @@ defmodule DOM.CSS do
     id: [post_traverse: :id],
     class: [post_traverse: :class],
     type: [post_traverse: :type],
+    pseudo_element: [post_traverse: :pseudo_element],
+    pseudo_class: [post_traverse: :pseudo_class],
+    negation: [tag: true, post_traverse: :negation],
+    selector_list_inner: [tag: true],
+    nth: [tag: true, post_traverse: :nth],
+    nth_name: [collect: true],
+    anb: [collect: true, post_traverse: :anb],
     attribute: [tag: true, post_traverse: :attribute],
     attr_op: [collect: true, post_traverse: :attr_op],
     attr_value: [tag: true, post_traverse: :attr_value],
@@ -47,10 +67,25 @@ defmodule DOM.CSS do
   # ==========================================================================
 
   @type name :: String.t()
+  @type attr_op :: :eq | :includes | :dash | :prefix | :suffix | :substring
+  @type combinator :: :descendant | :child | :next_sibling | :subsequent_sibling
+
   @type simple ::
-          {:type, name()} | :universal | {:id, name()} | {:class, name()}
+          {:type, name()}
+          | :universal
+          | {:id, name()}
+          | {:class, name()}
+          | {:attr, name()}
+          | {:attr, name(), attr_op(), String.t()}
+          | {:attr, name(), attr_op(), String.t(), :i | :s}
+          | {:pseudo_class, name()}
+          | {:pseudo_class, name(), {integer(), integer()}}
+          | {:not, t()}
+          | {:pseudo_element, name()}
+
   @type compound :: {:compound, [simple()]}
-  @type t :: [compound()]
+  @type complex :: compound() | [compound() | combinator()]
+  @type t :: [complex()]
 
   @doc """
   Parses a CSS selector string into its AST.
@@ -153,4 +188,52 @@ defmodule DOM.CSS do
   defp build_attribute(["[", name, {:op, op}, {:value, value}, {:flag, flag}, "]"]) do
     {:attr, name, op, value, flag}
   end
+
+  defp pseudo_element(rest, [name, "::"], context, _loc, _col) do
+    {rest, [{:pseudo_element, name}], context}
+  end
+
+  defp pseudo_class(rest, [name, ":"], context, _loc, _col) do
+    {rest, [{:pseudo_class, name}], context}
+  end
+
+  defp nth(rest, [{:nth, [":", name, "(", {a, b}, ")"]}], context, _loc, _col) do
+    {rest, [{:pseudo_class, name, {a, b}}], context}
+  end
+
+  defp negation(
+         rest,
+         [{:negation, [":not(", {:selector_list_inner, list}, ")"]}],
+         ctx,
+         _loc,
+         _col
+       ) do
+    {rest, [{:not, list}], ctx}
+  end
+
+  # An+B micro-syntax -> {a, b}. Whitespace inside the expression is already
+  # stripped (ws is ignored) except within the collected text, so normalize it.
+  defp anb(rest, [text], context, _loc, _col) do
+    {rest, [parse_anb(text)], context}
+  end
+
+  defp parse_anb("odd"), do: {2, 1}
+  defp parse_anb("even"), do: {2, 0}
+
+  defp parse_anb(text) do
+    text = String.replace(text, " ", "")
+
+    case String.split(text, "n", parts: 2) do
+      [b] -> {0, String.to_integer(b)}
+      [coeff, rest] -> {anb_coeff(coeff), anb_b(rest)}
+    end
+  end
+
+  defp anb_coeff(""), do: 1
+  defp anb_coeff("-"), do: -1
+  defp anb_coeff("+"), do: 1
+  defp anb_coeff(n), do: String.to_integer(n)
+
+  defp anb_b(""), do: 0
+  defp anb_b(rest), do: String.to_integer(rest)
 end

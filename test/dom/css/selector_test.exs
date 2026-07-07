@@ -92,6 +92,79 @@ defmodule DOM.CSS.SelectorTest do
     end
   end
 
+  describe "pseudo-classes" do
+    test "keyword pseudo-class" do
+      assert DOM.CSS.parse(":first-child") == [{:compound, [{:pseudo_class, "first-child"}]}]
+    end
+
+    test "pseudo-class on a compound" do
+      assert DOM.CSS.parse("a:hover") ==
+               [{:compound, [{:type, "a"}, {:pseudo_class, "hover"}]}]
+    end
+  end
+
+  describe ":nth-child(An+B)" do
+    test "odd keyword" do
+      assert DOM.CSS.parse(":nth-child(odd)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {2, 1}}]}]
+    end
+
+    test "even keyword" do
+      assert DOM.CSS.parse(":nth-child(even)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {2, 0}}]}]
+    end
+
+    test "bare integer" do
+      assert DOM.CSS.parse(":nth-child(3)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {0, 3}}]}]
+    end
+
+    test "An+B form" do
+      assert DOM.CSS.parse(":nth-child(2n+1)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {2, 1}}]}]
+    end
+
+    test "negative and spaced An+B" do
+      assert DOM.CSS.parse(":nth-child(3n - 2)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {3, -2}}]}]
+    end
+
+    test "-n form" do
+      assert DOM.CSS.parse(":nth-child(-n)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {-1, 0}}]}]
+    end
+
+    test "n form" do
+      assert DOM.CSS.parse(":nth-child(n)") ==
+               [{:compound, [{:pseudo_class, "nth-child", {1, 0}}]}]
+    end
+  end
+
+  describe ":not()" do
+    test "negation with a simple selector" do
+      assert DOM.CSS.parse(":not(.box)") ==
+               [{:compound, [{:not, [{:compound, [{:class, "box"}]}]}]}]
+    end
+
+    test "negation with a selector list" do
+      assert DOM.CSS.parse(":not(.a, #b)") ==
+               [
+                 {:compound, [{:not, [{:compound, [{:class, "a"}]}, {:compound, [{:id, "b"}]}]}]}
+               ]
+    end
+  end
+
+  describe "pseudo-elements" do
+    test "double-colon pseudo-element" do
+      assert DOM.CSS.parse("::before") == [{:compound, [{:pseudo_element, "before"}]}]
+    end
+
+    test "pseudo-element on a compound" do
+      assert DOM.CSS.parse("p::first-line") ==
+               [{:compound, [{:type, "p"}, {:pseudo_element, "first-line"}]}]
+    end
+  end
+
   describe "combinators" do
     test "descendant combinator (whitespace)" do
       assert DOM.CSS.parse("div .box") ==
