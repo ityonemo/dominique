@@ -68,6 +68,9 @@ defmodule DOM do
   @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
   @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
   @spec matches(Node.t(), String.t()) :: boolean()
+  @spec _select(GenServer.server(), :ets.match_spec()) :: [term()]
+  @spec _select_replace(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
+  @spec _atomic_ets_op(GenServer.server(), (:ets.tid() -> result)) :: result when result: term()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
   @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
@@ -80,12 +83,6 @@ defmodule DOM do
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
   @spec _node_parent_node(GenServer.server(), reference()) :: Node.t() | nil
-  @spec _element_local_name(GenServer.server(), reference()) :: String.t()
-  @spec _element_get_attribute(GenServer.server(), reference(), String.t()) :: String.t() | nil
-  @spec _element_set_attribute(GenServer.server(), reference(), String.t(), String.t()) :: :ok
-  @spec _element_has_attribute(GenServer.server(), reference(), String.t()) :: boolean()
-  @spec _element_remove_attribute(GenServer.server(), reference(), String.t()) :: :ok
-  @spec _element_get_attribute_names(GenServer.server(), reference()) :: [String.t()]
   @spec _element_inner_html(GenServer.server(), reference()) :: String.t()
   @spec _element_outer_html(GenServer.server(), reference()) :: String.t()
   @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
@@ -148,10 +145,41 @@ defmodule DOM do
     GenServer.call(node.server, {:matches, node.id, selector})
   end
 
-  defp create_impl(node_data, state) do
+  defp create_impl(node_data, _from, state) do
     node_id = make_ref()
     :ets.insert(state.nodes, {node_id, node_data})
     {:reply, node_handle(state.nodes, node_id), state}
+  end
+
+  # Generic ETS primitives. A caller module (DOM.Node/DOM.Element) builds a match
+  # spec with `defmatchspecp`/`fun2msfun` and drives the nodes table directly
+  # through these, instead of each row-local read/write needing its own bridge.
+  def _select(server, match_spec) do
+    GenServer.call(server, {:select, match_spec})
+  end
+
+  defp select_impl(match_spec, _from, state) do
+    {:reply, :ets.select(state.nodes, match_spec), state}
+  end
+
+  def _select_replace(server, match_spec) do
+    GenServer.call(server, {:select_replace, match_spec})
+  end
+
+  defp select_replace_impl(match_spec, _from, state) do
+    {:reply, :ets.select_replace(state.nodes, match_spec), state}
+  end
+
+  # Runs a multi-step ETS operation `op.(nodes)` atomically inside the server (a
+  # single message, so no other operation can interleave). Use this for any read-
+  # modify-write against the table that can't be a single `_select`/
+  # `_select_replace` hit; `op` returns the value to reply with.
+  def _atomic_ets_op(server, op) do
+    GenServer.call(server, {:atomic_ets_op, op})
+  end
+
+  defp atomic_ets_op_impl(op, _from, state) do
+    {:reply, op.(state.nodes), state}
   end
 
   def _node_append_child(server, parent_id, %{server: child_server, id: child_id} = child) do
@@ -176,7 +204,7 @@ defmodule DOM do
     end
   end
 
-  defp append_child_impl(parent_id, child_id, state) do
+  defp append_child_impl(parent_id, child_id, _from, state) do
     child_data = fetch_node!(state.nodes, child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
 
@@ -265,7 +293,7 @@ defmodule DOM do
     end
   end
 
-  defp insert_before_impl(parent_id, child_id, reference_child_id, state) do
+  defp insert_before_impl(parent_id, child_id, reference_child_id, _from, state) do
     child_data = fetch_node!(state.nodes, child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
 
@@ -311,7 +339,7 @@ defmodule DOM do
     end
   end
 
-  defp append_subtree_impl(parent_id, child_id, subtree, state) do
+  defp append_subtree_impl(parent_id, child_id, subtree, _from, state) do
     subtree_nodes = Map.new(subtree)
     child_data = Map.fetch!(subtree_nodes, child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
@@ -344,7 +372,7 @@ defmodule DOM do
     end
   end
 
-  defp insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, state) do
+  defp insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, _from, state) do
     subtree_nodes = Map.new(subtree)
     child_data = Map.fetch!(subtree_nodes, child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
@@ -402,7 +430,7 @@ defmodule DOM do
     end
   end
 
-  defp remove_child_impl(parent_id, child_id, state) do
+  defp remove_child_impl(parent_id, child_id, _from, state) do
     parent_data = fetch_node!(state.nodes, parent_id)
 
     if child_id in parent_data.children do
@@ -452,7 +480,7 @@ defmodule DOM do
     end
   end
 
-  defp replace_child_impl(parent_id, new_child_id, old_child_id, state) do
+  defp replace_child_impl(parent_id, new_child_id, old_child_id, _from, state) do
     new_child_data = fetch_node!(state.nodes, new_child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
 
@@ -468,7 +496,7 @@ defmodule DOM do
     )
   end
 
-  defp replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, state) do
+  defp replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, _from, state) do
     subtree_nodes = Map.new(subtree)
     new_child_data = Map.fetch!(subtree_nodes, new_child_id)
     parent_data = fetch_node!(state.nodes, parent_id)
@@ -550,7 +578,7 @@ defmodule DOM do
     GenServer.call(server, {:export_subtree, node_id})
   end
 
-  defp export_subtree_impl(node_id, state) do
+  defp export_subtree_impl(node_id, _from, state) do
     {:reply, subtree(state.nodes, node_id), state}
   end
 
@@ -558,7 +586,7 @@ defmodule DOM do
     GenServer.call(server, {:remove_subtree, node_id})
   end
 
-  defp remove_subtree_impl(node_id, state) do
+  defp remove_subtree_impl(node_id, _from, state) do
     node_data = fetch_node!(state.nodes, node_id)
     detach_from_parent(state.nodes, node_id, node_data)
 
@@ -679,7 +707,7 @@ defmodule DOM do
     GenServer.call(server, {:child_nodes, node_id})
   end
 
-  defp child_nodes_impl(node_id, state) do
+  defp child_nodes_impl(node_id, _from, state) do
     node = fetch_node!(state.nodes, node_id)
     children = Enum.map(node.children, &node_handle(state.nodes, &1))
 
@@ -690,7 +718,7 @@ defmodule DOM do
     GenServer.call(server, {:parent_node, node_id})
   end
 
-  defp parent_node_impl(node_id, state) do
+  defp parent_node_impl(node_id, _from, state) do
     parent =
       if parent_id = fetch_node!(state.nodes, node_id).parent do
         node_handle(state.nodes, parent_id)
@@ -703,7 +731,7 @@ defmodule DOM do
     GenServer.call(server, {:owner_document, node_id})
   end
 
-  defp owner_document_impl(node_id, state) do
+  defp owner_document_impl(node_id, _from, state) do
     owner =
       if node_id != state.document_id do
         %Node{server: self(), id: state.document_id, type: :document}
@@ -716,7 +744,7 @@ defmodule DOM do
     GenServer.call(server, {:clone_node, node_id, deep?})
   end
 
-  defp clone_node_impl(node_id, deep?, state) do
+  defp clone_node_impl(node_id, deep?, _from, state) do
     clone_id = clone_subtree(state.nodes, node_id, deep?)
     {:reply, node_handle(state.nodes, clone_id), state}
   end
@@ -753,20 +781,11 @@ defmodule DOM do
 
   defp clone_data(node_data, _children), do: %{node_data | parent: nil}
 
-  def _element_local_name(server, node_id) do
-    GenServer.call(server, {:local_name, node_id})
-  end
-
-  defp local_name_impl(node_id, state) do
-    local_name = fetch_node!(state.nodes, node_id).local_name
-    {:reply, local_name, state}
-  end
-
   def _element_inner_html(server, node_id) do
     GenServer.call(server, {:inner_html, node_id})
   end
 
-  defp inner_html_impl(node_id, state) do
+  defp inner_html_impl(node_id, _from, state) do
     element = fetch_node!(state.nodes, node_id)
     iodata = DOM.HTML.children(element.local_name, element.children, state.nodes)
     {:reply, IO.iodata_to_binary(iodata), state}
@@ -776,7 +795,7 @@ defmodule DOM do
     GenServer.call(server, {:outer_html, node_id})
   end
 
-  defp outer_html_impl(node_id, state) do
+  defp outer_html_impl(node_id, _from, state) do
     iodata = state.nodes |> fetch_node!(node_id) |> DOM.HTML.serialize(state.nodes)
     {:reply, IO.iodata_to_binary(iodata), state}
   end
@@ -785,7 +804,7 @@ defmodule DOM do
     GenServer.call(server, {:node_type, node_id})
   end
 
-  defp node_type_impl(node_id, state) do
+  defp node_type_impl(node_id, _from, state) do
     {:reply, state.nodes |> fetch_node!(node_id) |> NodeData.node_type(), state}
   end
 
@@ -793,11 +812,11 @@ defmodule DOM do
     GenServer.call(server, {:node_name, node_id})
   end
 
-  defp node_name_impl(node_id, state) do
+  defp node_name_impl(node_id, _from, state) do
     {:reply, state.nodes |> fetch_node!(node_id) |> NodeData.node_name(), state}
   end
 
-  defp get_elements_by_tag_name_impl(node_id, name, state) do
+  defp get_elements_by_tag_name_impl(node_id, name, _from, state) do
     matches =
       state.nodes
       |> descendant_ids(node_id)
@@ -812,7 +831,7 @@ defmodule DOM do
     match?(%NodeData.Element{}, node) and (name == "*" or node.local_name == name)
   end
 
-  defp get_element_by_id_impl(root_id, id, state) do
+  defp get_element_by_id_impl(root_id, id, _from, state) do
     match_id =
       Enum.find(descendant_ids(state.nodes, root_id), fn node_id ->
         node = fetch_node!(state.nodes, node_id)
@@ -823,7 +842,7 @@ defmodule DOM do
     {:reply, match, state}
   end
 
-  defp get_elements_by_class_name_impl(root_id, names, state) do
+  defp get_elements_by_class_name_impl(root_id, names, _from, state) do
     wanted = class_tokens(names)
 
     matches =
@@ -839,12 +858,12 @@ defmodule DOM do
     {:reply, matches, state}
   end
 
-  defp query_selector_all_impl(root_id, selector, state) do
+  defp query_selector_all_impl(root_id, selector, _from, state) do
     ids = query_ids(root_id, selector, state)
     {:reply, Enum.map(ids, &node_handle(state.nodes, &1)), state}
   end
 
-  defp query_selector_impl(root_id, selector, state) do
+  defp query_selector_impl(root_id, selector, _from, state) do
     match =
       case query_ids(root_id, selector, state) do
         [id | _] -> node_handle(state.nodes, id)
@@ -854,7 +873,7 @@ defmodule DOM do
     {:reply, match, state}
   end
 
-  defp matches_impl(node_id, selector, state) do
+  defp matches_impl(node_id, selector, _from, state) do
     matched =
       selector
       |> DOM.CSS.parse()
@@ -892,66 +911,11 @@ defmodule DOM do
 
   defp class_tokens(names), do: String.split(names)
 
-  def _element_get_attribute(server, node_id, name) do
-    GenServer.call(server, {:get_attribute, node_id, name})
-  end
-
-  defp get_attribute_impl(node_id, name, state) do
-    attributes = fetch_node!(state.nodes, node_id).attributes
-
-    value =
-      case List.keyfind(attributes, name, 0) do
-        {^name, value} -> value
-        nil -> nil
-      end
-
-    {:reply, value, state}
-  end
-
-  def _element_set_attribute(server, node_id, name, value) do
-    GenServer.call(server, {:set_attribute, node_id, name, value})
-  end
-
-  defp set_attribute_impl(node_id, name, value, state) do
-    node = fetch_node!(state.nodes, node_id)
-    attributes = List.keystore(node.attributes, name, 0, {name, value})
-    put_node(state.nodes, node_id, %{node | attributes: attributes})
-    {:reply, :ok, state}
-  end
-
-  def _element_has_attribute(server, node_id, name) do
-    GenServer.call(server, {:has_attribute, node_id, name})
-  end
-
-  defp has_attribute_impl(node_id, name, state) do
-    present = List.keymember?(fetch_node!(state.nodes, node_id).attributes, name, 0)
-    {:reply, present, state}
-  end
-
-  def _element_remove_attribute(server, node_id, name) do
-    GenServer.call(server, {:remove_attribute, node_id, name})
-  end
-
-  defp remove_attribute_impl(node_id, name, state) do
-    node = fetch_node!(state.nodes, node_id)
-    put_node(state.nodes, node_id, %{node | attributes: List.keydelete(node.attributes, name, 0)})
-    {:reply, :ok, state}
-  end
-
-  def _element_get_attribute_names(server, node_id) do
-    GenServer.call(server, {:get_attribute_names, node_id})
-  end
-
-  defp get_attribute_names_impl(node_id, state) do
-    names = Enum.map(fetch_node!(state.nodes, node_id).attributes, fn {name, _value} -> name end)
-    {:reply, names, state}
-  end
-
   def _node_value(server, node_id) do
     GenServer.call(server, {:value, node_id})
   end
 
-  defp value_impl(node_id, state) do
+  defp value_impl(node_id, _from, state) do
     # Only character-data records (Text/Comment) carry a value; others have none.
     value =
       case fetch_node!(state.nodes, node_id) do
@@ -966,7 +930,7 @@ defmodule DOM do
     GenServer.call(server, {:text_content, node_id})
   end
 
-  defp text_content_impl(node_id, state) do
+  defp text_content_impl(node_id, _from, state) do
     text =
       state.nodes
       |> descendants(node_id)
@@ -981,7 +945,7 @@ defmodule DOM do
   end
 
   # Replace all children with a single Text node (none when value is empty).
-  defp set_text_content_impl(node_id, value, state) do
+  defp set_text_content_impl(node_id, value, _from, state) do
     node = fetch_node!(state.nodes, node_id)
     Enum.each(node.children, &delete_subtree(state.nodes, &1))
     children = if value == "", do: [], else: [new_text(state.nodes, node_id, value)]
@@ -1005,7 +969,7 @@ defmodule DOM do
     GenServer.call(server, {:set_value, node_id, value})
   end
 
-  defp set_value_impl(node_id, value, state) do
+  defp set_value_impl(node_id, value, _from, state) do
     node = fetch_node!(state.nodes, node_id)
     put_node(state.nodes, node_id, %{node | value: value})
     {:reply, :ok, state}
@@ -1067,180 +1031,165 @@ defmodule DOM do
   # ==========================================================================
 
   @impl true
-  def handle_call({:create, node_data}, _from, state) do
-    create_impl(node_data, state)
+  def handle_call({:create, node_data}, from, state) do
+    create_impl(node_data, from, state)
   end
 
   @impl true
-  def handle_call({:append_child, parent_id, child_id}, _from, state) do
-    append_child_impl(parent_id, child_id, state)
+  def handle_call({:select, match_spec}, from, state) do
+    select_impl(match_spec, from, state)
   end
 
   @impl true
-  def handle_call({:append_subtree, parent_id, child_id, subtree}, _from, state) do
-    append_subtree_impl(parent_id, child_id, subtree, state)
+  def handle_call({:select_replace, match_spec}, from, state) do
+    select_replace_impl(match_spec, from, state)
   end
 
   @impl true
-  def handle_call({:insert_before, parent_id, child_id, reference_child_id}, _from, state) do
-    insert_before_impl(parent_id, child_id, reference_child_id, state)
+  def handle_call({:atomic_ets_op, op}, from, state) do
+    atomic_ets_op_impl(op, from, state)
+  end
+
+  @impl true
+  def handle_call({:append_child, parent_id, child_id}, from, state) do
+    append_child_impl(parent_id, child_id, from, state)
+  end
+
+  @impl true
+  def handle_call({:append_subtree, parent_id, child_id, subtree}, from, state) do
+    append_subtree_impl(parent_id, child_id, subtree, from, state)
+  end
+
+  @impl true
+  def handle_call({:insert_before, parent_id, child_id, reference_child_id}, from, state) do
+    insert_before_impl(parent_id, child_id, reference_child_id, from, state)
   end
 
   @impl true
   def handle_call(
         {:insert_subtree, parent_id, child_id, reference_child_id, subtree},
-        _from,
+        from,
         state
       ) do
-    insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, state)
+    insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, from, state)
   end
 
   @impl true
-  def handle_call({:remove_child, parent_id, child_id}, _from, state) do
-    remove_child_impl(parent_id, child_id, state)
+  def handle_call({:remove_child, parent_id, child_id}, from, state) do
+    remove_child_impl(parent_id, child_id, from, state)
   end
 
   @impl true
-  def handle_call({:replace_child, parent_id, new_child_id, old_child_id}, _from, state) do
-    replace_child_impl(parent_id, new_child_id, old_child_id, state)
+  def handle_call({:replace_child, parent_id, new_child_id, old_child_id}, from, state) do
+    replace_child_impl(parent_id, new_child_id, old_child_id, from, state)
   end
 
   @impl true
   def handle_call(
         {:replace_subtree, parent_id, new_child_id, old_child_id, subtree},
-        _from,
+        from,
         state
       ) do
-    replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, state)
+    replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, from, state)
   end
 
   @impl true
-  def handle_call({:export_subtree, node_id}, _from, state) do
-    export_subtree_impl(node_id, state)
+  def handle_call({:export_subtree, node_id}, from, state) do
+    export_subtree_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:remove_subtree, node_id}, _from, state) do
-    remove_subtree_impl(node_id, state)
+  def handle_call({:remove_subtree, node_id}, from, state) do
+    remove_subtree_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:child_nodes, node_id}, _from, state) do
-    child_nodes_impl(node_id, state)
+  def handle_call({:child_nodes, node_id}, from, state) do
+    child_nodes_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:parent_node, node_id}, _from, state) do
-    parent_node_impl(node_id, state)
+  def handle_call({:parent_node, node_id}, from, state) do
+    parent_node_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:owner_document, node_id}, _from, state) do
-    owner_document_impl(node_id, state)
+  def handle_call({:owner_document, node_id}, from, state) do
+    owner_document_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:clone_node, node_id, deep?}, _from, state) do
-    clone_node_impl(node_id, deep?, state)
+  def handle_call({:clone_node, node_id, deep?}, from, state) do
+    clone_node_impl(node_id, deep?, from, state)
   end
 
   @impl true
-  def handle_call({:local_name, node_id}, _from, state) do
-    local_name_impl(node_id, state)
+  def handle_call({:inner_html, node_id}, from, state) do
+    inner_html_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:inner_html, node_id}, _from, state) do
-    inner_html_impl(node_id, state)
+  def handle_call({:outer_html, node_id}, from, state) do
+    outer_html_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:outer_html, node_id}, _from, state) do
-    outer_html_impl(node_id, state)
+  def handle_call({:node_type, node_id}, from, state) do
+    node_type_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:node_type, node_id}, _from, state) do
-    node_type_impl(node_id, state)
+  def handle_call({:node_name, node_id}, from, state) do
+    node_name_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:node_name, node_id}, _from, state) do
-    node_name_impl(node_id, state)
+  def handle_call({:get_elements_by_tag_name, node_id, name}, from, state) do
+    get_elements_by_tag_name_impl(node_id, name, from, state)
   end
 
   @impl true
-  def handle_call({:get_elements_by_tag_name, node_id, name}, _from, state) do
-    get_elements_by_tag_name_impl(node_id, name, state)
+  def handle_call({:get_element_by_id, root_id, id}, from, state) do
+    get_element_by_id_impl(root_id, id, from, state)
   end
 
   @impl true
-  def handle_call({:get_element_by_id, root_id, id}, _from, state) do
-    get_element_by_id_impl(root_id, id, state)
+  def handle_call({:get_elements_by_class_name, root_id, names}, from, state) do
+    get_elements_by_class_name_impl(root_id, names, from, state)
   end
 
   @impl true
-  def handle_call({:get_elements_by_class_name, root_id, names}, _from, state) do
-    get_elements_by_class_name_impl(root_id, names, state)
+  def handle_call({:query_selector, root_id, selector}, from, state) do
+    query_selector_impl(root_id, selector, from, state)
   end
 
   @impl true
-  def handle_call({:query_selector, root_id, selector}, _from, state) do
-    query_selector_impl(root_id, selector, state)
+  def handle_call({:query_selector_all, root_id, selector}, from, state) do
+    query_selector_all_impl(root_id, selector, from, state)
   end
 
   @impl true
-  def handle_call({:query_selector_all, root_id, selector}, _from, state) do
-    query_selector_all_impl(root_id, selector, state)
+  def handle_call({:matches, node_id, selector}, from, state) do
+    matches_impl(node_id, selector, from, state)
   end
 
   @impl true
-  def handle_call({:matches, node_id, selector}, _from, state) do
-    matches_impl(node_id, selector, state)
+  def handle_call({:value, node_id}, from, state) do
+    value_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:get_attribute, node_id, name}, _from, state) do
-    get_attribute_impl(node_id, name, state)
+  def handle_call({:text_content, node_id}, from, state) do
+    text_content_impl(node_id, from, state)
   end
 
   @impl true
-  def handle_call({:set_attribute, node_id, name, value}, _from, state) do
-    set_attribute_impl(node_id, name, value, state)
+  def handle_call({:set_text_content, node_id, value}, from, state) do
+    set_text_content_impl(node_id, value, from, state)
   end
 
   @impl true
-  def handle_call({:has_attribute, node_id, name}, _from, state) do
-    has_attribute_impl(node_id, name, state)
-  end
-
-  @impl true
-  def handle_call({:remove_attribute, node_id, name}, _from, state) do
-    remove_attribute_impl(node_id, name, state)
-  end
-
-  @impl true
-  def handle_call({:get_attribute_names, node_id}, _from, state) do
-    get_attribute_names_impl(node_id, state)
-  end
-
-  @impl true
-  def handle_call({:value, node_id}, _from, state) do
-    value_impl(node_id, state)
-  end
-
-  @impl true
-  def handle_call({:text_content, node_id}, _from, state) do
-    text_content_impl(node_id, state)
-  end
-
-  @impl true
-  def handle_call({:set_text_content, node_id, value}, _from, state) do
-    set_text_content_impl(node_id, value, state)
-  end
-
-  @impl true
-  def handle_call({:set_value, node_id, value}, _from, state) do
-    set_value_impl(node_id, value, state)
+  def handle_call({:set_value, node_id, value}, from, state) do
+    set_value_impl(node_id, value, from, state)
   end
 end

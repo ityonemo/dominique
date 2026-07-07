@@ -78,7 +78,7 @@ def insert(server, parent_id, node_id) do
   GenServer.call(server, {:insert, parent_id, node_id})
 end
 
-defp insert_impl(parent_id, node_id, state) do
+defp insert_impl(parent_id, node_id, _from, state) do
   {:reply, :ok, insert_node(parent_id, node_id, state)}
 end
 ```
@@ -88,7 +88,13 @@ functions:
 
 - contain the business logic and state transitions
 - receive extracted message values rather than the original message envelope
-- receive `from` only when they actually use it
+- **always receive `from` as the second-to-last argument, immediately before
+  `state`**, even when the impl discards it (name it `_from` then). Every
+  `handle_call` threads its `from` into the `*_impl` unconditionally. The point is
+  **deterministic `*_impl` headers**: if you later refactor an impl to defer its
+  reply (`GenServer.reply(from, result)` + `{:noreply, state}`), `from` is already
+  in scope, so the change is local to the impl body and the **router clause never
+  changes**. `handle_info`/`handle_continue` impls have no `from` and omit it.
 - return the complete OTP callback tuple
 - may have multiple clauses when domain-level pattern matching is useful
 
@@ -102,11 +108,11 @@ match, extract parameters, and delegate:
 
 ```elixir
 @impl true
-def handle_call(:status, _from, state), do: status_impl(state)
+def handle_call(:status, from, state), do: status_impl(from, state)
 
 @impl true
-def handle_call({:insert, parent_id, node_id}, _from, state) do
-  insert_impl(parent_id, node_id, state)
+def handle_call({:insert, parent_id, node_id}, from, state) do
+  insert_impl(parent_id, node_id, from, state)
 end
 
 @impl true

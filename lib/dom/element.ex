@@ -7,12 +7,20 @@ defmodule DOM.Element do
   `DOM`; generic node operations live on `DOM.Node`.
   """
 
+  use MatchSpec
+
   alias DOM.Node
+  alias DOM.NodeData.Element
 
   @doc "The element's local name, or `nil` for a non-element node."
   @spec local_name(Node.t()) :: String.t() | nil
   def local_name(%Node{type: :element} = element) do
-    DOM._element_local_name(element.server, element.id)
+    [local_name] = DOM._select(element.server, local_name_spec(element.id))
+    local_name
+  end
+
+  defmatchspecp local_name_spec(node_id) do
+    {^node_id, %{__struct__: Element, local_name: local_name}} -> local_name
   end
 
   def local_name(%Node{}), do: nil
@@ -20,31 +28,54 @@ defmodule DOM.Element do
   @doc "The value of an attribute, or `nil` when absent."
   @spec get_attribute(Node.t(), String.t()) :: String.t() | nil
   def get_attribute(%Node{type: :element} = element, name) do
-    DOM._element_get_attribute(element.server, element.id, name)
-  end
-
-  @doc "Sets an attribute value."
-  @spec set_attribute(Node.t(), String.t(), String.t()) :: :ok
-  def set_attribute(%Node{type: :element} = element, name, value) do
-    DOM._element_set_attribute(element.server, element.id, name, value)
+    case List.keyfind(attributes(element), name, 0) do
+      {^name, value} -> value
+      nil -> nil
+    end
   end
 
   @doc "Whether the element carries an attribute."
   @spec has_attribute(Node.t(), String.t()) :: boolean()
   def has_attribute(%Node{type: :element} = element, name) do
-    DOM._element_has_attribute(element.server, element.id, name)
-  end
-
-  @doc "Removes an attribute (a no-op when absent)."
-  @spec remove_attribute(Node.t(), String.t()) :: :ok
-  def remove_attribute(%Node{type: :element} = element, name) do
-    DOM._element_remove_attribute(element.server, element.id, name)
+    List.keymember?(attributes(element), name, 0)
   end
 
   @doc "The element's attribute names, in insertion order."
   @spec get_attribute_names(Node.t()) :: [String.t()]
   def get_attribute_names(%Node{type: :element} = element) do
-    DOM._element_get_attribute_names(element.server, element.id)
+    Enum.map(attributes(element), fn {name, _value} -> name end)
+  end
+
+  @doc "Sets an attribute value."
+  @spec set_attribute(Node.t(), String.t(), String.t()) :: :ok
+  def set_attribute(%Node{type: :element} = element, name, value) do
+    update_attributes(element, &List.keystore(&1, name, 0, {name, value}))
+  end
+
+  @doc "Removes an attribute (a no-op when absent)."
+  @spec remove_attribute(Node.t(), String.t()) :: :ok
+  def remove_attribute(%Node{type: :element} = element, name) do
+    update_attributes(element, &List.keydelete(&1, name, 0))
+  end
+
+  # The element's raw attribute list, read straight from the record.
+  defp attributes(%Node{} = element) do
+    [attributes] = DOM._select(element.server, attributes_spec(element.id))
+    attributes
+  end
+
+  # Atomically reads the record, applies `fun` to its attribute list, and writes
+  # the updated record back — a single server hop so no operation interleaves.
+  defp update_attributes(%Node{id: node_id} = element, fun) do
+    DOM._atomic_ets_op(element.server, fn nodes ->
+      [{^node_id, record}] = :ets.lookup(nodes, node_id)
+      :ets.insert(nodes, {node_id, %{record | attributes: fun.(record.attributes)}})
+      :ok
+    end)
+  end
+
+  defmatchspecp attributes_spec(node_id) do
+    {^node_id, %{__struct__: Element, attributes: attributes}} -> attributes
   end
 
   @doc "The element's serialized descendants (its `innerHTML`)."

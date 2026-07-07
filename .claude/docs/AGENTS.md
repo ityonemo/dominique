@@ -87,3 +87,28 @@ Use parameterized match specs with pinned arguments through
 `MatchSpec.fun2msfun/4`, `defmatchspec`, or `defmatchspecp`. Test non-trivial
 specifications with `:ets.test_ms/2` as well as through the ETS operation that
 uses them.
+
+### Driving the table from a remote module: `_select` / `_select_replace` / `_atomic_ets_op`
+
+`DOM` exposes three generic ETS bridges so a caller module (`DOM.Node`,
+`DOM.Element`) can drive the `nodes` table by **sending a match spec** rather than
+each row-local read/write needing its own bespoke bridge + `*_impl` + router
+clause. The spec builders (`defmatchspecp`) live in the **caller** module, next to
+the operation that uses them.
+
+- `DOM._select(server, match_spec)` → `:ets.select` inside the server; returns the
+  result list. Row-local reads (an element's `local_name`, its `attributes`)
+  build a pinned spec and call this.
+- `DOM._select_replace(server, match_spec)` → `:ets.select_replace`; a single-hit
+  match-spec update.
+- `DOM._atomic_ets_op(server, fn nodes -> ... end)` → runs a **multi-step** ETS
+  operation atomically inside the server (one message, no interleaving). Use this
+  for any read-modify-write the table can't express as a single spec hit (e.g.
+  `set_attribute`, which reads the record, `List.keystore`s its attribute list,
+  and re-inserts). The closure receives the raw `nodes` tid and its return value
+  is the reply.
+
+Prefer these over adding a new `_node_*`/`_element_*` bridge for a plain
+row-local read or a simple read-modify-write. Keep a bespoke bridge only when the
+operation needs server-side context beyond the table (e.g. `state.document_id`)
+or genuinely cross-row/tree work.

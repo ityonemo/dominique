@@ -98,6 +98,17 @@ Module order: (1) Lifecycle/`init`, (2) API declarations (specs only, grouped),
   transitions in the router.
 - Each public API function sits immediately before its `*_impl`. `*_impl`
   functions hold the logic and return the full OTP callback tuple.
+- **Every `handle_call` threads `from` into its `*_impl`** as the second-to-last
+  arg (before `state`), even when discarded (`_from`). This keeps impl headers
+  deterministic: refactoring an impl to defer its reply (`GenServer.reply(from,
+  …)` + `{:noreply, state}`) stays local to the impl body — the router never
+  changes. `handle_info`/`handle_continue` impls have no `from`.
+- Drive the ETS table from `DOM.Node`/`DOM.Element` via the generic bridges
+  `DOM._select` / `_select_replace` (send a `defmatchspecp` spec, built in the
+  caller) and `DOM._atomic_ets_op(server, fn nodes -> … end)` (a multi-step
+  read-modify-write run atomically in one message). Prefer these over a new
+  bespoke `_node_*`/`_element_*` bridge for row-local reads/writes; keep a bespoke
+  bridge only for ops needing server context (e.g. `document_id`) or tree work.
 - Group all public types/specs in one API section (spec dislocation). Add an
   `*_impl` spec only for private handlers (`info`/`continue`) with no public API.
 - Default to `GenServer.call/3` (even for `:ok`-only commands); use `cast` only
