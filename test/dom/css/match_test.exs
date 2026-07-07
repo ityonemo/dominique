@@ -98,7 +98,7 @@ defmodule DOM.CSS.MatchTest do
                MapSet.new([ctx.ids[:a]])
     end
 
-    test "attribute dash (|=) matches value or value-prefixed", ctx do
+    test "attribute dash (|=) matches value or value-prefixed", _ctx do
       {table, ids} =
         build(element("root", [], [element("p", [{"lang", "en-US"}], [], as: :p)]))
 

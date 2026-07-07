@@ -2,13 +2,12 @@ defmodule DOM.Node.OwnerDocumentTest do
   use ExUnit.Case, async: true
 
   alias DOM.Node
-  alias DOM.Node.Document
 
   test "a node's owner document is the document that created it" do
     document = DOM.new()
     element = DOM.create_element(document, "element")
 
-    assert %Document{} = owner = Node.owner_document(element)
+    assert %DOM.Node{type: :document} = owner = Node.owner_document(element)
     assert owner.server == document.server
     assert owner.id == document.id
   end

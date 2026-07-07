@@ -1,8 +1,8 @@
 defmodule DOM.Node.CloneNodeTest do
   use ExUnit.Case, async: true
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   test "clones an element as a fresh detached handle preserving its name" do
     document = DOM.new()

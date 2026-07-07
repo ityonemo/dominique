@@ -2,8 +2,8 @@ defmodule Integration.QuerySelectorTest do
   use ExUnit.Case, async: true
   use Playwright
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   @moduletag :integration
 
@@ -126,8 +126,8 @@ defmodule Integration.QuerySelectorTest do
       result = %{
         "first" => document |> DOM.query_selector("a") |> local_name(),
         "missing" => DOM.query_selector(document, "nope"),
-        "matchesClass" => Element.matches(a, ".box"),
-        "matchesType" => Element.matches(a, "b")
+        "matchesClass" => DOM.matches(a, ".box"),
+        "matchesType" => DOM.matches(a, "b")
       }
 
       assert result == expected

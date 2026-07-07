@@ -2,8 +2,8 @@ defmodule Integration.Node.AppendChildTest do
   use ExUnit.Case, async: true
   use Playwright
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   @moduletag :integration
 

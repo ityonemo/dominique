@@ -1,8 +1,8 @@
 defmodule DOM.Node.ReplaceChildTest do
   use ExUnit.Case, async: true
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   test "replaces the old child in place and returns the old child" do
     document = DOM.new()

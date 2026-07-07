@@ -2,8 +2,8 @@ defmodule Integration.GetElementsByTagNameTest do
   use ExUnit.Case, async: true
   use Playwright
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   @moduletag :integration
 
@@ -47,9 +47,8 @@ defmodule Integration.GetElementsByTagNameTest do
         "documentAll" =>
           document |> DOM.get_elements_by_tag_name("*") |> Enum.map(&Element.local_name/1),
         "missing" => document |> DOM.get_elements_by_tag_name("missing") |> length(),
-        "scopedA" =>
-          b |> Element.get_elements_by_tag_name("a") |> Enum.map(&Element.local_name/1),
-        "scopedSelf" => b |> Element.get_elements_by_tag_name("b") |> length()
+        "scopedA" => b |> DOM.get_elements_by_tag_name("a") |> Enum.map(&Element.local_name/1),
+        "scopedSelf" => b |> DOM.get_elements_by_tag_name("b") |> length()
       }
 
       assert result == expected

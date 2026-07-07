@@ -1,38 +1,40 @@
-defmodule DOM.NodeData do
-  @moduledoc false
+use Protoss
 
-  # NodeData is the thing stored in the private ETS table. Public node structs
-  # are handles containing the owning server and the ID used to find this data.
+defprotocol DOM.NodeData do
+  @moduledoc """
+  The internal per-type node records stored in a document's ETS table, one
+  struct per node kind (`DOM.NodeData.Element`, `Text`, `Comment`, `Document`,
+  `DocumentFragment`, `DocumentType`). Never exposed to callers — user code holds
+  `DOM.Node` handles; the server reads these structs out of the tuple space.
 
-  alias DOM.Node.Comment
-  alias DOM.Node.Document
-  alias DOM.Node.DocumentFragment
-  alias DOM.Node.DocumentType
-  alias DOM.Node.Element
-  alias DOM.Node.Text
+  The protocol carries the per-kind values the server dispatches on: the handle
+  `type` atom, the DOM `nodeType` number, and the DOM `nodeName`. Structural
+  fields (`parent`, `children`, `value`, `attributes`, `local_name`) are read as
+  plain struct fields; `parent/1` and `children/1` in the `after` block wrap the
+  common ones so leaf kinds without a `children` field answer `[]`.
+  """
 
-  @enforce_keys [:type]
-  defstruct type: nil,
-            local_name: nil,
-            name: nil,
-            public_id: nil,
-            system_id: nil,
-            value: nil,
-            parent: nil,
-            children: [],
-            attributes: []
+  @type t ::
+          DOM.NodeData.Element.t()
+          | DOM.NodeData.Text.t()
+          | DOM.NodeData.Comment.t()
+          | DOM.NodeData.Document.t()
+          | DOM.NodeData.DocumentFragment.t()
+          | DOM.NodeData.DocumentType.t()
 
-  @type node_type :: Comment | Document | DocumentFragment | DocumentType | Element | Text
+  @doc "The `DOM.Node` handle `type` atom (`:element`, `:text`, …)."
+  def type(node_data)
 
-  @type t :: %__MODULE__{
-          type: node_type(),
-          local_name: String.t() | nil,
-          name: String.t() | nil,
-          public_id: String.t() | nil,
-          system_id: String.t() | nil,
-          value: String.t() | nil,
-          parent: reference() | nil,
-          children: [reference()],
-          attributes: [{String.t(), String.t()}]
-        }
+  @doc "The DOM `nodeType` numeric constant."
+  def node_type(node_data)
+
+  @doc "The DOM `nodeName`."
+  def node_name(node_data)
+after
+  @doc "Child ids of the record, or `[]` for leaf kinds without children."
+  def children(%{children: children}), do: children
+  def children(_leaf), do: []
+
+  @doc "Parent id of the record, or `nil`."
+  def parent(%{parent: parent}), do: parent
 end

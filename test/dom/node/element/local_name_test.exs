@@ -1,7 +1,7 @@
 defmodule DOM.Node.Element.LocalNameTest do
   use ExUnit.Case, async: true
 
-  alias DOM.Node.Element
+  alias DOM.Element
 
   test "returns an element's creation name and nil for a document" do
     document = DOM.new()

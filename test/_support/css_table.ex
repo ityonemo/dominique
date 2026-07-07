@@ -18,7 +18,6 @@ defmodule CSSTable do
   to its node id. Use `ids` to assert which ids a selector matches.
   """
 
-  alias DOM.Node.Element
   alias DOM.NodeData
 
   @doc """
@@ -27,7 +26,7 @@ defmodule CSSTable do
   """
   def element(local_name, attributes \\ [], children \\ [], opts \\ []) do
     %{
-      type: Element,
+      kind: :element,
       local_name: local_name,
       attributes: attributes,
       children: children,
@@ -37,7 +36,7 @@ defmodule CSSTable do
 
   @doc "Describes a text node (childless leaf)."
   def text(value) do
-    %{type: DOM.Node.Text, value: value}
+    %{kind: :text, value: value}
   end
 
   @doc """
@@ -53,15 +52,14 @@ defmodule CSSTable do
   end
 
   # Inserts a node under `parent_id`; returns {next_index, ids}.
-  defp insert(table, %{type: Element} = node, parent_id, index, ids) do
+  defp insert(table, %{kind: :element} = node, parent_id, index, ids) do
     id = make_ref()
     {child_ids, next_index, ids} = insert_children(table, node.children, id, index + 1, ids)
 
     :ets.insert(
       table,
       {id,
-       %NodeData{
-         type: Element,
+       %NodeData.Element{
          local_name: node.local_name,
          attributes: node.attributes,
          parent: parent_id,
@@ -74,14 +72,9 @@ defmodule CSSTable do
     {next_index, ids}
   end
 
-  defp insert(table, %{type: type} = node, parent_id, index, ids) do
+  defp insert(table, %{kind: :text} = node, parent_id, index, ids) do
     id = make_ref()
-
-    :ets.insert(
-      table,
-      {id, %NodeData{type: type, value: Map.get(node, :value), parent: parent_id}}
-    )
-
+    :ets.insert(table, {id, %NodeData.Text{value: node.value, parent: parent_id}})
     {index + 1, Map.put(ids, index, id)}
   end
 

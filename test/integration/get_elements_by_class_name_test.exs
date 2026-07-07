@@ -2,8 +2,8 @@ defmodule Integration.GetElementsByClassNameTest do
   use ExUnit.Case, async: true
   use Playwright
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   @moduletag :integration
 
@@ -59,8 +59,7 @@ defmodule Integration.GetElementsByClassNameTest do
           |> DOM.get_elements_by_class_name("box highlight")
           |> Enum.map(&Element.local_name/1),
         "empty" => document |> DOM.get_elements_by_class_name("") |> length(),
-        "scoped" =>
-          a |> Element.get_elements_by_class_name("box") |> Enum.map(&Element.local_name/1)
+        "scoped" => a |> DOM.get_elements_by_class_name("box") |> Enum.map(&Element.local_name/1)
       }
 
       assert result == expected

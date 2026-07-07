@@ -1,8 +1,8 @@
 defmodule DOM.GetElementByIdTest do
   use ExUnit.Case, async: true
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   setup do
     document = DOM.new()

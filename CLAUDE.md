@@ -1,64 +1,82 @@
 # Dominique — Claude Guide
 
 An Elixir implementation of the browser **DOM**. A DOM is a `GenServer` owning a
-private ETS table of `NodeData`; the public node structs
-(`DOM.Node.Element`, `Text`, `Comment`, `Document`, `DocumentFragment`,
-`DocumentType`) are immutable **handles** (`%{server, id}`) into that server, not
-live objects. `DOM.Node` is a Protoss protocol implemented by every node type.
+private ETS table of per-type `DOM.NodeData.*` records. A node **handle** is the
+single struct `%DOM.Node{server, id, type}` — an immutable reference into that
+server (server pid, node id, and node-kind atom `:element | :text | :comment |
+:document | :document_fragment | :document_type`), not a live object.
 
 Key semantic (see `README.md`): appending a node owned by another DOM transfers
 its whole subtree across servers, so old handles go **stale**. Callers must use
 the handle returned by `DOM.Node.append_child/2` after a cross-document transfer.
 
-## Architecture & dispatch conventions
+## Two struct layers — handle vs storage
 
-**Where a new operation lives — `Node` vs `DOM`.** Follow the Elixir "first
-argument owns the function" convention:
+- **`DOM.Node` is the ONE user-facing handle struct** (`%{server, id, type}`).
+  Never a protocol; operations are `type`-guarded function clauses. Never expose
+  a `NodeData` record to callers.
+- **`DOM.NodeData` is a Protoss protocol** implemented by the six per-type
+  records stored in the ETS tuple space: `DOM.NodeData.Element{local_name,
+  attributes, parent, children}`, `.Text{value, parent}`, `.Comment{value,
+  parent}`, `.Document{children}`, `.DocumentFragment{children}`,
+  `.DocumentType{name, public_id, system_id, parent}`. Heterogeneous, no dead
+  fields. The protocol carries per-kind values (`type/1` → the handle atom,
+  `node_type/1` → the DOM number, `node_name/1`); the `after` block has the
+  struct-agnostic `parent/1`/`children/1`. Reads that ETS match specs express are
+  **map patterns keyed on `__struct__`** (subset matching, so no field
+  wildcarding) — see `lib/dom/css/_query.ex`.
 
-- **Node-first operations go on the `DOM.Node` protocol.** If a DOM node is the
-  natural first argument, add it to `DOM.Node` and dispatch on the handle:
-  `Node.append_child(parent, child)`, `Node.next_sibling(node)`,
-  `Node.remove_child(parent, child)`.
-- **Document-scoped operations go on `DOM`.** `DOM` is the **context module** for
-  the `DOM.Node.Document` type — EXCLUDING Document's `DOM.Node` protocol
-  implementations, which must live in `DOM.Node.Document`. When the operation
-  conceptually belongs to the document and it is more convenient for the first
-  argument to be the **DOM object itself** rather than the document node, put it
-  on `DOM`: `DOM.new()`, `DOM.create_element(document, "div")`, and future
-  document-level queries like `get_element_by_id`, `create_element_ns`.
+## Dispatch conventions — where a new operation lives
 
-**Three call layers (the `_` prefix).** A node handle is opaque data; the owning
-node module forwards through the `DOM` server. Every operation flows:
+Partition by **scope** (Elixir "first argument owns the function"):
+
+- **Generic node operations → `DOM.Node`.** Apply to any node kind:
+  `Node.append_child(parent, child)`, `Node.child_nodes(node)`,
+  `Node.next_sibling(node)`, `Node.node_type/node_name/value/text_content`,
+  `Node.clone_node/2`. Fail-fast `type`-guard clauses live here (e.g. appending
+  to a `:text` node raises without a server round-trip).
+- **Element-intrinsic operations → `DOM.Element`.** Apply only to elements:
+  `Element.local_name/1` and the attribute API (`get_attribute`, `set_attribute`,
+  `has_attribute`, `remove_attribute`, `get_attribute_names`). Each is guarded on
+  `%DOM.Node{type: :element}`, so calling it on a non-element fails fast.
+- **Whole-document / query operations → `DOM`.** `DOM` is the **context module**
+  and the GenServer. Node creation (`DOM.new`, `DOM.create_element(document,
+  "div")`, `create_*`) and tree queries that take any node as scope
+  (`get_element_by_id`, `get_elements_by_tag_name`, `query_selector`,
+  `query_selector_all`, `matches`) live here.
+
+**Three call layers (the `_` prefix).** A handle is opaque data; `DOM.Node` /
+`DOM.Element` forward through the `DOM` server. Every operation flows:
 
 ```
-app code   →  Node.local_name(el)          # public API (context module / protocol)
-           →  DOM._element_local_name(...)  # _-prefixed internal cross-module bridge
+app code   →  Element.local_name(el)        # public API (scoped module)
+           →  DOM._element_local_name(...)   # _-prefixed internal cross-module bridge
            →  GenServer.call → local_name_impl/2   # defp, the real logic
 ```
 
-- **Public (no underscore):** the user-facing surface — `DOM.new/2`,
-  `DOM.create_*`, and the `DOM.Node` protocol functions on handles.
+- **Public (no underscore):** the user-facing surface — `DOM.*`, `DOM.Node.*`,
+  `DOM.Element.*`.
 - **Internal (`_`-prefixed), e.g. `DOM._node_append_child/3`,
-  `DOM._element_local_name/2`, `DOM._export_subtree/2`:** public *only* because a
-  different module (the node module) must reach into `DOM` across a module
-  boundary, so they cannot be `defp`. Treat them as private; application code
-  must not call them. `_export_subtree`/`_remove_subtree` are the cross-server
-  primitives used to move a subtree between two DOM GenServers during adoption.
-- **`defp *_impl`:** the actual behavior behind each `handle_call`, per
-  ROUTER_PATTERN.md.
+  `DOM._element_local_name/2`, `DOM._export_subtree/2`:** public *only* because
+  `DOM.Node`/`DOM.Element` must reach into `DOM` across a module boundary, so they
+  cannot be `defp`. Treat them as private. `_export_subtree`/`_remove_subtree` are
+  the cross-server primitives used to move a subtree between DOM GenServers during
+  adoption.
+- **`defp *_impl`:** the actual behavior behind each `handle_call`.
 
-Name internal bridges `_node_*` when they back a `DOM.Node` protocol function;
-use a type-specific prefix (e.g. `_element_local_name`) when the public function
-is type-specific.
+Name bridges `_node_*` when they back a `DOM.Node` function; `_element_*` when
+they back a `DOM.Element` function. A single-caller bridge is a middleman: only
+keep a `_`-prefixed bridge when a *foreign* module actually needs it (a `DOM`
+public function calling its own bridge is a self-call, not a second caller) —
+otherwise inline the `GenServer.call`.
 
-**Protoss `after` block.** `DOM.Node` is a Protoss `defprotocol`, which supports
-an `after` block that runs after the protocol/impl definitions. Use it
-**strategically** to define shared, node-type-independent operations once instead
-of copying them into all six impls — e.g. operations derivable purely from other
-protocol callbacks (`next_sibling`/`previous_sibling` from `parent_node/1` +
-`child_nodes/1`), or a shared leaf-rejection helper. Dispatch that genuinely
-differs per node type still belongs in each module's impl clause; do not use the
-`after` block to flatten real per-type differences.
+## File-naming convention
+
+In a directory populated by one-struct-per-file modules, a support module that
+has **no associated struct** gets a `_`-prefixed **filename** (not module name),
+which pins it to the top of the listing. Precedent: `lib/dom/css/_parser.ex`
+(`DOM.CSS.Parser`), `lib/dom/css/_query.ex` (`DOM.CSS.Query`). Struct modules keep
+plain filenames (`type.ex`, `class.ex`, `lib/dom/node_data/element.ex`).
 
 ## The two guideline documents
 
@@ -149,6 +167,14 @@ Use the `match_spec` library — `defmatchspec`/`defmatchspecp` after
 `fun2msfun/4`/`defmatchspec`/`defmatchspecp`. Test non-trivial specs with
 `:ets.test_ms/2` **and** through the ETS operation that uses them. Never hand-build
 match-spec tuples.
+
+**Match a MAP pattern, not a struct pattern, for subset matching.** A struct
+pattern (`%NodeData.Element{local_name: ^n}`) pins every *unmentioned* field to
+its default, so it fails to match real rows and forces verbose `field: _`
+wildcards. A map pattern keyed on `__struct__` (`%{__struct__: NodeData.Element,
+local_name: ^n}`) does **subset** matching — only the named keys are constrained,
+extra keys ignored — so it matches per-type structs cleanly with no wildcards.
+`defmatchspecp` accepts map patterns (verified). See `lib/dom/css/_query.ex`.
 
 ## CSS selector engine (`DOM.CSS`)
 

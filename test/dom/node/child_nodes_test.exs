@@ -2,8 +2,6 @@ defmodule DOM.Node.ChildNodesTest do
   use ExUnit.Case, async: true
 
   alias DOM.Node
-  alias DOM.Node.Comment
-  alias DOM.Node.Text
 
   test "returns direct children in tree order" do
     document = DOM.new()
@@ -20,8 +18,8 @@ defmodule DOM.Node.ChildNodesTest do
   end
 
   test "leaf nodes return no children without consulting their server" do
-    text = %Text{server: self(), id: make_ref()}
-    comment = %Comment{server: self(), id: make_ref()}
+    text = %DOM.Node{type: :text, server: self(), id: make_ref()}
+    comment = %DOM.Node{type: :comment, server: self(), id: make_ref()}
 
     assert Node.child_nodes(text) == []
     assert Node.child_nodes(comment) == []

@@ -9,8 +9,6 @@ defmodule DOM.CSS.Query do
 
   use MatchSpec
 
-  alias DOM.Node.Element
-  alias DOM.Node.Text
   alias DOM.NodeData
 
   @doc "Element ids in `candidates` whose local name is `name`."
@@ -206,132 +204,36 @@ defmodule DOM.CSS.Query do
   # Match specs
   # ==========================================================================
 
-  # Unmentioned struct fields in a match spec are pinned to their defaults, so
-  # every field we don't constrain must be an explicit wildcard variable.
+  # Match specs use MAP patterns keyed on `__struct__`, which do subset matching:
+  # only the mentioned keys are constrained, so per-type NodeData.* structs are
+  # matched without pinning their other fields to defaults.
   defmatchspecp type_spec(name) do
-    {id,
-     %NodeData{
-       type: Element,
-       local_name: ^name,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: _,
-       attributes: _
-     }} ->
-      id
+    {id, %{__struct__: NodeData.Element, local_name: ^name}} -> id
   end
 
   defmatchspecp element_spec() do
-    {id,
-     %NodeData{
-       type: Element,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: _,
-       attributes: _
-     }} ->
-      id
+    {id, %{__struct__: NodeData.Element}} -> id
   end
 
   defmatchspecp attributes_spec() do
-    {id,
-     %NodeData{
-       type: Element,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: _,
-       attributes: attributes
-     }} ->
-      {id, attributes}
+    {id, %{__struct__: NodeData.Element, attributes: attributes}} -> {id, attributes}
   end
 
   defmatchspecp parent_spec(node_id) do
-    {^node_id,
-     %NodeData{
-       type: _,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: parent,
-       children: _,
-       attributes: _
-     }} ->
-      parent
+    {^node_id, %{parent: parent}} -> parent
   end
 
   defmatchspecp children_spec(node_id) do
-    {^node_id,
-     %NodeData{
-       type: _,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: children,
-       attributes: _
-     }} ->
-      children
+    {^node_id, %{children: children}} -> children
   end
 
   defmatchspecp is_element_spec(node_id) do
-    {^node_id,
-     %NodeData{
-       type: Element,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: _,
-       attributes: _
-     }} ->
-      true
+    {^node_id, %{__struct__: NodeData.Element}} -> true
   end
 
   defmatchspecp content_spec(node_id) do
-    {^node_id,
-     %NodeData{
-       type: Element,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: _,
-       attributes: _
-     }} ->
-      true
-
-    {^node_id,
-     %NodeData{
-       type: Text,
-       local_name: _,
-       name: _,
-       public_id: _,
-       system_id: _,
-       value: _,
-       parent: _,
-       children: _,
-       attributes: _
-     }} ->
-      true
+    {^node_id, %{__struct__: NodeData.Element}} -> true
+    {^node_id, %{__struct__: NodeData.Text}} -> true
   end
 
   # ==========================================================================

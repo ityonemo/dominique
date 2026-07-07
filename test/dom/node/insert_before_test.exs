@@ -61,7 +61,7 @@ defmodule DOM.Node.InsertBeforeTest do
   end
 
   test "adopts a child from another document before the reference child" do
-    alias DOM.Node.Element
+    alias DOM.Element
 
     source = DOM.new()
     destination = DOM.new()

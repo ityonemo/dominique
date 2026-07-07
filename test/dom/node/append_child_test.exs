@@ -2,11 +2,6 @@ defmodule DOM.Node.AppendChildTest do
   use ExUnit.Case, async: true
 
   alias DOM.Node
-  alias DOM.Node.Comment
-  alias DOM.Node.Document
-  alias DOM.Node.DocumentType
-  alias DOM.Node.Element
-  alias DOM.Node.Text
 
   test "returns the child and updates both sides of the relationship" do
     document = DOM.new()
@@ -105,11 +100,11 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "type-invalid insertions reject without consulting document state" do
-    document = %Document{server: self(), id: make_ref()}
-    element = %Element{server: self(), id: make_ref()}
-    text = %Text{server: self(), id: make_ref()}
-    comment = %Comment{server: self(), id: make_ref()}
-    document_type = %DocumentType{server: self(), id: make_ref()}
+    document = %DOM.Node{type: :document, server: self(), id: make_ref()}
+    element = %DOM.Node{type: :element, server: self(), id: make_ref()}
+    text = %DOM.Node{type: :text, server: self(), id: make_ref()}
+    comment = %DOM.Node{type: :comment, server: self(), id: make_ref()}
+    document_type = %DOM.Node{type: :document_type, server: self(), id: make_ref()}
 
     assert_raise DOM.HierarchyRequestError, fn -> Node.append_child(text, element) end
     assert_raise DOM.HierarchyRequestError, fn -> Node.append_child(comment, element) end

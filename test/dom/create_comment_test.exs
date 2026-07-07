@@ -2,7 +2,6 @@ defmodule DOM.CreateCommentTest do
   use ExUnit.Case, async: true
 
   alias DOM.Node
-  alias DOM.Node.Element
 
   test "creates a unique detached node owned by the document server" do
     document = DOM.new()
@@ -17,7 +16,7 @@ defmodule DOM.CreateCommentTest do
   end
 
   test "rejects creation from a non-document node" do
-    element = %Element{server: self(), id: make_ref()}
+    element = %DOM.Node{type: :element, server: self(), id: make_ref()}
 
     assert_raise DOM.HierarchyRequestError, fn ->
       DOM.create_comment(element, "comment")

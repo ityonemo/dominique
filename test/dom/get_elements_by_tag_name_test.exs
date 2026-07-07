@@ -1,8 +1,8 @@
 defmodule DOM.GetElementsByTagNameTest do
   use ExUnit.Case, async: true
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   setup do
     document = DOM.new()
@@ -35,9 +35,9 @@ defmodule DOM.GetElementsByTagNameTest do
   end
 
   test "scopes the search to an element's descendants, excluding itself", ctx do
-    matches = Element.get_elements_by_tag_name(ctx.b, "a")
+    matches = DOM.get_elements_by_tag_name(ctx.b, "a")
 
     assert Enum.map(matches, & &1.id) == [ctx.a2.id]
-    assert Element.get_elements_by_tag_name(ctx.b, "b") == []
+    assert DOM.get_elements_by_tag_name(ctx.b, "b") == []
   end
 end

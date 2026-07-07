@@ -2,7 +2,7 @@ defmodule Integration.Node.Element.AttributeTest do
   use ExUnit.Case, async: true
   use Playwright
 
-  alias DOM.Node.Element
+  alias DOM.Element
 
   @moduletag :integration
 

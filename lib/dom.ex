@@ -1,36 +1,26 @@
 defmodule DOM do
   @moduledoc """
   A DOM document backed by a `GenServer` that owns a private ETS table of
-  `DOM.NodeData`.
+  per-type `DOM.NodeData.*` records.
 
-  `DOM` is the context module for the `DOM.Node.Document` node type, EXCLUDING
-  its `DOM.Node` protocol implementations (those live in `DOM.Node.Document`, as
-  Protoss requires). Document-level operations (creating nodes, whole-document
-  queries such as `get_elements_by_tag_name/2`) live here and take a
-  `DOM.Node.Document` handle as their first argument, rather than being methods
-  on the node struct. This mirrors the dispatch convention documented in
-  `CLAUDE.md`: node-first operations belong on the `DOM.Node` protocol, while
-  document-scoped operations belong on `DOM`. Accordingly `t/0` is the
-  `DOM.Node.Document` handle type.
+  Node handles are the single `DOM.Node` struct (`%DOM.Node{server, id, type}`),
+  immutable references carrying the owning server, a node id, and the node kind;
+  they are not live objects. Mutating operations run inside the server and may
+  transfer whole subtrees between documents, after which a retained handle can
+  become stale (see the README).
 
-  The public node structs returned by this module (`DOM.Node.Element`,
-  `DOM.Node.Text`, and friends) are immutable handles carrying the owning
-  server and a node id; they are not live objects. Mutating operations run
-  inside the server and may transfer whole subtrees between documents, after
-  which a retained handle can become stale. See the project README for handle
-  freshness rules.
+  Operations are partitioned by scope: **generic** node operations live on
+  `DOM.Node`, **element-intrinsic** operations (`local_name`, the attribute API)
+  on `DOM.Element`, and **whole-document / query** operations (creating nodes,
+  `get_element_by_id/2`, `query_selector/2`, `matches/2`, …) here on `DOM`, which
+  is also the GenServer holding every `*_impl`. Cross-module calls into the
+  server go through the `_`-prefixed bridges in this module.
   """
 
   use GenServer
   use MatchSpec
 
   alias DOM.Node
-  alias DOM.Node.Comment
-  alias DOM.Node.Document
-  alias DOM.Node.DocumentFragment
-  alias DOM.Node.DocumentType
-  alias DOM.Node.Element
-  alias DOM.Node.Text
   alias DOM.NodeData
 
   # ==========================================================================
@@ -45,7 +35,7 @@ defmodule DOM do
           document_id: reference()
         }
 
-  @type t :: Document.t()
+  @type t :: Node.t()
 
   # ==========================================================================
   # Lifecycle
@@ -58,7 +48,7 @@ defmodule DOM do
   @impl true
   def init(document_id) do
     nodes = :ets.new(__MODULE__, [:set, :private])
-    :ets.insert(nodes, {document_id, %NodeData{type: Document}})
+    :ets.insert(nodes, {document_id, %NodeData.Document{}})
     {:ok, %__MODULE__{nodes: nodes, document_id: document_id}}
   end
 
@@ -67,30 +57,30 @@ defmodule DOM do
   # ==========================================================================
 
   @spec new() :: t()
-  @spec create_element(Document.t(), String.t()) :: Element.t()
-  @spec create_text_node(Document.t(), String.t()) :: Text.t()
-  @spec create_comment(Document.t(), String.t()) :: Comment.t()
-  @spec create_document_fragment(Document.t()) :: DocumentFragment.t()
-  @spec create_document_type(Document.t(), String.t(), String.t(), String.t()) ::
-          DocumentType.t()
-  @spec get_elements_by_tag_name(Document.t(), String.t()) :: [Element.t()]
-  @spec get_element_by_id(Document.t(), String.t()) :: Element.t() | nil
-  @spec get_elements_by_class_name(Document.t(), String.t()) :: [Element.t()]
-  @spec query_selector(Document.t(), String.t()) :: Element.t() | nil
-  @spec query_selector_all(Document.t(), String.t()) :: [Element.t()]
-  @spec _create(Document.t(), NodeData.t()) :: Node.t()
+  @spec create_element(t(), String.t()) :: Node.t()
+  @spec create_text_node(t(), String.t()) :: Node.t()
+  @spec create_comment(t(), String.t()) :: Node.t()
+  @spec create_document_fragment(t()) :: Node.t()
+  @spec create_document_type(t(), String.t(), String.t(), String.t()) :: Node.t()
+  @spec get_elements_by_tag_name(Node.t(), String.t()) :: [Node.t()]
+  @spec get_element_by_id(t(), String.t()) :: Node.t() | nil
+  @spec get_elements_by_class_name(Node.t(), String.t()) :: [Node.t()]
+  @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
+  @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
+  @spec matches(Node.t(), String.t()) :: boolean()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
   @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_replace_child(GenServer.server(), reference(), Node.t(), Node.t()) :: Node.t()
-  @spec _node_owner_document(GenServer.server(), reference()) :: Document.t() | nil
+  @spec _node_owner_document(GenServer.server(), reference()) :: Node.t() | nil
   @spec _node_clone_node(GenServer.server(), reference(), boolean()) :: Node.t()
+  @spec _node_node_type(GenServer.server(), reference()) :: pos_integer()
+  @spec _node_node_name(GenServer.server(), reference()) :: String.t()
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
   @spec _node_parent_node(GenServer.server(), reference()) :: Node.t() | nil
   @spec _element_local_name(GenServer.server(), reference()) :: String.t()
-  @spec _document_type_name(GenServer.server(), reference()) :: String.t()
   @spec _element_get_attribute(GenServer.server(), reference(), String.t()) :: String.t() | nil
   @spec _element_set_attribute(GenServer.server(), reference(), String.t(), String.t()) :: :ok
   @spec _element_has_attribute(GenServer.server(), reference(), String.t()) :: boolean()
@@ -108,20 +98,29 @@ defmodule DOM do
   def new do
     document_id = make_ref()
     {:ok, server} = start_link(document_id)
-    %Document{server: server, id: document_id}
+    %Node{server: server, id: document_id, type: :document}
   end
 
-  def create_element(document, local_name), do: Element.create(document, local_name)
+  def create_element(document, local_name) do
+    create(document, %NodeData.Element{local_name: local_name})
+  end
 
-  def create_text_node(document, value), do: Text.create(document, value)
+  def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
 
-  def create_comment(document, value), do: Comment.create(document, value)
+  def create_comment(document, value), do: create(document, %NodeData.Comment{value: value})
 
-  def create_document_fragment(document), do: DocumentFragment.create(document)
+  def create_document_fragment(document), do: create(document, %NodeData.DocumentFragment{})
 
   def create_document_type(document, name, public_id, system_id) do
-    DocumentType.create(document, name, public_id, system_id)
+    node_data = %NodeData.DocumentType{name: name, public_id: public_id, system_id: system_id}
+    create(document, node_data)
   end
+
+  defp create(%Node{type: :document} = document, node_data) do
+    GenServer.call(document.server, {:create, node_data})
+  end
+
+  defp create(%Node{}, _node_data), do: raise(DOM.HierarchyRequestError)
 
   def get_elements_by_tag_name(document, name) do
     GenServer.call(document.server, {:get_elements_by_tag_name, document.id, name})
@@ -143,11 +142,9 @@ defmodule DOM do
     GenServer.call(document.server, {:query_selector_all, document.id, selector})
   end
 
-  def _create(%Document{} = document, nodedata) do
-    GenServer.call(document.server, {:create, nodedata})
+  def matches(node, selector) do
+    GenServer.call(node.server, {:matches, node.id, selector})
   end
-
-  def _create(_node, _nodedata), do: raise(DOM.HierarchyRequestError)
 
   defp create_impl(node_data, state) do
     node_id = make_ref()
@@ -185,7 +182,7 @@ defmodule DOM do
       invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil, nil) ->
         {:reply, {:error, :hierarchy_request}, state}
 
-      child_data.type == DocumentFragment ->
+      match?(%NodeData.DocumentFragment{}, child_data) ->
         append_fragment(state.nodes, parent_id, child_id, child_data)
         {:reply, :ok, state}
 
@@ -291,7 +288,7 @@ defmodule DOM do
       child_id == reference_child_id ->
         {:reply, :ok, state}
 
-      child_data.type == DocumentFragment ->
+      match?(%NodeData.DocumentFragment{}, child_data) ->
         insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
         {:reply, :ok, state}
 
@@ -330,7 +327,7 @@ defmodule DOM do
     else
       materialize_subtree(state.nodes, child_id, subtree)
 
-      if child_data.type == DocumentFragment do
+      if match?(%NodeData.DocumentFragment{}, child_data) do
         append_fragment(state.nodes, parent_id, child_id, child_data)
       else
         put_node(state.nodes, parent_id, %{
@@ -368,7 +365,7 @@ defmodule DOM do
       :else ->
         materialize_subtree(state.nodes, child_id, subtree)
 
-        if child_data.type == DocumentFragment do
+        if match?(%NodeData.DocumentFragment{}, child_data) do
           insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
         else
           {before, after_reference} =
@@ -524,7 +521,7 @@ defmodule DOM do
         {before, [^old_child_id | rest]} = split_at_child(parent.children, old_child_id)
 
         replacement =
-          if new_child_data.type == DocumentFragment do
+          if match?(%NodeData.DocumentFragment{}, new_child_data) do
             reparent_fragment_children(state.nodes, parent_id, new_child_data)
             put_node(state.nodes, new_child_id, %{new_child_data | children: []})
             new_child_data.children
@@ -572,38 +569,38 @@ defmodule DOM do
 
   defp invalid_hierarchy?(nodes, parent, parent_id, child, child_id, reference_child_id, subtree) do
     inclusive_ancestor?(nodes, child_id, parent_id) or
-      (parent.type == Document and
+      (match?(%NodeData.Document{}, parent) and
          invalid_document_child?(nodes, parent, child, child_id, reference_child_id, subtree))
   end
 
   defp invalid_document_child?(
          nodes,
          document,
-         %{type: Element},
+         %NodeData.Element{},
          child_id,
          reference_child_id,
          _sub
        ) do
-    document_has_node_type?(nodes, document, Element, child_id) or
+    document_has_kind?(nodes, document, NodeData.Element, child_id) or
       doctype_at_or_after?(nodes, document, reference_child_id)
   end
 
   defp invalid_document_child?(
          nodes,
          document,
-         %{type: DocumentType},
+         %NodeData.DocumentType{},
          child_id,
          reference_id,
          _sub
        ) do
-    document_has_node_type?(nodes, document, DocumentType, child_id) or
+    document_has_kind?(nodes, document, NodeData.DocumentType, child_id) or
       element_before?(nodes, document, reference_id)
   end
 
   defp invalid_document_child?(
          nodes,
          document,
-         %{type: DocumentFragment} = fragment,
+         %NodeData.DocumentFragment{} = fragment,
          _child_id,
          _reference_child_id,
          subtree
@@ -620,7 +617,7 @@ defmodule DOM do
   defp element_before?(nodes, document, reference_child_id) do
     document.children
     |> Enum.take_while(&(&1 != reference_child_id))
-    |> Enum.any?(&(fetch_node!(nodes, &1).type == Element))
+    |> Enum.any?(&match?(%NodeData.Element{}, fetch_node!(nodes, &1)))
   end
 
   # A doctype sits at or after the insertion point: with a nil reference
@@ -628,28 +625,31 @@ defmodule DOM do
   defp doctype_at_or_after?(nodes, document, reference_child_id) do
     document.children
     |> Enum.drop_while(&(&1 != reference_child_id))
-    |> Enum.any?(&(fetch_node!(nodes, &1).type == DocumentType))
+    |> Enum.any?(&match?(%NodeData.DocumentType{}, fetch_node!(nodes, &1)))
   end
 
   defp invalid_document_fragment?(nodes, document, fragment, subtree_nodes) do
-    child_types =
+    kinds =
       Enum.map(fragment.children, fn child_id ->
-        node_type(nodes, child_id, subtree_nodes)
+        node_kind(nodes, child_id, subtree_nodes)
       end)
 
-    element_count = Enum.count(child_types, &(&1 == Element))
+    element_count = Enum.count(kinds, &(&1 == NodeData.Element))
 
-    Text in child_types or
+    NodeData.Text in kinds or
       element_count > 1 or
-      (element_count == 1 and document_has_node_type?(nodes, document, Element, nil))
+      (element_count == 1 and document_has_kind?(nodes, document, NodeData.Element, nil))
   end
 
-  defp node_type(nodes, node_id, nil), do: fetch_node!(nodes, node_id).type
-  defp node_type(_nodes, node_id, subtree_nodes), do: Map.fetch!(subtree_nodes, node_id).type
+  # The NodeData struct MODULE of a node (used as a kind discriminator).
+  defp node_kind(nodes, node_id, nil), do: fetch_node!(nodes, node_id).__struct__
 
-  defp document_has_node_type?(nodes, document, type, except_id) do
+  defp node_kind(_nodes, node_id, subtree_nodes),
+    do: Map.fetch!(subtree_nodes, node_id).__struct__
+
+  defp document_has_kind?(nodes, document, kind, except_id) do
     Enum.any?(document.children, fn node_id ->
-      node_id != except_id and fetch_node!(nodes, node_id).type == type
+      node_id != except_id and fetch_node!(nodes, node_id).__struct__ == kind
     end)
   end
 
@@ -704,7 +704,7 @@ defmodule DOM do
   defp owner_document_impl(node_id, state) do
     owner =
       if node_id != state.document_id do
-        %Document{server: self(), id: state.document_id}
+        %Node{server: self(), id: state.document_id, type: :document}
       end
 
     {:reply, owner, state}
@@ -727,19 +727,29 @@ defmodule DOM do
 
     children =
       if deep? do
-        Enum.map(node_data.children, fn child_id ->
+        Enum.map(NodeData.children(node_data), fn child_id ->
           child_clone_id = clone_subtree(nodes, child_id, true)
           child_clone = fetch_node!(nodes, child_clone_id)
-          put_node(nodes, child_clone_id, %{child_clone | parent: clone_id})
+          put_node(nodes, child_clone_id, reparent(child_clone, clone_id))
           child_clone_id
         end)
       else
         []
       end
 
-    put_node(nodes, clone_id, %{node_data | parent: nil, children: children})
+    put_node(nodes, clone_id, clone_data(node_data, children))
     clone_id
   end
+
+  defp reparent(%{parent: _} = node_data, parent_id), do: %{node_data | parent: parent_id}
+
+  # A detached clone: no parent, and (for containers) the given cloned children.
+  # Leaf records have no `children` field, so only set it when present.
+  defp clone_data(%{children: _} = node_data, children) do
+    %{node_data | parent: nil, children: children}
+  end
+
+  defp clone_data(node_data, _children), do: %{node_data | parent: nil}
 
   def _element_local_name(server, node_id) do
     GenServer.call(server, {:local_name, node_id})
@@ -750,8 +760,20 @@ defmodule DOM do
     {:reply, local_name, state}
   end
 
-  def _element_get_elements_by_tag_name(server, node_id, name) do
-    GenServer.call(server, {:get_elements_by_tag_name, node_id, name})
+  def _node_node_type(server, node_id) do
+    GenServer.call(server, {:node_type, node_id})
+  end
+
+  defp node_type_impl(node_id, state) do
+    {:reply, state.nodes |> fetch_node!(node_id) |> NodeData.node_type(), state}
+  end
+
+  def _node_node_name(server, node_id) do
+    GenServer.call(server, {:node_name, node_id})
+  end
+
+  defp node_name_impl(node_id, state) do
+    {:reply, state.nodes |> fetch_node!(node_id) |> NodeData.node_name(), state}
   end
 
   defp get_elements_by_tag_name_impl(node_id, name, state) do
@@ -766,14 +788,14 @@ defmodule DOM do
 
   defp tag_name_match?(nodes, node_id, name) do
     node = fetch_node!(nodes, node_id)
-    node.type == Element and (name == "*" or node.local_name == name)
+    match?(%NodeData.Element{}, node) and (name == "*" or node.local_name == name)
   end
 
   defp get_element_by_id_impl(root_id, id, state) do
     match_id =
       Enum.find(descendant_ids(state.nodes, root_id), fn node_id ->
         node = fetch_node!(state.nodes, node_id)
-        node.type == Element and List.keyfind(node.attributes, "id", 0) == {"id", id}
+        match?(%NodeData.Element{}, node) and List.keyfind(node.attributes, "id", 0) == {"id", id}
       end)
 
     match = if match_id, do: node_handle(state.nodes, match_id)
@@ -838,7 +860,7 @@ defmodule DOM do
   defp class_name_match?(nodes, node_id, wanted) do
     node = fetch_node!(nodes, node_id)
 
-    with true <- node.type == Element,
+    with %NodeData.Element{} <- node,
          {"class", class} <- List.keyfind(node.attributes, "class", 0) do
       present = class_tokens(class)
       Enum.all?(wanted, &(&1 in present))
@@ -904,20 +926,18 @@ defmodule DOM do
     {:reply, names, state}
   end
 
-  def _document_type_name(server, node_id) do
-    GenServer.call(server, {:document_type_name, node_id})
-  end
-
-  defp document_type_name_impl(node_id, state) do
-    {:reply, fetch_node!(state.nodes, node_id).name, state}
-  end
-
   def _node_value(server, node_id) do
     GenServer.call(server, {:value, node_id})
   end
 
   defp value_impl(node_id, state) do
-    value = fetch_node!(state.nodes, node_id).value
+    # Only character-data records (Text/Comment) carry a value; others have none.
+    value =
+      case fetch_node!(state.nodes, node_id) do
+        %{value: value} -> value
+        _other -> nil
+      end
+
     {:reply, value, state}
   end
 
@@ -929,7 +949,7 @@ defmodule DOM do
     text =
       state.nodes
       |> descendants(node_id)
-      |> Enum.filter(&(&1.type == Text))
+      |> Enum.filter(&match?(%NodeData.Text{}, &1))
       |> Enum.map_join("", & &1.value)
 
     {:reply, text, state}
@@ -956,7 +976,7 @@ defmodule DOM do
 
   defp new_text(nodes, parent_id, value) do
     text_id = make_ref()
-    :ets.insert(nodes, {text_id, %NodeData{type: Text, value: value, parent: parent_id}})
+    :ets.insert(nodes, {text_id, %NodeData.Text{value: value, parent: parent_id}})
     text_id
   end
 
@@ -985,7 +1005,9 @@ defmodule DOM do
   end
 
   defp descendant_entries(nodes, node_id) do
-    fetch_node!(nodes, node_id).children
+    nodes
+    |> fetch_node!(node_id)
+    |> NodeData.children()
     |> Enum.flat_map(&subtree(nodes, &1))
   end
 
@@ -1008,17 +1030,15 @@ defmodule DOM do
   end
 
   defp node_handle(nodes, node_id) do
-    nodes
-    |> fetch_node!(node_id)
-    |> Map.fetch!(:type)
-    |> struct!(server: self(), id: node_id)
+    type = nodes |> fetch_node!(node_id) |> NodeData.type()
+    %Node{server: self(), id: node_id, type: type}
   end
 
   defp subtree(nodes, node_id) do
     node_data = fetch_node!(nodes, node_id)
 
     [{node_id, node_data}] ++
-      Enum.flat_map(node_data.children, &subtree(nodes, &1))
+      Enum.flat_map(NodeData.children(node_data), &subtree(nodes, &1))
   end
 
   # ==========================================================================
@@ -1109,6 +1129,16 @@ defmodule DOM do
   end
 
   @impl true
+  def handle_call({:node_type, node_id}, _from, state) do
+    node_type_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:node_name, node_id}, _from, state) do
+    node_name_impl(node_id, state)
+  end
+
+  @impl true
   def handle_call({:get_elements_by_tag_name, node_id, name}, _from, state) do
     get_elements_by_tag_name_impl(node_id, name, state)
   end
@@ -1161,11 +1191,6 @@ defmodule DOM do
   @impl true
   def handle_call({:get_attribute_names, node_id}, _from, state) do
     get_attribute_names_impl(node_id, state)
-  end
-
-  @impl true
-  def handle_call({:document_type_name, node_id}, _from, state) do
-    document_type_name_impl(node_id, state)
   end
 
   @impl true

@@ -1,7 +1,7 @@
 defmodule DOM.Node.Element.AttributeTest do
   use ExUnit.Case, async: true
 
-  alias DOM.Node.Element
+  alias DOM.Element
 
   test "get_attribute returns nil for a missing attribute" do
     document = DOM.new()

@@ -1,8 +1,8 @@
 defmodule DOM.GetElementsByClassNameTest do
   use ExUnit.Case, async: true
 
+  alias DOM.Element
   alias DOM.Node
-  alias DOM.Node.Element
 
   setup do
     document = DOM.new()
@@ -43,7 +43,7 @@ defmodule DOM.GetElementsByClassNameTest do
     Element.set_attribute(inner, "class", "box")
     Node.append_child(outer, inner)
 
-    matches = Element.get_elements_by_class_name(outer, "box")
+    matches = DOM.get_elements_by_class_name(outer, "box")
 
     assert Enum.map(matches, & &1.id) == [inner.id]
   end
