@@ -154,6 +154,25 @@ defmodule DOM.CSS.SelectorTest do
       assert DOM.CSS.parse(":nth-child(n)") ==
                [{:compound, [{:pseudo_class, "nth-child", {1, 0}}]}]
     end
+
+    test "An+B of S form" do
+      assert DOM.CSS.parse(":nth-child(2n+1 of .item)") ==
+               [
+                 {:compound,
+                  [{:pseudo_class, "nth-child", {2, 1}, [{:compound, [{:class, "item"}]}]}]}
+               ]
+    end
+
+    test "of S with a selector list" do
+      assert DOM.CSS.parse(":nth-child(odd of .a, #b)") ==
+               [
+                 {:compound,
+                  [
+                    {:pseudo_class, "nth-child", {2, 1},
+                     [{:compound, [{:class, "a"}]}, {:compound, [{:id, "b"}]}]}
+                  ]}
+               ]
+    end
   end
 
   describe ":not()" do

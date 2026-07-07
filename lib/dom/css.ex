@@ -64,6 +64,7 @@ defmodule DOM.CSS do
     selector_list_inner: [tag: true],
     nth: [tag: true, post_traverse: :nth],
     nth_name: [collect: true],
+    nth_of: [tag: true],
     anb: [collect: true, post_traverse: :anb],
     attribute: [tag: true, post_traverse: :attribute],
     attr_op: [collect: true, post_traverse: :attr_op],
@@ -95,6 +96,7 @@ defmodule DOM.CSS do
           | {:attr, name(), attr_op(), String.t(), :i | :s}
           | {:pseudo_class, name()}
           | {:pseudo_class, name(), {integer(), integer()}}
+          | {:pseudo_class, name(), {integer(), integer()}, [complex()]}
           | {:pseudo_class, name(), {:selector_list, [complex()]}}
           | {:pseudo_class, name(), {:args, [String.t()]}}
           | {:not, t()}
@@ -177,6 +179,12 @@ defmodule DOM.CSS do
 
   defp simple_to_string({:pseudo_class, name, {a, b}}) when is_integer(a) and is_integer(b),
     do: ":" <> escape_ident(name) <> "(" <> anb_to_string(a, b) <> ")"
+
+  defp simple_to_string({:pseudo_class, name, {a, b}, list})
+       when is_integer(a) and is_integer(b),
+       do:
+         ":" <>
+           escape_ident(name) <> "(" <> anb_to_string(a, b) <> " of " <> to_string(list) <> ")"
 
   defp simple_to_string({:pseudo_class, name, {:selector_list, list}}),
     do: ":" <> escape_ident(name) <> "(" <> to_string(list) <> ")"
@@ -319,6 +327,17 @@ defmodule DOM.CSS do
 
   defp nth(rest, [{:nth, [":", name, "(", {a, b}, ")"]}], context, _loc, _col) do
     {rest, [{:pseudo_class, name, {a, b}}], context}
+  end
+
+  defp nth(
+         rest,
+         [{:nth, [":", name, "(", {a, b}, {:nth_of, of_parts}, ")"]}],
+         context,
+         _loc,
+         _col
+       ) do
+    {:selector_list_inner, list} = List.keyfind(of_parts, :selector_list_inner, 0)
+    {rest, [{:pseudo_class, name, {a, b}, list}], context}
   end
 
   defp negation(

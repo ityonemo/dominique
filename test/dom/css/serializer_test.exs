@@ -87,6 +87,8 @@ defmodule DOM.CSS.SerializerTest do
           ":first-child",
           ":nth-child(2n+1)",
           ":nth-child(odd)",
+          ":nth-child(2n+1 of .item)",
+          ":nth-child(odd of .a, #b)",
           ":not(.a, #b)",
           ":is(.a, #b)",
           ":where(a.x)",

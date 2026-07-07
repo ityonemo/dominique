@@ -38,7 +38,9 @@ functional_args <- ':' name '(' ws func_arg (comma func_arg)* ws ')'
 
 func_arg <- name
 
-nth <- ':' nth_name '(' ws anb ws ')'
+nth <- ':' nth_name '(' ws anb nth_of? ws ')'
+
+nth_of <- ws 'of' ' ' ws selector_list_inner
 
 nth_name <- 'nth-child' / 'nth-last-child' / 'nth-of-type' / 'nth-last-of-type'
 

@@ -45,13 +45,22 @@ defmodule DOM.CSS.SelectorPropertyTest do
   end
 
   defp nth do
-    gen all(
-          name <-
-            member_of(["nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]),
-          ab <- anb()
-        ) do
-      {:pseudo_class, name, ab}
-    end
+    one_of([
+      gen all(
+            name <-
+              member_of(["nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]),
+            ab <- anb()
+          ) do
+        {:pseudo_class, name, ab}
+      end,
+      gen all(
+            name <- member_of(["nth-child", "nth-last-child"]),
+            ab <- anb(),
+            list <- compound_list()
+          ) do
+        {:pseudo_class, name, ab, list}
+      end
+    ])
   end
 
   # Simple selectors, excluding type/universal (which lead a compound).
