@@ -11,6 +11,10 @@ defmodule DOM.HTML.Tokenizer do
 
   alias DOM.HTML.Token
 
+  # Track the grammar as a compile dependency so editing tokens.peg alone
+  # triggers regeneration (Pegasus.parser_from_file does not register it).
+  @external_resource Path.join(__DIR__, "tokens.peg")
+
   Pegasus.parser_from_file(Path.join(__DIR__, "tokens.peg"),
     tokens: [parser: :parse_tokens, post_traverse: :tokens],
     token: [],

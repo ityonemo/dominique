@@ -17,8 +17,8 @@ comment_data <- (!'-->' .)*
 
 doctype <- '<!' doctype_keyword doctype_ws doctype_name doctype_ids? ws '>'
 doctype_keyword <- [Dd][Oo][Cc][Tt][Yy][Pp][Ee]
-doctype_ws <- [ \t\r\n]+
-doctype_name <- [^ \t\r\n>]+
+doctype_ws <- [ \t\r\n\f]+
+doctype_name <- [^ \t\r\n\f>]+
 
 doctype_ids <- doctype_ws (doctype_public / doctype_system)
 doctype_public <- public_kw doctype_ws doctype_str (doctype_ws doctype_str)?
@@ -34,7 +34,7 @@ end_tag <- '</' tag_name ws '>'
 
 self_closing <- '/'
 
-tag_name <- [a-zA-Z] [^ \t\r\n/>]*
+tag_name <- [a-zA-Z] [^ \t\r\n\f/>]*
 
 # --- attributes -------------------------------------------------------------
 
@@ -42,14 +42,14 @@ attributes <- (ws attribute)*
 
 attribute <- attr_name (ws '=' ws attr_value)?
 
-attr_name <- [^ \t\r\n/>=]+
+attr_name <- [^ \t\r\n\f/>=]+
 
 attr_value <- dq_value / sq_value / uq_value
 dq_value <- '"' [^"]* '"'
 sq_value <- "'" [^']* "'"
-uq_value <- [^ \t\r\n>]+
+uq_value <- [^ \t\r\n\f>]+
 
-ws <- [ \t\r\n]*
+ws <- [ \t\r\n\f]*
 
 # --- character data ---------------------------------------------------------
 
