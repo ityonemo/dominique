@@ -22,6 +22,9 @@ defmodule DOM.Node.Element do
   @spec get_attribute_names(t()) :: [String.t()]
   @spec get_elements_by_tag_name(t(), String.t()) :: [t()]
   @spec get_elements_by_class_name(t(), String.t()) :: [t()]
+  @spec query_selector(t(), String.t()) :: t() | nil
+  @spec query_selector_all(t(), String.t()) :: [t()]
+  @spec matches(t(), String.t()) :: boolean()
 
   def create(document, local_name) do
     DOM._create(document, %NodeData{type: __MODULE__, local_name: local_name})
@@ -55,6 +58,18 @@ defmodule DOM.Node.Element do
 
   def get_elements_by_class_name(element, names) do
     GenServer.call(element.server, {:get_elements_by_class_name, element.id, names})
+  end
+
+  def query_selector(element, selector) do
+    DOM._query_selector(element.server, element.id, selector)
+  end
+
+  def query_selector_all(element, selector) do
+    DOM._query_selector_all(element.server, element.id, selector)
+  end
+
+  def matches(element, selector) do
+    DOM._matches(element.server, element.id, selector)
   end
 
   @impl DOM.Node

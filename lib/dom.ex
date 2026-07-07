@@ -76,6 +76,11 @@ defmodule DOM do
   @spec get_elements_by_tag_name(Document.t(), String.t()) :: [Element.t()]
   @spec get_element_by_id(Document.t(), String.t()) :: Element.t() | nil
   @spec get_elements_by_class_name(Document.t(), String.t()) :: [Element.t()]
+  @spec query_selector(Document.t(), String.t()) :: Element.t() | nil
+  @spec query_selector_all(Document.t(), String.t()) :: [Element.t()]
+  @spec _query_selector(GenServer.server(), reference(), String.t()) :: Element.t() | nil
+  @spec _query_selector_all(GenServer.server(), reference(), String.t()) :: [Element.t()]
+  @spec _matches(GenServer.server(), reference(), String.t()) :: boolean()
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
@@ -129,6 +134,26 @@ defmodule DOM do
 
   def get_elements_by_class_name(document, names) do
     GenServer.call(document.server, {:get_elements_by_class_name, document.id, names})
+  end
+
+  def query_selector(document, selector) do
+    _query_selector(document.server, document.id, selector)
+  end
+
+  def query_selector_all(document, selector) do
+    _query_selector_all(document.server, document.id, selector)
+  end
+
+  def _query_selector(server, node_id, selector) do
+    GenServer.call(server, {:query_selector, node_id, selector})
+  end
+
+  def _query_selector_all(server, node_id, selector) do
+    GenServer.call(server, {:query_selector_all, node_id, selector})
+  end
+
+  def _matches(server, node_id, selector) do
+    GenServer.call(server, {:matches, node_id, selector})
   end
 
   def _create(%Document{} = document, nodedata) do
@@ -784,6 +809,45 @@ defmodule DOM do
     {:reply, matches, state}
   end
 
+  defp query_selector_all_impl(root_id, selector, state) do
+    ids = query_ids(root_id, selector, state)
+    {:reply, Enum.map(ids, &node_handle(state.nodes, &1)), state}
+  end
+
+  defp query_selector_impl(root_id, selector, state) do
+    match =
+      case query_ids(root_id, selector, state) do
+        [id | _] -> node_handle(state.nodes, id)
+        [] -> nil
+      end
+
+    {:reply, match, state}
+  end
+
+  defp matches_impl(node_id, selector, state) do
+    matched =
+      selector
+      |> DOM.CSS.parse()
+      |> Enum.any?(fn complex -> DOM.CSS.match(complex, state.nodes, [node_id]) != [] end)
+
+    {:reply, matched, state}
+  end
+
+  # Descendant element ids of `root_id` matching `selector`, in tree order. Each
+  # complex in the selector list contributes its matches; the union is ordered by
+  # the tree-order descendant walk.
+  defp query_ids(root_id, selector, state) do
+    candidates = descendant_ids(state.nodes, root_id)
+
+    matched =
+      selector
+      |> DOM.CSS.parse()
+      |> Enum.flat_map(fn complex -> DOM.CSS.match(complex, state.nodes, candidates) end)
+      |> MapSet.new()
+
+    Enum.filter(candidates, &MapSet.member?(matched, &1))
+  end
+
   defp class_name_match?(nodes, node_id, wanted) do
     node = fetch_node!(nodes, node_id)
 
@@ -1035,6 +1099,21 @@ defmodule DOM do
   @impl true
   def handle_call({:get_elements_by_class_name, root_id, names}, _from, state) do
     get_elements_by_class_name_impl(root_id, names, state)
+  end
+
+  @impl true
+  def handle_call({:query_selector, root_id, selector}, _from, state) do
+    query_selector_impl(root_id, selector, state)
+  end
+
+  @impl true
+  def handle_call({:query_selector_all, root_id, selector}, _from, state) do
+    query_selector_all_impl(root_id, selector, state)
+  end
+
+  @impl true
+  def handle_call({:matches, node_id, selector}, _from, state) do
+    matches_impl(node_id, selector, state)
   end
 
   @impl true
