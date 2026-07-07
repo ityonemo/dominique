@@ -98,6 +98,8 @@ defmodule DOM do
   @spec _element_get_attribute_names(GenServer.server(), reference()) :: [String.t()]
   @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
   @spec _node_text_content(GenServer.server(), reference()) :: String.t()
+  @spec _node_set_text_content(GenServer.server(), reference(), String.t()) :: :ok
+  @spec _node_set_value(GenServer.server(), reference(), String.t()) :: :ok
 
   # ==========================================================================
   # Implementations
@@ -933,6 +935,41 @@ defmodule DOM do
     {:reply, text, state}
   end
 
+  def _node_set_text_content(server, node_id, value) do
+    GenServer.call(server, {:set_text_content, node_id, value})
+  end
+
+  # Replace all children with a single Text node (none when value is empty).
+  defp set_text_content_impl(node_id, value, state) do
+    node = fetch_node!(state.nodes, node_id)
+    Enum.each(node.children, &delete_subtree(state.nodes, &1))
+    children = if value == "", do: [], else: [new_text(state.nodes, node_id, value)]
+    put_node(state.nodes, node_id, %{node | children: children})
+    {:reply, :ok, state}
+  end
+
+  defp delete_subtree(nodes, node_id) do
+    nodes
+    |> subtree(node_id)
+    |> Enum.each(fn {id, _node_data} -> :ets.delete(nodes, id) end)
+  end
+
+  defp new_text(nodes, parent_id, value) do
+    text_id = make_ref()
+    :ets.insert(nodes, {text_id, %NodeData{type: Text, value: value, parent: parent_id}})
+    text_id
+  end
+
+  def _node_set_value(server, node_id, value) do
+    GenServer.call(server, {:set_value, node_id, value})
+  end
+
+  defp set_value_impl(node_id, value, state) do
+    node = fetch_node!(state.nodes, node_id)
+    put_node(state.nodes, node_id, %{node | value: value})
+    {:reply, :ok, state}
+  end
+
   # Descendant node_data in tree order, excluding the node itself.
   defp descendants(nodes, node_id) do
     nodes
@@ -1139,5 +1176,15 @@ defmodule DOM do
   @impl true
   def handle_call({:text_content, node_id}, _from, state) do
     text_content_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:set_text_content, node_id, value}, _from, state) do
+    set_text_content_impl(node_id, value, state)
+  end
+
+  @impl true
+  def handle_call({:set_value, node_id, value}, _from, state) do
+    set_value_impl(node_id, value, state)
   end
 end

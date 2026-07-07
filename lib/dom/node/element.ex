@@ -109,4 +109,9 @@ defmodule DOM.Node.Element do
 
   @impl DOM.Node
   def text_content(element), do: DOM._node_text_content(element.server, element.id)
+
+  @impl DOM.Node
+  def set_text_content(element, value) do
+    DOM._node_set_text_content(element.server, element.id, value)
+  end
 end

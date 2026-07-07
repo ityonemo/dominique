@@ -61,4 +61,81 @@ defmodule DOM.Node.TextContentTest do
 
     assert Node.text_content(doctype) == nil
   end
+
+  describe "set_text_content/2" do
+    test "replaces an element's children with a single text node" do
+      document = DOM.new()
+      root = DOM.create_element(document, "root")
+      Node.append_child(root, DOM.create_element(document, "old"))
+      Node.append_child(root, DOM.create_text_node(document, "gone"))
+
+      Node.set_text_content(root, "fresh")
+
+      assert Node.text_content(root) == "fresh"
+      assert [text] = Node.child_nodes(root)
+      assert Node.value(text) == "fresh"
+      assert Node.parent_node(text) == root
+    end
+
+    test "an empty value removes all children and inserts nothing" do
+      document = DOM.new()
+      root = DOM.create_element(document, "root")
+      Node.append_child(root, DOM.create_text_node(document, "x"))
+
+      Node.set_text_content(root, "")
+
+      assert Node.child_nodes(root) == []
+      assert Node.text_content(root) == ""
+    end
+
+    test "replaces a document fragment's children" do
+      document = DOM.new()
+      fragment = DOM.create_document_fragment(document)
+      Node.append_child(fragment, DOM.create_element(document, "old"))
+
+      Node.set_text_content(fragment, "frag")
+
+      assert Node.text_content(fragment) == "frag"
+      assert [text] = Node.child_nodes(fragment)
+      assert Node.value(text) == "frag"
+    end
+
+    test "sets a text node's own value" do
+      document = DOM.new()
+      text = DOM.create_text_node(document, "old")
+
+      Node.set_text_content(text, "new")
+
+      assert Node.value(text) == "new"
+      assert Node.text_content(text) == "new"
+    end
+
+    test "sets a comment node's own value" do
+      document = DOM.new()
+      comment = DOM.create_comment(document, "old")
+
+      Node.set_text_content(comment, "new")
+
+      assert Node.value(comment) == "new"
+    end
+
+    test "is a no-op on a document" do
+      document = DOM.new()
+      root = DOM.create_element(document, "root")
+      Node.append_child(document, root)
+
+      Node.set_text_content(document, "ignored")
+
+      assert Node.child_nodes(document) == [root]
+    end
+
+    test "is a no-op on a document type" do
+      document = DOM.new()
+      doctype = DOM.create_document_type(document, "html", "", "")
+
+      Node.set_text_content(doctype, "ignored")
+
+      assert Node.text_content(doctype) == nil
+    end
+  end
 end

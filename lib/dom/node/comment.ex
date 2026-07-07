@@ -35,4 +35,6 @@ defmodule DOM.Node.Comment do
   def node_name(_comment), do: "#comment"
   @impl DOM.Node
   def text_content(comment), do: value(comment)
+  @impl DOM.Node
+  def set_text_content(comment, value), do: DOM._node_set_value(comment.server, comment.id, value)
 end

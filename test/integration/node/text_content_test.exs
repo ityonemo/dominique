@@ -56,5 +56,56 @@ defmodule Integration.Node.TextContentTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const root = document.createElement("root");
+      root.appendChild(document.createElement("old"));
+      root.appendChild(document.createTextNode("gone"));
+      root.textContent = "fresh";
+
+      const emptied = document.createElement("emptied");
+      emptied.appendChild(document.createTextNode("x"));
+      emptied.textContent = "";
+
+      const text = document.createTextNode("old");
+      text.textContent = "new";
+
+      return {
+        rootTextContent: root.textContent,
+        rootChildCount: root.childNodes.length,
+        rootChildIsText: root.firstChild.nodeType,
+        emptiedChildCount: emptied.childNodes.length,
+        textValue: text.textContent
+      };
+    });
+    """
+
+    test "setting textContent matches the browser", %{js: expected} do
+      document = DOM.new()
+      root = DOM.create_element(document, "root")
+      Node.append_child(root, DOM.create_element(document, "old"))
+      Node.append_child(root, DOM.create_text_node(document, "gone"))
+      Node.set_text_content(root, "fresh")
+
+      emptied = DOM.create_element(document, "emptied")
+      Node.append_child(emptied, DOM.create_text_node(document, "x"))
+      Node.set_text_content(emptied, "")
+
+      text = DOM.create_text_node(document, "old")
+      Node.set_text_content(text, "new")
+
+      [root_child] = Node.child_nodes(root)
+
+      result = %{
+        "rootTextContent" => Node.text_content(root),
+        "rootChildCount" => root |> Node.child_nodes() |> length(),
+        "rootChildIsText" => Node.node_type(root_child),
+        "emptiedChildCount" => emptied |> Node.child_nodes() |> length(),
+        "textValue" => Node.text_content(text)
+      }
+
+      assert result == expected
+    end
   end
 end

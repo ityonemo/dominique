@@ -51,4 +51,7 @@ defmodule DOM.Node.Document do
 
   @impl DOM.Node
   def text_content(_document), do: nil
+
+  @impl DOM.Node
+  def set_text_content(_document, _value), do: :ok
 end

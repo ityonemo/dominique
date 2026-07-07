@@ -58,4 +58,9 @@ defmodule DOM.Node.DocumentFragment do
 
   @impl DOM.Node
   def text_content(fragment), do: DOM._node_text_content(fragment.server, fragment.id)
+
+  @impl DOM.Node
+  def set_text_content(fragment, value) do
+    DOM._node_set_text_content(fragment.server, fragment.id, value)
+  end
 end

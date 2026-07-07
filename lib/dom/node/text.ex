@@ -35,4 +35,6 @@ defmodule DOM.Node.Text do
   def node_name(_text), do: "#text"
   @impl DOM.Node
   def text_content(text), do: value(text)
+  @impl DOM.Node
+  def set_text_content(text, value), do: DOM._node_set_value(text.server, text.id, value)
 end
