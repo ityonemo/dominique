@@ -51,4 +51,14 @@ attr_string <- '"' [^"]* '"' / "'" [^']* "'"
 
 attr_flag <- ' ' [is]
 
-name <- [-_a-zA-Z] [-_a-zA-Z0-9]*
+name <- name_char+
+
+name_char <- escape / plain_char
+
+plain_char <- [-_a-zA-Z0-9]
+
+escape <- '\\' hex_escape / '\\' char_escape
+
+hex_escape <- [0-9a-fA-F] [0-9a-fA-F]? [0-9a-fA-F]? [0-9a-fA-F]? [0-9a-fA-F]? [0-9a-fA-F]? ' '?
+
+char_escape <- [^0-9a-fA-F]

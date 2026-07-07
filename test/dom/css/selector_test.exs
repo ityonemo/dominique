@@ -24,6 +24,22 @@ defmodule DOM.CSS.SelectorTest do
       assert DOM.CSS.parse("data-item_2") == [{:compound, [{:type, "data-item_2"}]}]
       assert DOM.CSS.parse(".is-active_1") == [{:compound, [{:class, "is-active_1"}]}]
     end
+
+    test "decodes a character escape in a class name" do
+      assert DOM.CSS.parse(~S(.foo\.bar)) == [{:compound, [{:class, "foo.bar"}]}]
+    end
+
+    test "decodes a hex escape with a trailing space in an id" do
+      assert DOM.CSS.parse(~S(#a\3A b)) == [{:compound, [{:id, "a:b"}]}]
+    end
+
+    test "decodes a hex escape without a trailing space" do
+      assert DOM.CSS.parse(~S(.\41)) == [{:compound, [{:class, "A"}]}]
+    end
+
+    test "decodes an escaped leading digit" do
+      assert DOM.CSS.parse(~S(.\31 23)) == [{:compound, [{:class, "123"}]}]
+    end
   end
 
   describe "attribute selectors" do

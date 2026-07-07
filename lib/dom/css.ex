@@ -61,7 +61,11 @@ defmodule DOM.CSS do
     attr_value: [tag: true, post_traverse: :attr_value],
     attr_string: [collect: true, post_traverse: :attr_string],
     attr_flag: [collect: true, post_traverse: :attr_flag],
-    name: [collect: true]
+    name: [tag: true, post_traverse: :name],
+    plain_char: [collect: true],
+    escape: [post_traverse: :escape],
+    hex_escape: [collect: true, tag: :hex_escape],
+    char_escape: [collect: true, tag: :char_escape]
   )
 
   # ==========================================================================
@@ -136,26 +140,28 @@ defmodule DOM.CSS do
   end
 
   defp simple_to_string(:universal), do: "*"
-  defp simple_to_string({:type, name}), do: name
-  defp simple_to_string({:id, name}), do: "#" <> name
-  defp simple_to_string({:class, name}), do: "." <> name
-  defp simple_to_string({:attr, name}), do: "[" <> name <> "]"
+  defp simple_to_string({:type, name}), do: escape_ident(name)
+  defp simple_to_string({:id, name}), do: "#" <> escape_ident(name)
+  defp simple_to_string({:class, name}), do: "." <> escape_ident(name)
+  defp simple_to_string({:attr, name}), do: "[" <> escape_ident(name) <> "]"
 
   defp simple_to_string({:attr, name, op, value}) do
-    "[" <> name <> op_to_string(op) <> quote_value(value) <> "]"
+    "[" <> escape_ident(name) <> op_to_string(op) <> quote_value(value) <> "]"
   end
 
   defp simple_to_string({:attr, name, op, value, flag}) do
-    "[" <> name <> op_to_string(op) <> quote_value(value) <> " " <> Atom.to_string(flag) <> "]"
+    "[" <>
+      escape_ident(name) <>
+      op_to_string(op) <> quote_value(value) <> " " <> Atom.to_string(flag) <> "]"
   end
 
-  defp simple_to_string({:pseudo_class, name}), do: ":" <> name
+  defp simple_to_string({:pseudo_class, name}), do: ":" <> escape_ident(name)
 
   defp simple_to_string({:pseudo_class, name, {a, b}}),
-    do: ":" <> name <> "(" <> anb_to_string(a, b) <> ")"
+    do: ":" <> escape_ident(name) <> "(" <> anb_to_string(a, b) <> ")"
 
   defp simple_to_string({:not, list}), do: ":not(" <> to_string(list) <> ")"
-  defp simple_to_string({:pseudo_element, name}), do: "::" <> name
+  defp simple_to_string({:pseudo_element, name}), do: "::" <> escape_ident(name)
 
   @op_strings %{
     eq: "=",
@@ -169,6 +175,24 @@ defmodule DOM.CSS do
   defp op_to_string(op), do: Map.fetch!(@op_strings, op)
 
   defp quote_value(value), do: "\"" <> value <> "\""
+
+  # Re-escape an identifier so it round-trips: a leading digit is hex-escaped,
+  # and any non [-_a-zA-Z0-9] character is backslash-escaped.
+  defp escape_ident(<<digit, rest::binary>>) when digit in ?0..?9 do
+    "\\3" <> <<digit>> <> " " <> escape_body(rest)
+  end
+
+  defp escape_ident(ident), do: escape_body(ident)
+
+  defp escape_body(ident) do
+    ident
+    |> String.to_charlist()
+    |> Enum.map_join(&escape_char/1)
+  end
+
+  defp escape_char(char) when char in ?a..?z or char in ?A..?Z or char in ?0..?9, do: <<char>>
+  defp escape_char(char) when char in [?-, ?_], do: <<char>>
+  defp escape_char(char), do: "\\" <> <<char::utf8>>
 
   defp anb_to_string(0, b), do: Integer.to_string(b)
   defp anb_to_string(a, 0), do: coeff_to_string(a) <> "n"
@@ -308,4 +332,21 @@ defmodule DOM.CSS do
 
   defp anb_b(""), do: 0
   defp anb_b(rest), do: String.to_integer(rest)
+
+  # name_chars arrive in source order; each is a decoded single-character string
+  # (plain char) or the decoded escape. Join them into the ident value.
+  defp name(rest, [{:name, chars}], context, _loc, _col) do
+    {rest, [IO.iodata_to_binary(chars)], context}
+  end
+
+  # A hex escape ("\" + 1-6 hex digits + optional trailing space) decodes to the
+  # code point; a char escape ("\" + one non-hex char) is that literal char.
+  defp escape(rest, [{:hex_escape, [hex]}, "\\"], context, _loc, _col) do
+    codepoint = hex |> String.trim() |> String.to_integer(16)
+    {rest, [<<codepoint::utf8>>], context}
+  end
+
+  defp escape(rest, [{:char_escape, [char]}, "\\"], context, _loc, _col) do
+    {rest, [char], context}
+  end
 end

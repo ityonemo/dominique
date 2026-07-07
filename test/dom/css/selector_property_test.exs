@@ -6,11 +6,13 @@ defmodule DOM.CSS.SelectorPropertyTest do
   # valid selector), so the round-trip invariants below exercise the whole
   # parse/serialize pipeline without a browser.
 
-  # A CSS identifier: starts with a letter/_ , then letters/digits/-/_.
+  # A CSS identifier value (the decoded AST form). Includes plain idents, a
+  # leading digit, and characters that force escaping on serialization, so the
+  # round-trip exercises escape/unescape.
   defp ident do
     gen all(
-          first <- string([?a..?z, ?A..?Z, ?_], length: 1),
-          rest <- string([?a..?z, ?A..?Z, ?0..?9, ?-, ?_], max_length: 6)
+          first <- string([?a..?z, ?A..?Z, ?_, ?0..?9], length: 1),
+          rest <- string([?a..?z, ?A..?Z, ?0..?9, ?-, ?_, ?., ?:], max_length: 6)
         ) do
       first <> rest
     end
