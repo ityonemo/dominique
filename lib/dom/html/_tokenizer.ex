@@ -19,8 +19,12 @@ defmodule DOM.HTML.Tokenizer do
     doctype: [tag: true, post_traverse: :doctype],
     doctype_keyword: [ignore: true],
     doctype_ws: [ignore: true],
-    doctype_name: [collect: true],
-    doctype_rest: [ignore: true],
+    doctype_name: [collect: true, post_traverse: :doctype_name],
+    doctype_public: [tag: true, post_traverse: :doctype_public],
+    doctype_system: [tag: true, post_traverse: :doctype_system],
+    public_kw: [ignore: true],
+    system_kw: [ignore: true],
+    doctype_str: [collect: true, post_traverse: :doctype_str],
     start_tag: [tag: true, post_traverse: :start_tag],
     end_tag: [tag: true, post_traverse: :end_tag],
     self_closing: [token: :self_closing],
@@ -38,7 +42,7 @@ defmodule DOM.HTML.Tokenizer do
 
   @spec tokenize(String.t()) :: [struct()]
   def tokenize(html) do
-    case parse_tokens(html) do
+    case html |> normalize_newlines() |> parse_tokens() do
       {:ok, tokens, "", _context, _loc, _offset} ->
         tokens
 
@@ -63,8 +67,48 @@ defmodule DOM.HTML.Tokenizer do
     {rest, [%Token.Comment{data: data}], context}
   end
 
-  defp doctype(rest, [{:doctype, ["<!", name, ">"]}], context, _loc, _col) do
-    {rest, [%Token.Doctype{name: String.downcase(name)}], context}
+  defp doctype(rest, [{:doctype, args}], context, _loc, _col) do
+    name =
+      Enum.find_value(args, fn
+        {:doctype_name, n} -> n
+        _ -> nil
+      end)
+
+    public_id =
+      Enum.find_value(args, fn
+        {:public_id, id} -> id
+        _ -> nil
+      end)
+
+    system_id =
+      Enum.find_value(args, fn
+        {:system_id, id} -> id
+        _ -> nil
+      end)
+
+    token = %Token.Doctype{name: name, public_id: public_id, system_id: system_id}
+    {rest, [token], context}
+  end
+
+  defp doctype_name(rest, [name], context, _loc, _col) do
+    {rest, [{:doctype_name, String.downcase(name)}], context}
+  end
+
+  # PUBLIC "pub" "sys"?  -> a public id and optionally a system id.
+  defp doctype_public(rest, [{:doctype_public, [public]}], context, _loc, _col) do
+    {rest, [{:public_id, public}], context}
+  end
+
+  defp doctype_public(rest, [{:doctype_public, [public, system]}], context, _loc, _col) do
+    {rest, [{:system_id, system}, {:public_id, public}], context}
+  end
+
+  defp doctype_system(rest, [{:doctype_system, [system]}], context, _loc, _col) do
+    {rest, [{:system_id, system}], context}
+  end
+
+  defp doctype_str(rest, [str], context, _loc, _col) do
+    {rest, [String.slice(str, 1..-2//1)], context}
   end
 
   defp start_tag(rest, [{:start_tag, args}], context, _loc, _col) do
@@ -137,4 +181,9 @@ defmodule DOM.HTML.Tokenizer do
   defp unquote_value(<<?", rest::binary>>), do: String.trim_trailing(rest, "\"")
   defp unquote_value(<<?', rest::binary>>), do: String.trim_trailing(rest, "'")
   defp unquote_value(value), do: value
+
+  # WHATWG input preprocessing: CRLF and lone CR both normalize to LF.
+  defp normalize_newlines(html) do
+    html |> String.replace("\r\n", "\n") |> String.replace("\r", "\n")
+  end
 end

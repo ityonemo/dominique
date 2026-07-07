@@ -15,11 +15,17 @@ token <- comment / doctype / end_tag / start_tag / character
 comment <- '<!--' comment_data '-->'
 comment_data <- (!'-->' .)*
 
-doctype <- '<!' doctype_keyword doctype_ws doctype_name doctype_rest '>'
+doctype <- '<!' doctype_keyword doctype_ws doctype_name doctype_ids? ws '>'
 doctype_keyword <- [Dd][Oo][Cc][Tt][Yy][Pp][Ee]
-doctype_ws <- ' '+
-doctype_name <- [^ >]+
-doctype_rest <- (!'>' .)*
+doctype_ws <- [ \t\r\n]+
+doctype_name <- [^ \t\r\n>]+
+
+doctype_ids <- doctype_ws (doctype_public / doctype_system)
+doctype_public <- public_kw doctype_ws doctype_str (doctype_ws doctype_str)?
+doctype_system <- system_kw doctype_ws doctype_str
+public_kw <- [Pp][Uu][Bb][Ll][Ii][Cc]
+system_kw <- [Ss][Yy][Ss][Tt][Ee][Mm]
+doctype_str <- '"' [^"]* '"' / "'" [^']* "'"
 
 # --- tags -------------------------------------------------------------------
 
