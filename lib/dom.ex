@@ -74,6 +74,7 @@ defmodule DOM do
   @spec create_document_type(Document.t(), String.t(), String.t(), String.t()) ::
           DocumentType.t()
   @spec get_elements_by_tag_name(Document.t(), String.t()) :: [Element.t()]
+  @spec get_element_by_id(Document.t(), String.t()) :: Element.t() | nil
   @spec _create(Document.t(), NodeData.t()) :: Node.t()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
@@ -119,6 +120,10 @@ defmodule DOM do
 
   def get_elements_by_tag_name(document, name) do
     GenServer.call(document.server, {:get_elements_by_tag_name, document.id, name})
+  end
+
+  def get_element_by_id(document, id) do
+    GenServer.call(document.server, {:get_element_by_id, document.id, id})
   end
 
   def _create(%Document{} = document, nodedata) do
@@ -747,6 +752,17 @@ defmodule DOM do
     node.type == Element and (name == "*" or node.local_name == name)
   end
 
+  defp get_element_by_id_impl(root_id, id, state) do
+    match_id =
+      Enum.find(descendant_ids(state.nodes, root_id), fn node_id ->
+        node = fetch_node!(state.nodes, node_id)
+        node.type == Element and List.keyfind(node.attributes, "id", 0) == {"id", id}
+      end)
+
+    match = if match_id, do: node_handle(state.nodes, match_id)
+    {:reply, match, state}
+  end
+
   def _element_get_attribute(server, node_id, name) do
     GenServer.call(server, {:get_attribute, node_id, name})
   end
@@ -974,6 +990,11 @@ defmodule DOM do
   @impl true
   def handle_call({:get_elements_by_tag_name, node_id, name}, _from, state) do
     get_elements_by_tag_name_impl(node_id, name, state)
+  end
+
+  @impl true
+  def handle_call({:get_element_by_id, root_id, id}, _from, state) do
+    get_element_by_id_impl(root_id, id, state)
   end
 
   @impl true
