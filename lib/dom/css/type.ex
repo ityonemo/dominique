@@ -1,6 +1,7 @@
 defmodule DOM.CSS.Type do
   @moduledoc "A type selector such as `div`, optionally namespaced."
 
+  alias DOM.CSS.Query
   alias DOM.CSS.Serialize
 
   @enforce_keys [:name]
@@ -11,7 +12,9 @@ defmodule DOM.CSS.Type do
   @type t :: %__MODULE__{name: String.t(), namespace: DOM.CSS.namespace() | nil}
 
   @impl DOM.CSS
-  def match(_selector, _nodes, _candidate_ids), do: raise("unimplemented")
+  def match(%{name: name}, nodes, candidate_ids) do
+    Query.type(nodes, candidate_ids, name)
+  end
 
   defimpl String.Chars do
     def to_string(%{name: name, namespace: nil}), do: Serialize.escape_ident(name)
