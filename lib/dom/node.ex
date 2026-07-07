@@ -153,23 +153,25 @@ defmodule DOM.Node do
   @doc "The node's parent, or `nil`."
   @spec parent_node(t()) :: t() | nil
   def parent_node(%__MODULE__{} = node) do
-    case DOM._select(node.server, parent_id_spec(node.id)) do
-      [nil] -> nil
-      [parent_id] -> handle(node.server, parent_id)
-    end
+    # Two dependent reads (parent id, then that id's handle) run in one atomic op
+    # so the tree can't be mutated between them.
+    DOM._atomic_ets_op(node.server, fn nodes ->
+      case :ets.select(nodes, parent_id_spec(node.id)) do
+        [nil] ->
+          nil
+
+        [parent_id] ->
+          [handle] = :ets.select(nodes, handle_spec(node.server, parent_id))
+          handle
+      end
+    end)
   end
 
   defmatchspecp parent_id_spec(node_id) do
     {^node_id, %{parent: parent}} -> parent
   end
 
-  # Builds the `%DOM.Node{}` handle for `node_id` in one hit — the spec body maps
-  # each record's `__struct__` to its handle `type`.
-  defp handle(server, node_id) do
-    [handle] = DOM._select(server, handle_spec(server, node_id))
-    handle
-  end
-
+  # Maps each record's `__struct__` to its `%DOM.Node{}` handle in one hit.
   defmatchspecp handle_spec(server, node_id) do
     {^node_id, %{__struct__: NodeData.Element}} ->
       %DOM.Node{server: server, id: node_id, type: :element}
