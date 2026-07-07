@@ -51,30 +51,71 @@ defmodule DOM.HTML.Entities do
   # A reference begins just after `&`. Numeric: `#...`. Named: a table entry.
   # An unrecognized `&` is left literal.
   defp reference(<<?#, x, rest::binary>>, _attr?) when x in [?x, ?X] do
-    numeric(rest, 16, &hex_digit?/1)
+    numeric(rest, 16, &hex_digit?/1, <<?#, x>>)
   end
 
   defp reference(<<?#, rest::binary>>, _attr?) do
-    numeric(rest, 10, &dec_digit?/1)
+    numeric(rest, 10, &dec_digit?/1, "#")
   end
 
   defp reference(rest, attr?), do: named(rest, attr?)
 
-  # Numeric reference: consume the digits, resolve the code point, drop one
-  # trailing `;`. An empty digit run leaves the `&#` literal.
-  defp numeric(rest, base, digit?) do
+  # Numeric reference: consume the digits, resolve the code point (with the
+  # WHATWG numeric-character-reference-end-state fixups), drop one trailing `;`.
+  # An empty digit run leaves the `&` + the consumed prefix literal.
+  defp numeric(rest, base, digit?, prefix) do
     {digits, rest} = take_while(rest, digit?)
 
     if digits == "" do
-      {prefix(base), rest}
+      {"&" <> prefix, rest}
     else
       code = String.to_integer(digits, base)
-      {<<code::utf8>>, drop_semicolon(rest)}
+      {<<numeric_codepoint(code)::utf8>>, drop_semicolon(rest)}
     end
   end
 
-  defp prefix(16), do: "&#x"
-  defp prefix(10), do: "&#"
+  # C1 control (0x80–0x9F) -> Windows-1252 code point mappings (WHATWG table).
+  @c1_replacements %{
+    0x80 => 0x20AC,
+    0x82 => 0x201A,
+    0x83 => 0x0192,
+    0x84 => 0x201E,
+    0x85 => 0x2026,
+    0x86 => 0x2020,
+    0x87 => 0x2021,
+    0x88 => 0x02C6,
+    0x89 => 0x2030,
+    0x8A => 0x0160,
+    0x8B => 0x2039,
+    0x8C => 0x0152,
+    0x8E => 0x017D,
+    0x91 => 0x2018,
+    0x92 => 0x2019,
+    0x93 => 0x201C,
+    0x94 => 0x201D,
+    0x95 => 0x2022,
+    0x96 => 0x2013,
+    0x97 => 0x2014,
+    0x98 => 0x02DC,
+    0x99 => 0x2122,
+    0x9A => 0x0161,
+    0x9B => 0x203A,
+    0x9C => 0x0153,
+    0x9E => 0x017E,
+    0x9F => 0x0178
+  }
+
+  # WHATWG "numeric character reference end state" replacements: NULL, out-of-
+  # range, and surrogates become U+FFFD; the C1 controls (0x80–0x9F) map to their
+  # Windows-1252 equivalents.
+  defp numeric_codepoint(0), do: 0xFFFD
+  defp numeric_codepoint(code) when code > 0x10FFFF, do: 0xFFFD
+  defp numeric_codepoint(code) when code in 0xD800..0xDFFF, do: 0xFFFD
+
+  defp numeric_codepoint(code) when is_map_key(@c1_replacements, code),
+    do: Map.fetch!(@c1_replacements, code)
+
+  defp numeric_codepoint(code), do: code
 
   # Named reference: longest match against the table over the candidate name
   # (letters/digits, then an optional `;`). Falls back to a literal `&`.

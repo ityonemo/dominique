@@ -38,7 +38,7 @@ defmodule DOM.HTML.TreeBuilder do
   @spec build([struct()]) :: Node.t()
   def build(tokens) do
     state = %__MODULE__{document: DOM.new(), mode: :initial}
-    tokens |> Enum.reduce(state, &step/2) |> Map.fetch!(:document)
+    tokens |> Enum.reduce(state, &step/2) |> eof() |> Map.fetch!(:document)
   end
 
   # A character token may carry a run of text; the spec processes one character
@@ -47,6 +47,31 @@ defmodule DOM.HTML.TreeBuilder do
   # run in one clause.
   defp step(%Token.Character{} = token, state), do: process_characters(state.mode, token, state)
   defp step(token, state), do: process(state.mode, token, state)
+
+  # End-of-file: the pre-body insertion modes imply the missing elements (so an
+  # empty or head-only document still yields <html><head><body>). Each mode's EOF
+  # rule follows its "anything else" path; we chain the implied elements.
+  defp eof(%__MODULE__{mode: :initial} = state), do: eof(%{state | mode: :before_html})
+
+  defp eof(%__MODULE__{mode: :before_html} = state) do
+    html = create_element_for(%Token.StartTag{name: "html"}, state)
+    append(state.document, html)
+    eof(%{state | open_elements: [html], mode: :before_head})
+  end
+
+  defp eof(%__MODULE__{mode: :before_head} = state) do
+    {head, state} = insert_html_element(%Token.StartTag{name: "head"}, state)
+    eof(%{state | head: head, mode: :in_head})
+  end
+
+  defp eof(%__MODULE__{mode: :in_head} = state), do: eof(%{pop(state) | mode: :after_head})
+
+  defp eof(%__MODULE__{mode: :after_head} = state) do
+    {_body, state} = insert_html_element(%Token.StartTag{name: "body"}, state)
+    %{state | mode: :in_body}
+  end
+
+  defp eof(state), do: state
 
   # Reprocess a token in `mode` after a mode switch — dispatches by token type so
   # character tokens go through process_characters (the spec's "reprocess the
