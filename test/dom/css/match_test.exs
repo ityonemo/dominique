@@ -172,4 +172,71 @@ defmodule DOM.CSS.MatchTest do
       assert matched(ctx.table, compound("b.other"), ctx.candidates) == MapSet.new()
     end
   end
+
+  describe "combinators" do
+    # section > ul > li.item  and siblings:  h1 + p , h1 ~ p
+    setup do
+      {table, ids} =
+        build(
+          element(
+            "section",
+            [],
+            [
+              element("h1", [], [], as: :h1),
+              element(
+                "ul",
+                [],
+                [
+                  element("li", [{"class", "item"}], [], as: :li1),
+                  element("li", [{"class", "item"}], [element("span", [], [], as: :span)],
+                    as: :li2
+                  )
+                ],
+                as: :ul
+              ),
+              element("p", [], [], as: :p1),
+              element("p", [], [], as: :p2)
+            ],
+            as: :section
+          )
+        )
+
+      all = for i <- 0..8, do: ids[i]
+      %{table: table, ids: ids, all: all}
+    end
+
+    defp complex(selector), do: selector |> DOM.CSS.parse() |> hd()
+
+    test "child combinator", ctx do
+      assert matched(ctx.table, complex("ul > li"), ctx.all) ==
+               MapSet.new([ctx.ids[:li1], ctx.ids[:li2]])
+    end
+
+    test "child combinator does not match grandchildren", ctx do
+      assert matched(ctx.table, complex("section > li"), ctx.all) == MapSet.new()
+    end
+
+    test "descendant combinator matches at any depth", ctx do
+      assert matched(ctx.table, complex("section span"), ctx.all) == MapSet.new([ctx.ids[:span]])
+    end
+
+    test "descendant chained with child", ctx do
+      assert matched(ctx.table, complex("section li.item"), ctx.all) ==
+               MapSet.new([ctx.ids[:li1], ctx.ids[:li2]])
+    end
+
+    test "next-sibling combinator matches only the immediate sibling", ctx do
+      assert matched(ctx.table, complex("ul + p"), ctx.all) == MapSet.new([ctx.ids[:p1]])
+    end
+
+    test "subsequent-sibling combinator matches all following siblings", ctx do
+      assert matched(ctx.table, complex("h1 ~ p"), ctx.all) ==
+               MapSet.new([ctx.ids[:p1], ctx.ids[:p2]])
+    end
+
+    test "three-part chain", ctx do
+      assert matched(ctx.table, complex("section > ul > li"), ctx.all) ==
+               MapSet.new([ctx.ids[:li1], ctx.ids[:li2]])
+    end
+  end
 end

@@ -59,6 +59,48 @@ defmodule DOM.CSS.Query do
     intersect(matched, candidates)
   end
 
+  @doc "The parent id of `node_id`, or `nil`."
+  @spec parent(:ets.tid(), reference()) :: reference() | nil
+  def parent(nodes, node_id) do
+    case select(nodes, parent_spec(node_id)) do
+      [parent_id] -> parent_id
+      [] -> nil
+    end
+  end
+
+  @doc "All ancestor ids of `node_id`, nearest first."
+  @spec ancestors(:ets.tid(), reference()) :: [reference()]
+  def ancestors(nodes, node_id) do
+    case parent(nodes, node_id) do
+      nil -> []
+      parent_id -> [parent_id | ancestors(nodes, parent_id)]
+    end
+  end
+
+  @doc "Element children of `node_id`, in document order."
+  @spec element_children(:ets.tid(), reference()) :: [reference()]
+  def element_children(nodes, node_id) do
+    case select(nodes, children_spec(node_id)) do
+      [children] -> Enum.filter(children, &element?(nodes, &1))
+      [] -> []
+    end
+  end
+
+  @doc "Preceding element siblings of `node_id`, nearest first."
+  @spec prev_element_siblings(:ets.tid(), reference()) :: [reference()]
+  def prev_element_siblings(nodes, node_id) do
+    case parent(nodes, node_id) do
+      nil ->
+        []
+
+      parent_id ->
+        nodes
+        |> element_children(parent_id)
+        |> Enum.take_while(&(&1 != node_id))
+        |> Enum.reverse()
+    end
+  end
+
   # ==========================================================================
   # Match specs
   # ==========================================================================
@@ -113,11 +155,61 @@ defmodule DOM.CSS.Query do
       {id, attributes}
   end
 
+  defmatchspecp parent_spec(node_id) do
+    {^node_id,
+     %NodeData{
+       type: _,
+       local_name: _,
+       name: _,
+       public_id: _,
+       system_id: _,
+       value: _,
+       parent: parent,
+       children: _,
+       attributes: _
+     }} ->
+      parent
+  end
+
+  defmatchspecp children_spec(node_id) do
+    {^node_id,
+     %NodeData{
+       type: _,
+       local_name: _,
+       name: _,
+       public_id: _,
+       system_id: _,
+       value: _,
+       parent: _,
+       children: children,
+       attributes: _
+     }} ->
+      children
+  end
+
+  defmatchspecp is_element_spec(node_id) do
+    {^node_id,
+     %NodeData{
+       type: Element,
+       local_name: _,
+       name: _,
+       public_id: _,
+       system_id: _,
+       value: _,
+       parent: _,
+       children: _,
+       attributes: _
+     }} ->
+      true
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================
 
   defp select(nodes, spec), do: :ets.select(nodes, spec)
+
+  defp element?(nodes, node_id), do: select(nodes, is_element_spec(node_id)) == [true]
 
   # Keep only candidates that the spec matched, preserving candidate order.
   defp intersect(matched, candidates) do
