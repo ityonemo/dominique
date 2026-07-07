@@ -16,13 +16,18 @@ defmodule DOM.CSS.SelectorPropertyTest do
   # valid selector), so the round-trip invariants below exercise the whole
   # parse/serialize pipeline without a browser.
 
+  # Representative non-ASCII identifier code points: CSS idents may contain any
+  # code point >= U+0080 directly (Latin-1 letters, an arrow, CJK), so the
+  # generator includes them to exercise UTF-8 through parse + serialize.
+  @non_ascii [?é, ?ñ, ?ü, ?ß, ?あ, ?日, ?本, ?→, ?★]
+
   # A CSS identifier value (the decoded AST form). Includes plain idents, a
-  # leading digit, and characters that force escaping on serialization, so the
-  # round-trip exercises escape/unescape.
+  # leading digit, non-ASCII code points, and characters that force escaping on
+  # serialization, so the round-trip exercises UTF-8 and escape/unescape.
   defp ident do
     gen all(
-          first <- string([?a..?z, ?A..?Z, ?_, ?0..?9], length: 1),
-          rest <- string([?a..?z, ?A..?Z, ?0..?9, ?-, ?_, ?., ?:], max_length: 6)
+          first <- string([?a..?z, ?A..?Z, ?_] ++ @non_ascii, length: 1),
+          rest <- string([?a..?z, ?A..?Z, ?0..?9, ?-, ?_, ?., ?:] ++ @non_ascii, max_length: 6)
         ) do
       first <> rest
     end

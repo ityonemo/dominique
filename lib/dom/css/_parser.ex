@@ -44,6 +44,7 @@ defmodule DOM.CSS.Parser do
     attr_flag: [collect: true, post_traverse: :attr_flag],
     name: [tag: true, post_traverse: :name],
     plain_char: [collect: true],
+    multibyte_utf8: [collect: true],
     escape: [post_traverse: :escape],
     hex_escape: [collect: true, tag: :hex_escape],
     char_escape: [collect: true, tag: :char_escape]

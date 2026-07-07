@@ -73,7 +73,21 @@ attr_flag <- ' ' [is]
 
 name <- name_char+
 
-name_char <- escape / plain_char
+name_char <- escape / plain_char / multibyte_utf8
+
+# A CSS identifier may contain any non-ASCII code point (>= U+0080) unescaped.
+# Match it as its raw UTF-8 byte sequence (Pegasus char classes are byte-based,
+# written in OCTAL), so the bytes flow through `collect` unchanged. Byte-range
+# table per the UTF-8 validity rules (see ~/code/zig_parser/lib/grammar/grammar.y).
+multibyte_utf8 <-
+    [\364]      [\200-\217] [\200-\277] [\200-\277]
+  / [\361-\363] [\200-\277] [\200-\277] [\200-\277]
+  / [\360]      [\220-\277] [\200-\277] [\200-\277]
+  / [\356-\357] [\200-\277] [\200-\277]
+  / [\355]      [\200-\237] [\200-\277]
+  / [\341-\354] [\200-\277] [\200-\277]
+  / [\340]      [\240-\277] [\200-\277]
+  / [\302-\337] [\200-\277]
 
 plain_char <- [-_a-zA-Z0-9]
 

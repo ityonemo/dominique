@@ -50,6 +50,16 @@ defmodule DOM.CSS.SelectorTest do
     test "decodes an escaped leading digit" do
       assert DOM.CSS.parse(~S(.\31 23)) == [%Compound{simples: [%Class{name: "123"}]}]
     end
+
+    test "accepts non-ASCII characters unescaped" do
+      assert DOM.CSS.parse(".café") == [%Compound{simples: [%Class{name: "café"}]}]
+      assert DOM.CSS.parse("#日本語") == [%Compound{simples: [%Id{name: "日本語"}]}]
+      assert DOM.CSS.parse("naïve") == [%Compound{simples: [%Type{name: "naïve"}]}]
+    end
+
+    test "does not escape non-ASCII characters when serializing" do
+      assert DOM.CSS.to_string(DOM.CSS.parse(".café")) == ".café"
+    end
   end
 
   describe "attribute selectors" do

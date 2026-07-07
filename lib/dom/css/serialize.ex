@@ -43,6 +43,8 @@ defmodule DOM.CSS.Serialize do
 
   defp escape_char(char) when char in ?a..?z or char in ?A..?Z or char in ?0..?9, do: <<char>>
   defp escape_char(char) when char in [?-, ?_], do: <<char>>
+  # Non-ASCII code points (>= U+0080) are valid identifier chars unescaped.
+  defp escape_char(char) when char >= 0x80, do: <<char::utf8>>
   defp escape_char(char), do: "\\" <> <<char::utf8>>
 
   @doc "Renders an An+B pair to its canonical string (e.g. `2n+1`, `-n`, `3`)."
