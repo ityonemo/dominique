@@ -29,6 +29,11 @@ defmodule DOM.CSS do
     id: [post_traverse: :id],
     class: [post_traverse: :class],
     type: [post_traverse: :type],
+    attribute: [tag: true, post_traverse: :attribute],
+    attr_op: [collect: true, post_traverse: :attr_op],
+    attr_value: [tag: true, post_traverse: :attr_value],
+    attr_string: [collect: true, post_traverse: :attr_string],
+    attr_flag: [collect: true, post_traverse: :attr_flag],
     name: [collect: true]
   )
 
@@ -86,5 +91,41 @@ defmodule DOM.CSS do
 
   defp type(rest, [name], context, _loc, _col) do
     {rest, [{:type, name}], context}
+  end
+
+  @attr_ops %{
+    "=" => :eq,
+    "~=" => :includes,
+    "|=" => :dash,
+    "^=" => :prefix,
+    "$=" => :suffix,
+    "*=" => :substring
+  }
+
+  defp attr_op(rest, [op], context, _loc, _col) do
+    {rest, [{:op, Map.fetch!(@attr_ops, op)}], context}
+  end
+
+  defp attr_string(rest, [quoted], context, _loc, _col) do
+    {rest, [String.slice(quoted, 1..-2//1)], context}
+  end
+
+  defp attr_value(rest, [{:attr_value, [value]}], context, _loc, _col) do
+    {rest, [{:value, value}], context}
+  end
+
+  defp attr_flag(rest, [flag], context, _loc, _col) do
+    {rest, [{:flag, String.to_atom(String.trim(flag))}], context}
+  end
+
+  defp attribute(rest, [{:attribute, parts}], context, _loc, _col) do
+    {rest, [build_attribute(parts)], context}
+  end
+
+  defp build_attribute(["[", name, "]"]), do: {:attr, name}
+  defp build_attribute(["[", name, {:op, op}, {:value, value}, "]"]), do: {:attr, name, op, value}
+
+  defp build_attribute(["[", name, {:op, op}, {:value, value}, {:flag, flag}, "]"]) do
+    {:attr, name, op, value, flag}
   end
 end

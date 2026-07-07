@@ -8,11 +8,21 @@ selector_list <- compound
 
 compound <- simple+
 
-simple <- universal / id / class / type
+simple <- universal / id / class / attribute / type
 
 universal <- '*'
 id        <- '#' name
 class      <- '.' name
 type      <- name
+
+attribute <- '[' name (attr_op attr_value attr_flag?)? ']'
+
+attr_op <- '~=' / '|=' / '^=' / '$=' / '*=' / '='
+
+attr_value <- attr_string / name
+
+attr_string <- '"' [^"]* '"' / "'" [^']* "'"
+
+attr_flag <- ' ' [is]
 
 name <- [-_a-zA-Z] [-_a-zA-Z0-9]*
