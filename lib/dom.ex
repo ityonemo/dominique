@@ -768,7 +768,8 @@ defmodule DOM do
 
   defp inner_html_impl(node_id, state) do
     element = fetch_node!(state.nodes, node_id)
-    {:reply, DOM.HTML.children(element.local_name, element.children, state.nodes), state}
+    iodata = DOM.HTML.children(element.local_name, element.children, state.nodes)
+    {:reply, IO.iodata_to_binary(iodata), state}
   end
 
   def _element_outer_html(server, node_id) do
@@ -776,8 +777,8 @@ defmodule DOM do
   end
 
   defp outer_html_impl(node_id, state) do
-    html = state.nodes |> fetch_node!(node_id) |> DOM.HTML.serialize(state.nodes)
-    {:reply, html, state}
+    iodata = state.nodes |> fetch_node!(node_id) |> DOM.HTML.serialize(state.nodes)
+    {:reply, IO.iodata_to_binary(iodata), state}
   end
 
   def _node_node_type(server, node_id) do

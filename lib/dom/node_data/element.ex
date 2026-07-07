@@ -30,7 +30,7 @@ defmodule DOM.NodeData.Element do
     if DOM.HTML.void?(name) do
       start_tag
     else
-      start_tag <> DOM.HTML.children(name, element.children, nodes) <> "</" <> name <> ">"
+      [start_tag, DOM.HTML.children(name, element.children, nodes), "</", name | ">"]
     end
   end
 end

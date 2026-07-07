@@ -24,5 +24,5 @@ defmodule DOM.NodeData.DocumentType do
   def node_name(%{name: name}), do: name
 
   @impl DOM.HTML
-  def serialize(%__MODULE__{name: name}, _nodes), do: "<!DOCTYPE " <> name <> ">"
+  def serialize(%__MODULE__{name: name}, _nodes), do: ["<!DOCTYPE ", name | ">"]
 end
