@@ -4,6 +4,7 @@ defmodule DOM.NodeData.Comment do
   defstruct [:value, parent: nil]
 
   use DOM.NodeData
+  use DOM.HTML
 
   @type t :: %__MODULE__{value: String.t() | nil, parent: reference() | nil}
 
@@ -15,4 +16,7 @@ defmodule DOM.NodeData.Comment do
 
   @impl DOM.NodeData
   def node_name(_comment), do: "#comment"
+
+  @impl DOM.HTML
+  def serialize(%__MODULE__{value: value}, _nodes), do: "<!--" <> value <> "-->"
 end

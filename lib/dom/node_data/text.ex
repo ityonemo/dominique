@@ -4,6 +4,7 @@ defmodule DOM.NodeData.Text do
   defstruct [:value, parent: nil]
 
   use DOM.NodeData
+  use DOM.HTML
 
   @type t :: %__MODULE__{value: String.t() | nil, parent: reference() | nil}
 
@@ -15,4 +16,7 @@ defmodule DOM.NodeData.Text do
 
   @impl DOM.NodeData
   def node_name(_text), do: "#text"
+
+  @impl DOM.HTML
+  def serialize(%__MODULE__{value: value}, _nodes), do: DOM.HTML.escape_text(value)
 end

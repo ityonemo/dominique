@@ -4,6 +4,7 @@ defmodule DOM.NodeData.Document do
   defstruct parent: nil, children: []
 
   use DOM.NodeData
+  use DOM.HTML
 
   @type t :: %__MODULE__{parent: nil, children: [reference()]}
 
@@ -15,4 +16,9 @@ defmodule DOM.NodeData.Document do
 
   @impl DOM.NodeData
   def node_name(_document), do: "#document"
+
+  @impl DOM.HTML
+  def serialize(%__MODULE__{children: children}, nodes) do
+    DOM.HTML.children("", children, nodes)
+  end
 end

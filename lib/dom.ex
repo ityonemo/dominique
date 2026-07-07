@@ -86,6 +86,8 @@ defmodule DOM do
   @spec _element_has_attribute(GenServer.server(), reference(), String.t()) :: boolean()
   @spec _element_remove_attribute(GenServer.server(), reference(), String.t()) :: :ok
   @spec _element_get_attribute_names(GenServer.server(), reference()) :: [String.t()]
+  @spec _element_inner_html(GenServer.server(), reference()) :: String.t()
+  @spec _element_outer_html(GenServer.server(), reference()) :: String.t()
   @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
   @spec _node_text_content(GenServer.server(), reference()) :: String.t()
   @spec _node_set_text_content(GenServer.server(), reference(), String.t()) :: :ok
@@ -760,6 +762,24 @@ defmodule DOM do
     {:reply, local_name, state}
   end
 
+  def _element_inner_html(server, node_id) do
+    GenServer.call(server, {:inner_html, node_id})
+  end
+
+  defp inner_html_impl(node_id, state) do
+    element = fetch_node!(state.nodes, node_id)
+    {:reply, DOM.HTML.children(element.local_name, element.children, state.nodes), state}
+  end
+
+  def _element_outer_html(server, node_id) do
+    GenServer.call(server, {:outer_html, node_id})
+  end
+
+  defp outer_html_impl(node_id, state) do
+    html = state.nodes |> fetch_node!(node_id) |> DOM.HTML.serialize(state.nodes)
+    {:reply, html, state}
+  end
+
   def _node_node_type(server, node_id) do
     GenServer.call(server, {:node_type, node_id})
   end
@@ -1126,6 +1146,16 @@ defmodule DOM do
   @impl true
   def handle_call({:local_name, node_id}, _from, state) do
     local_name_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:inner_html, node_id}, _from, state) do
+    inner_html_impl(node_id, state)
+  end
+
+  @impl true
+  def handle_call({:outer_html, node_id}, _from, state) do
+    outer_html_impl(node_id, state)
   end
 
   @impl true

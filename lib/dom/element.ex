@@ -46,4 +46,16 @@ defmodule DOM.Element do
   def get_attribute_names(%Node{type: :element} = element) do
     DOM._element_get_attribute_names(element.server, element.id)
   end
+
+  @doc "The element's serialized descendants (its `innerHTML`)."
+  @spec inner_html(Node.t()) :: String.t()
+  def inner_html(%Node{type: :element} = element) do
+    DOM._element_inner_html(element.server, element.id)
+  end
+
+  @doc "The element and its subtree serialized (its `outerHTML`)."
+  @spec outer_html(Node.t()) :: String.t()
+  def outer_html(%Node{type: :element} = element) do
+    DOM._element_outer_html(element.server, element.id)
+  end
 end

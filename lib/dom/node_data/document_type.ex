@@ -5,6 +5,7 @@ defmodule DOM.NodeData.DocumentType do
   defstruct [:name, :public_id, :system_id, parent: nil]
 
   use DOM.NodeData
+  use DOM.HTML
 
   @type t :: %__MODULE__{
           name: String.t(),
@@ -21,4 +22,7 @@ defmodule DOM.NodeData.DocumentType do
 
   @impl DOM.NodeData
   def node_name(%{name: name}), do: name
+
+  @impl DOM.HTML
+  def serialize(%__MODULE__{name: name}, _nodes), do: "<!DOCTYPE " <> name <> ">"
 end
