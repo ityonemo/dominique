@@ -92,6 +92,61 @@ defmodule DOM.CSS.SelectorTest do
     end
   end
 
+  describe "combinators" do
+    test "descendant combinator (whitespace)" do
+      assert DOM.CSS.parse("div .box") ==
+               [[{:compound, [{:type, "div"}]}, :descendant, {:compound, [{:class, "box"}]}]]
+    end
+
+    test "child combinator" do
+      assert DOM.CSS.parse("ul > li") ==
+               [[{:compound, [{:type, "ul"}]}, :child, {:compound, [{:type, "li"}]}]]
+    end
+
+    test "next-sibling combinator" do
+      assert DOM.CSS.parse("h1 + p") ==
+               [[{:compound, [{:type, "h1"}]}, :next_sibling, {:compound, [{:type, "p"}]}]]
+    end
+
+    test "subsequent-sibling combinator" do
+      assert DOM.CSS.parse("h1 ~ p") ==
+               [[{:compound, [{:type, "h1"}]}, :subsequent_sibling, {:compound, [{:type, "p"}]}]]
+    end
+
+    test "child combinator without surrounding whitespace" do
+      assert DOM.CSS.parse("ul>li") ==
+               [[{:compound, [{:type, "ul"}]}, :child, {:compound, [{:type, "li"}]}]]
+    end
+
+    test "chained combinators" do
+      assert DOM.CSS.parse("section > ul li") ==
+               [
+                 [
+                   {:compound, [{:type, "section"}]},
+                   :child,
+                   {:compound, [{:type, "ul"}]},
+                   :descendant,
+                   {:compound, [{:type, "li"}]}
+                 ]
+               ]
+    end
+  end
+
+  describe "selector lists" do
+    test "comma-separated compounds" do
+      assert DOM.CSS.parse(".a, .b") ==
+               [{:compound, [{:class, "a"}]}, {:compound, [{:class, "b"}]}]
+    end
+
+    test "comma-separated complex selectors" do
+      assert DOM.CSS.parse("div > a, .box") ==
+               [
+                 [{:compound, [{:type, "div"}]}, :child, {:compound, [{:type, "a"}]}],
+                 {:compound, [{:class, "box"}]}
+               ]
+    end
+  end
+
   describe "invalid selectors" do
     test "raises on an empty selector" do
       assert_raise ArgumentError, fn -> DOM.CSS.parse("") end

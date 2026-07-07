@@ -4,9 +4,19 @@
 # single pass; see the parser-options keyword list there. This file is the
 # single source of truth for the grammar.
 
-selector_list <- compound
+selector_list <- ws complex (comma complex)* ws
+
+comma <- ws ',' ws
+
+complex <- compound (combinator compound)*
+
+combinator <- ws '>' ws / ws '+' ws / ws '~' ws / descendant
+
+descendant <- ' ' ws
 
 compound <- simple+
+
+ws <- ' '*
 
 simple <- universal / id / class / attribute / type
 

@@ -24,6 +24,11 @@ defmodule DOM.CSS do
 
   Pegasus.parser_from_file(Path.join(__DIR__, "css/selector.peg"),
     selector_list: [parser: :parse_selector, post_traverse: :selector_list],
+    comma: [ignore: true],
+    complex: [tag: true, post_traverse: :complex],
+    combinator: [post_traverse: :combinator],
+    descendant: [token: :descendant],
+    ws: [ignore: true],
     compound: [tag: true, post_traverse: :compound],
     universal: [token: :universal],
     id: [post_traverse: :id],
@@ -73,8 +78,28 @@ defmodule DOM.CSS do
 
   # Args arrive as a reversed stack; reverse back to source order.
 
-  defp selector_list(rest, compounds, context, _loc, _col) do
-    {rest, [Enum.reverse(compounds)], context}
+  defp selector_list(rest, complexes, context, _loc, _col) do
+    {rest, [Enum.reverse(complexes)], context}
+  end
+
+  # A complex selector with no combinator collapses to its single compound;
+  # otherwise it stays a list of alternating compounds and combinators.
+  defp complex(rest, [{:complex, [compound]}], context, _loc, _col) do
+    {rest, [compound], context}
+  end
+
+  defp complex(rest, [{:complex, parts}], context, _loc, _col) do
+    {rest, [parts], context}
+  end
+
+  @combinators %{">" => :child, "+" => :next_sibling, "~" => :subsequent_sibling}
+
+  defp combinator(rest, [:descendant], context, _loc, _col) do
+    {rest, [:descendant], context}
+  end
+
+  defp combinator(rest, [delimiter], context, _loc, _col) do
+    {rest, [Map.fetch!(@combinators, delimiter)], context}
   end
 
   defp compound(rest, [{:compound, simples}], context, _loc, _col) do
