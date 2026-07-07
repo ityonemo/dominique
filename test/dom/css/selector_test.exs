@@ -207,6 +207,36 @@ defmodule DOM.CSS.SelectorTest do
       assert DOM.CSS.parse(":dir(ltr)") ==
                [{:compound, [{:pseudo_class, "dir", {:args, ["ltr"]}}]}]
     end
+
+    test ":has with a child-combinator relative selector" do
+      assert DOM.CSS.parse(":has(> .child)") ==
+               [
+                 {:compound,
+                  [
+                    {:pseudo_class, "has",
+                     {:selector_list, [[:child, {:compound, [{:class, "child"}]}]]}}
+                  ]}
+               ]
+    end
+
+    test ":has with a next-sibling relative selector" do
+      assert DOM.CSS.parse(":has(+ p)") ==
+               [
+                 {:compound,
+                  [
+                    {:pseudo_class, "has",
+                     {:selector_list, [[:next_sibling, {:compound, [{:type, "p"}]}]]}}
+                  ]}
+               ]
+    end
+
+    test ":has with a plain descendant relative selector" do
+      assert DOM.CSS.parse(":has(.child)") ==
+               [
+                 {:compound,
+                  [{:pseudo_class, "has", {:selector_list, [{:compound, [{:class, "child"}]}]}}]}
+               ]
+    end
   end
 
   describe "pseudo-elements" do

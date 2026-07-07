@@ -24,9 +24,15 @@ pseudo_element <- '::' name
 
 negation <- ':not(' ws selector_list_inner ws ')'
 
-functional_selector <- ':' func_sel_name '(' ws selector_list_inner ws ')'
+functional_selector <- has / ':' func_sel_name '(' ws selector_list_inner ws ')'
 
-func_sel_name <- 'is' / 'where' / 'has'
+func_sel_name <- 'is' / 'where'
+
+has <- ':has(' ws relative_list ws ')'
+
+relative_list <- relative_complex (comma relative_complex)*
+
+relative_complex <- combinator complex / complex
 
 functional_args <- ':' name '(' ws func_arg (comma func_arg)* ws ')'
 

@@ -88,8 +88,28 @@ defmodule DOM.CSS.SelectorPropertyTest do
   end
 
   defp functional_selector_pc do
-    gen all(name <- member_of(["is", "where", "has"]), list <- compound_list()) do
-      {:pseudo_class, name, {:selector_list, list}}
+    one_of([
+      gen all(name <- member_of(["is", "where"]), list <- compound_list()) do
+        {:pseudo_class, name, {:selector_list, list}}
+      end,
+      gen all(list <- relative_list()) do
+        {:pseudo_class, "has", {:selector_list, list}}
+      end
+    ])
+  end
+
+  # Relative complex selectors (used by :has): each may lead with a combinator.
+  defp relative_list do
+    gen all(relatives <- list_of(relative_complex(), min_length: 1, max_length: 2)) do
+      relatives
+    end
+  end
+
+  defp relative_complex do
+    lead_combinator = member_of([:child, :next_sibling, :subsequent_sibling])
+
+    gen all(lead <- one_of([constant(nil), lead_combinator]), comp <- compound()) do
+      if lead, do: [lead, comp], else: comp
     end
   end
 

@@ -90,6 +90,8 @@ defmodule DOM.CSS.SerializerTest do
           ":not(.a, #b)",
           ":is(.a, #b)",
           ":where(a.x)",
+          ":has(> .child)",
+          ":has(+ p, .x)",
           ":lang(en, fr)",
           ":dir(ltr)",
           ~S(.foo\.bar),

@@ -28,6 +28,9 @@ defmodule DOM.CSS do
     * `{:attr, name, op, value, flag}` — with a case flag `:i` or `:s`
     * `{:pseudo_class, name}` — a keyword pseudo-class such as `:first-child`
     * `{:pseudo_class, "nth-child", {a, b}}` — a `:nth-*` selector, An+B as `{a, b}`
+    * `{:pseudo_class, name, {:selector_list, list}}` — `:is`/`:where`/`:has(...)`
+      (for `:has`, a relative complex may lead with a combinator)
+    * `{:pseudo_class, name, {:args, [ident]}}` — `:lang`/`:dir(...)`
     * `{:not, selector_list}` — a `:not(...)` negation
     * `{:pseudo_element, name}` — a `::pseudo-element`
 
@@ -54,6 +57,9 @@ defmodule DOM.CSS do
     negation: [tag: true, post_traverse: :negation],
     functional_selector: [tag: true, post_traverse: :functional_selector],
     func_sel_name: [collect: true],
+    has: [tag: true, post_traverse: :has],
+    relative_list: [tag: true],
+    relative_complex: [tag: true, post_traverse: :relative_complex],
     functional_args: [tag: true, post_traverse: :functional_args],
     selector_list_inner: [tag: true],
     nth: [tag: true, post_traverse: :nth],
@@ -89,6 +95,8 @@ defmodule DOM.CSS do
           | {:attr, name(), attr_op(), String.t(), :i | :s}
           | {:pseudo_class, name()}
           | {:pseudo_class, name(), {integer(), integer()}}
+          | {:pseudo_class, name(), {:selector_list, [complex()]}}
+          | {:pseudo_class, name(), {:args, [String.t()]}}
           | {:not, t()}
           | {:pseudo_element, name()}
 
@@ -127,6 +135,13 @@ defmodule DOM.CSS do
   end
 
   defp complex_to_string({:compound, _} = compound), do: compound_to_string(compound)
+
+  # A relative complex (in :has) may lead with a combinator; render it without a
+  # leading space, e.g. "> .child".
+  defp complex_to_string([combinator | rest])
+       when is_atom(combinator) and combinator != :descendant do
+    String.trim_leading(part_to_string(combinator)) <> Enum.map_join(rest, &part_to_string/1)
+  end
 
   defp complex_to_string(parts) when is_list(parts) do
     Enum.map_join(parts, &part_to_string/1)
@@ -324,6 +339,25 @@ defmodule DOM.CSS do
          _col
        ) do
     {rest, [{:pseudo_class, name, {:selector_list, list}}], ctx}
+  end
+
+  # :has produces its pseudo-class directly; functional_selector just unwraps it.
+  defp functional_selector(rest, [{:functional_selector, [pseudo_class]}], ctx, _loc, _col) do
+    {rest, [pseudo_class], ctx}
+  end
+
+  defp has(rest, [{:has, [":has(", {:relative_list, complexes}, ")"]}], ctx, _loc, _col) do
+    {rest, [{:pseudo_class, "has", {:selector_list, complexes}}], ctx}
+  end
+
+  # A relative complex may lead with a combinator; a plain complex passes through.
+  defp relative_complex(rest, [{:relative_complex, [complex]}], ctx, _loc, _col) do
+    {rest, [complex], ctx}
+  end
+
+  defp relative_complex(rest, [{:relative_complex, [combinator, complex]}], ctx, _loc, _col) do
+    parts = if is_list(complex), do: [combinator | complex], else: [combinator, complex]
+    {rest, [parts], ctx}
   end
 
   defp functional_args(rest, [{:functional_args, [":", name, "(" | rest_parts]}], ctx, _loc, _col) do
