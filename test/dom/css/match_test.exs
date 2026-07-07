@@ -134,4 +134,42 @@ defmodule DOM.CSS.MatchTest do
                MapSet.new([ctx.ids[:c]])
     end
   end
+
+  describe "compound selector" do
+    setup do
+      {table, ids} =
+        build(
+          element("root", [], [
+            element("a", [{"id", "main"}, {"class", "box"}], [], as: :a),
+            element("a", [{"class", "box"}], [], as: :a2),
+            element("b", [{"id", "main"}, {"class", "box"}], [], as: :b),
+            element("a", [{"class", "other"}], [], as: :a3)
+          ])
+        )
+
+      candidates = [ids[:a], ids[:a2], ids[:b], ids[:a3]]
+      %{table: table, ids: ids, candidates: candidates}
+    end
+
+    defp compound(selector), do: selector |> DOM.CSS.parse() |> hd()
+
+    test "intersects its simple selectors", ctx do
+      assert matched(ctx.table, compound("a.box"), ctx.candidates) ==
+               MapSet.new([ctx.ids[:a], ctx.ids[:a2]])
+    end
+
+    test "type, id, and class together", ctx do
+      assert matched(ctx.table, compound("a.box#main"), ctx.candidates) ==
+               MapSet.new([ctx.ids[:a]])
+    end
+
+    test "universal plus class", ctx do
+      assert matched(ctx.table, compound("*.box"), ctx.candidates) ==
+               MapSet.new([ctx.ids[:a], ctx.ids[:a2], ctx.ids[:b]])
+    end
+
+    test "no candidate satisfies all parts", ctx do
+      assert matched(ctx.table, compound("b.other"), ctx.candidates) == MapSet.new()
+    end
+  end
 end
