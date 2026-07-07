@@ -77,15 +77,10 @@ defmodule DOM do
   @spec _node_replace_child(GenServer.server(), reference(), Node.t(), Node.t()) :: Node.t()
   @spec _node_owner_document(GenServer.server(), reference()) :: Node.t() | nil
   @spec _node_clone_node(GenServer.server(), reference(), boolean()) :: Node.t()
-  @spec _node_node_type(GenServer.server(), reference()) :: pos_integer()
-  @spec _node_node_name(GenServer.server(), reference()) :: String.t()
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
-  @spec _node_child_nodes(GenServer.server(), reference()) :: [Node.t()]
-  @spec _node_parent_node(GenServer.server(), reference()) :: Node.t() | nil
   @spec _element_inner_html(GenServer.server(), reference()) :: String.t()
   @spec _element_outer_html(GenServer.server(), reference()) :: String.t()
-  @spec _node_value(GenServer.server(), reference()) :: String.t() | nil
   @spec _node_text_content(GenServer.server(), reference()) :: String.t()
   @spec _node_set_text_content(GenServer.server(), reference(), String.t()) :: :ok
   @spec _node_set_value(GenServer.server(), reference(), String.t()) :: :ok
@@ -703,30 +698,6 @@ defmodule DOM do
     end
   end
 
-  def _node_child_nodes(server, node_id) do
-    GenServer.call(server, {:child_nodes, node_id})
-  end
-
-  defp child_nodes_impl(node_id, _from, state) do
-    node = fetch_node!(state.nodes, node_id)
-    children = Enum.map(node.children, &node_handle(state.nodes, &1))
-
-    {:reply, children, state}
-  end
-
-  def _node_parent_node(server, node_id) do
-    GenServer.call(server, {:parent_node, node_id})
-  end
-
-  defp parent_node_impl(node_id, _from, state) do
-    parent =
-      if parent_id = fetch_node!(state.nodes, node_id).parent do
-        node_handle(state.nodes, parent_id)
-      end
-
-    {:reply, parent, state}
-  end
-
   def _node_owner_document(server, node_id) do
     GenServer.call(server, {:owner_document, node_id})
   end
@@ -798,22 +769,6 @@ defmodule DOM do
   defp outer_html_impl(node_id, _from, state) do
     iodata = state.nodes |> fetch_node!(node_id) |> DOM.HTML.serialize(state.nodes)
     {:reply, IO.iodata_to_binary(iodata), state}
-  end
-
-  def _node_node_type(server, node_id) do
-    GenServer.call(server, {:node_type, node_id})
-  end
-
-  defp node_type_impl(node_id, _from, state) do
-    {:reply, state.nodes |> fetch_node!(node_id) |> NodeData.node_type(), state}
-  end
-
-  def _node_node_name(server, node_id) do
-    GenServer.call(server, {:node_name, node_id})
-  end
-
-  defp node_name_impl(node_id, _from, state) do
-    {:reply, state.nodes |> fetch_node!(node_id) |> NodeData.node_name(), state}
   end
 
   defp get_elements_by_tag_name_impl(node_id, name, _from, state) do
@@ -910,21 +865,6 @@ defmodule DOM do
   end
 
   defp class_tokens(names), do: String.split(names)
-
-  def _node_value(server, node_id) do
-    GenServer.call(server, {:value, node_id})
-  end
-
-  defp value_impl(node_id, _from, state) do
-    # Only character-data records (Text/Comment) carry a value; others have none.
-    value =
-      case fetch_node!(state.nodes, node_id) do
-        %{value: value} -> value
-        _other -> nil
-      end
-
-    {:reply, value, state}
-  end
 
   def _node_text_content(server, node_id) do
     GenServer.call(server, {:text_content, node_id})
@@ -1104,16 +1044,6 @@ defmodule DOM do
   end
 
   @impl true
-  def handle_call({:child_nodes, node_id}, from, state) do
-    child_nodes_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:parent_node, node_id}, from, state) do
-    parent_node_impl(node_id, from, state)
-  end
-
-  @impl true
   def handle_call({:owner_document, node_id}, from, state) do
     owner_document_impl(node_id, from, state)
   end
@@ -1131,16 +1061,6 @@ defmodule DOM do
   @impl true
   def handle_call({:outer_html, node_id}, from, state) do
     outer_html_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:node_type, node_id}, from, state) do
-    node_type_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:node_name, node_id}, from, state) do
-    node_name_impl(node_id, from, state)
   end
 
   @impl true
@@ -1171,11 +1091,6 @@ defmodule DOM do
   @impl true
   def handle_call({:matches, node_id, selector}, from, state) do
     matches_impl(node_id, selector, from, state)
-  end
-
-  @impl true
-  def handle_call({:value, node_id}, from, state) do
-    value_impl(node_id, from, state)
   end
 
   @impl true

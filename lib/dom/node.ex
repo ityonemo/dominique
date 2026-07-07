@@ -9,9 +9,15 @@ defmodule DOM.Node do
   This module holds the **generic** node operations — those that apply to any
   node kind. Element-only operations live in `DOM.Element`; whole-document
   operations live in `DOM`. Operations whose result is fixed by the node kind
-  fail fast client-side via `type`-guarded clauses; everything else calls the
-  owning server through a `DOM._node_*` bridge.
+  fail fast client-side via `type`-guarded clauses. Row-local reads drive the ETS
+  table through `DOM._select` with a `defmatchspecp` whose body builds the result
+  (often a `%DOM.Node{}` handle, one clause per `DOM.NodeData.*` record); the rest
+  call the owning server through a `DOM._node_*` bridge.
   """
+
+  use MatchSpec
+
+  alias DOM.NodeData
 
   @enforce_keys [:server, :id, :type]
   defstruct [:server, :id, :type]
@@ -96,11 +102,93 @@ defmodule DOM.Node do
   @doc "The node's child nodes (always `[]` for leaf kinds)."
   @spec child_nodes(t()) :: [t()]
   def child_nodes(%__MODULE__{type: type}) when type in @leaf, do: []
-  def child_nodes(%__MODULE__{} = node), do: DOM._node_child_nodes(node.server, node.id)
+
+  def child_nodes(%__MODULE__{} = node) do
+    # One hit selects the parent row (for its ordered `children` id list) and all
+    # child rows (as handles), then reorders the handles by that list — set-table
+    # select is unordered, so the parent's list is the ordering authority.
+    node.server
+    |> DOM._select(child_nodes_spec(node.server, node.id))
+    |> sort_parent_children()
+  end
+
+  defmatchspecp child_nodes_spec(server, node_id) do
+    {^node_id, %{children: children}} ->
+      {:order, children}
+
+    {child_id, %{__struct__: NodeData.Element, parent: ^node_id}} ->
+      %DOM.Node{server: server, id: child_id, type: :element}
+
+    {child_id, %{__struct__: NodeData.Text, parent: ^node_id}} ->
+      %DOM.Node{server: server, id: child_id, type: :text}
+
+    {child_id, %{__struct__: NodeData.Comment, parent: ^node_id}} ->
+      %DOM.Node{server: server, id: child_id, type: :comment}
+
+    {child_id, %{__struct__: NodeData.DocumentType, parent: ^node_id}} ->
+      %DOM.Node{server: server, id: child_id, type: :document_type}
+  end
+
+  # The select returns the parent's ordered child-id list as `{:order, ids}` plus
+  # each child handle in arbitrary order; re-sort the handles into list order.
+  defp sort_parent_children(rows, children_so_far \\ %{})
+
+  defp sort_parent_children([{:order, children_order} | rest], children_so_far) do
+    rest
+    |> Map.new(&{&1.id, &1})
+    |> Map.merge(children_so_far)
+    |> re_sort_children(children_order, [])
+  end
+
+  defp sort_parent_children([other | rest], children_so_far) do
+    sort_parent_children(rest, Map.put(children_so_far, other.id, other))
+  end
+
+  defp re_sort_children(children_map, [top | rest], children) do
+    re_sort_children(children_map, rest, [Map.fetch!(children_map, top) | children])
+  end
+
+  defp re_sort_children(_children_map, [], children), do: Enum.reverse(children)
 
   @doc "The node's parent, or `nil`."
   @spec parent_node(t()) :: t() | nil
-  def parent_node(%__MODULE__{} = node), do: DOM._node_parent_node(node.server, node.id)
+  def parent_node(%__MODULE__{} = node) do
+    case DOM._select(node.server, parent_id_spec(node.id)) do
+      [nil] -> nil
+      [parent_id] -> handle(node.server, parent_id)
+    end
+  end
+
+  defmatchspecp parent_id_spec(node_id) do
+    {^node_id, %{parent: parent}} -> parent
+  end
+
+  # Builds the `%DOM.Node{}` handle for `node_id` in one hit — the spec body maps
+  # each record's `__struct__` to its handle `type`.
+  defp handle(server, node_id) do
+    [handle] = DOM._select(server, handle_spec(server, node_id))
+    handle
+  end
+
+  defmatchspecp handle_spec(server, node_id) do
+    {^node_id, %{__struct__: NodeData.Element}} ->
+      %DOM.Node{server: server, id: node_id, type: :element}
+
+    {^node_id, %{__struct__: NodeData.Text}} ->
+      %DOM.Node{server: server, id: node_id, type: :text}
+
+    {^node_id, %{__struct__: NodeData.Comment}} ->
+      %DOM.Node{server: server, id: node_id, type: :comment}
+
+    {^node_id, %{__struct__: NodeData.Document}} ->
+      %DOM.Node{server: server, id: node_id, type: :document}
+
+    {^node_id, %{__struct__: NodeData.DocumentType}} ->
+      %DOM.Node{server: server, id: node_id, type: :document_type}
+
+    {^node_id, %{__struct__: NodeData.DocumentFragment}} ->
+      %DOM.Node{server: server, id: node_id, type: :document_fragment}
+  end
 
   @doc "The node's first child, or `nil`."
   @spec first_child(t()) :: t() | nil
@@ -137,15 +225,51 @@ defmodule DOM.Node do
 
   @doc "The DOM `nodeType` numeric constant."
   @spec node_type(t()) :: pos_integer()
-  def node_type(%__MODULE__{} = node), do: DOM._node_node_type(node.server, node.id)
+  def node_type(%__MODULE__{} = node) do
+    [node_type] = DOM._select(node.server, node_type_spec(node.id))
+    node_type
+  end
+
+  defmatchspecp node_type_spec(node_id) do
+    {^node_id, %{__struct__: NodeData.Element}} -> 1
+    {^node_id, %{__struct__: NodeData.Text}} -> 3
+    {^node_id, %{__struct__: NodeData.Comment}} -> 8
+    {^node_id, %{__struct__: NodeData.Document}} -> 9
+    {^node_id, %{__struct__: NodeData.DocumentType}} -> 10
+    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> 11
+  end
 
   @doc "The DOM `nodeName`."
   @spec node_name(t()) :: String.t()
-  def node_name(%__MODULE__{} = node), do: DOM._node_node_name(node.server, node.id)
+  def node_name(%__MODULE__{} = node) do
+    [node_name] = DOM._select(node.server, node_name_spec(node.id))
+    node_name
+  end
+
+  defmatchspecp node_name_spec(node_id) do
+    {^node_id, %{__struct__: NodeData.Element, local_name: local_name}} -> local_name
+    {^node_id, %{__struct__: NodeData.Text}} -> "#text"
+    {^node_id, %{__struct__: NodeData.Comment}} -> "#comment"
+    {^node_id, %{__struct__: NodeData.Document}} -> "#document"
+    {^node_id, %{__struct__: NodeData.DocumentType, name: name}} -> name
+    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> "#document-fragment"
+  end
 
   @doc "The node's character data value (Text/Comment), else `nil`."
   @spec value(t()) :: String.t() | nil
-  def value(%__MODULE__{} = node), do: DOM._node_value(node.server, node.id)
+  def value(%__MODULE__{} = node) do
+    [value] = DOM._select(node.server, value_spec(node.id))
+    value
+  end
+
+  defmatchspecp value_spec(node_id) do
+    {^node_id, %{__struct__: NodeData.Text, value: value}} -> value
+    {^node_id, %{__struct__: NodeData.Comment, value: value}} -> value
+    {^node_id, %{__struct__: NodeData.Element}} -> nil
+    {^node_id, %{__struct__: NodeData.Document}} -> nil
+    {^node_id, %{__struct__: NodeData.DocumentType}} -> nil
+    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> nil
+  end
 
   @doc "The node's text content."
   @spec text_content(t()) :: String.t() | nil
@@ -153,7 +277,7 @@ defmodule DOM.Node do
 
   # Character-data nodes are their own text content; containers aggregate.
   def text_content(%__MODULE__{type: type} = node) when type in [:text, :comment] do
-    DOM._node_value(node.server, node.id)
+    value(node)
   end
 
   def text_content(%__MODULE__{} = node), do: DOM._node_text_content(node.server, node.id)
