@@ -8,5 +8,14 @@ defmodule DOM.HTML.Token.Character do
   @enforce_keys [:data]
   defstruct [:data]
 
+  use DOM.HTML.Token
+
+  alias DOM.HTML.Entities
+
   @type t :: %__MODULE__{data: String.t()}
+
+  @impl DOM.HTML.Token
+  def decode(%__MODULE__{data: data} = token) do
+    %{token | data: Entities.decode(data)}
+  end
 end

@@ -119,4 +119,39 @@ defmodule DOM.HTML.TokenizerTest do
                tokenize("<script>x</SCRIPT>")
     end
   end
+
+  describe "multibyte text" do
+    test "non-ASCII characters survive tokenization as valid UTF-8" do
+      assert [%Token.Character{data: "café → 日本"}] = tokenize("café → 日本")
+    end
+
+    test "non-ASCII in a comment" do
+      assert [%Token.Comment{data: "café"}] = tokenize("<!--café-->")
+    end
+  end
+
+  describe "entity decoding (via Token.decode/1)" do
+    defp decode(html), do: html |> DOM.HTML.tokenize() |> Enum.map(&Token.decode/1)
+
+    test "named references in text" do
+      assert [%Token.Character{data: "a & b < c"}] = decode("a &amp; b &lt; c")
+    end
+
+    test "numeric decimal and hex references" do
+      assert [%Token.Character{data: "& & ©"}] = decode("&#38; &#x26; &#169;")
+    end
+
+    test "longest match wins" do
+      assert [%Token.Character{data: "∉"}] = decode("&notin;")
+    end
+
+    test "attribute values are decoded" do
+      assert [%Token.StartTag{attributes: [{"title", "a&b"}]}] =
+               decode(~s(<a title="a&amp;b">))
+    end
+
+    test "a bare ampersand is left literal" do
+      assert [%Token.Character{data: "a & b"}] = decode("a & b")
+    end
+  end
 end

@@ -1,12 +1,21 @@
-defmodule DOM.HTML.Tokenizer do
-  @moduledoc false
+use Protoss
 
-  # The HTML tokenizer, generated at compile time by Pegasus from
-  # lib/dom/html/tokens.peg. The post_traverse handlers build DOM.HTML.Token.*
-  # structs in a single pass. Public entry is DOM.HTML.tokenize/1, which delegates
-  # here. Tokenization only -- no tree construction, no error recovery; character
-  # references are left undecoded.
+defprotocol DOM.HTML.Token do
+  @moduledoc """
+  An HTML token produced by the tokenizer (`StartTag`, `EndTag`, `Character`,
+  `Comment`, `Doctype`). The protocol callback `decode/1` resolves character
+  references in a token's text (`Character` data, attribute values); non-text
+  tokens return themselves. The tokenizer leaves references undecoded — apply
+  decoding with `Enum.map(tokens, &DOM.HTML.Token.decode/1)`.
 
+  The `after` block holds the tokenizer itself: `tokenize/1`, generated at compile
+  time by Pegasus from `lib/dom/html/tokens.peg`. Tokenization only — no tree
+  construction, no error recovery.
+  """
+
+  @doc "Resolves character references in a token's text; other tokens are unchanged."
+  def decode(token)
+after
   require Pegasus
 
   alias DOM.HTML.Token
@@ -23,7 +32,7 @@ defmodule DOM.HTML.Tokenizer do
         {:"raw_#{name}", tag: true, post_traverse: :raw_element},
         {:"raw_open_#{name}", tag: true, post_traverse: :raw_open},
         {:"raw_name_#{name}", token: {:raw_name, name}},
-        {:"raw_text_#{name}", collect: true, post_traverse: :raw_text},
+        {:"raw_text_#{name}", tag: true, post_traverse: :raw_text},
         {:"raw_close_#{name}", tag: true, post_traverse: :raw_close}
       ]
     end)
@@ -38,7 +47,7 @@ defmodule DOM.HTML.Tokenizer do
       raw_rules ++
       [
         comment: [tag: true, post_traverse: :comment],
-        comment_data: [collect: true],
+        comment_data: [tag: true, post_traverse: :codepoints],
         doctype: [tag: true, post_traverse: :doctype],
         doctype_keyword: [ignore: true],
         doctype_ws: [ignore: true],
@@ -60,7 +69,7 @@ defmodule DOM.HTML.Tokenizer do
         sq_value: [collect: true],
         uq_value: [collect: true],
         ws: [ignore: true],
-        character: [collect: true, post_traverse: :character]
+        character: [post_traverse: :character]
       ]
   )
 
@@ -100,16 +109,15 @@ defmodule DOM.HTML.Tokenizer do
         _ -> nil
       end)
 
-    {rest, [%Token.StartTag{name: find_raw_name(args), attributes: attributes}], context}
+    {rest, [struct!(Token.StartTag, name: find_raw_name(args), attributes: attributes)], context}
   end
 
-  defp raw_text(rest, [data], context, _loc, _col),
-    do: {rest, [%Token.Character{data: data}], context}
-
-  defp raw_text(rest, [], context, _loc, _col), do: {rest, [%Token.Character{data: ""}], context}
+  defp raw_text(rest, [{_tag, codepoints}], context, _loc, _col) do
+    {rest, [struct!(Token.Character, data: to_string_utf8(codepoints))], context}
+  end
 
   defp raw_close(rest, [{_close, args}], context, _loc, _col) do
-    {rest, [%Token.EndTag{name: find_raw_name(args)}], context}
+    {rest, [struct!(Token.EndTag, name: find_raw_name(args))], context}
   end
 
   defp find_raw_name(args) do
@@ -119,8 +127,14 @@ defmodule DOM.HTML.Tokenizer do
     end)
   end
 
+  # Reassemble a `.`-matched codepoint list into a UTF-8 string (used by rules
+  # like comment_data whose result is consumed by another handler).
+  defp codepoints(rest, [{_tag, cps}], context, _loc, _col) do
+    {rest, [to_string_utf8(cps)], context}
+  end
+
   defp comment(rest, [{:comment, ["<!--", data, "-->"]}], context, _loc, _col) do
-    {rest, [%Token.Comment{data: data}], context}
+    {rest, [struct!(Token.Comment, data: data)], context}
   end
 
   defp doctype(rest, [{:doctype, args}], context, _loc, _col) do
@@ -142,7 +156,7 @@ defmodule DOM.HTML.Tokenizer do
         _ -> nil
       end)
 
-    token = %Token.Doctype{name: name, public_id: public_id, system_id: system_id}
+    token = struct!(Token.Doctype, name: name, public_id: public_id, system_id: system_id)
     {rest, [token], context}
   end
 
@@ -181,7 +195,10 @@ defmodule DOM.HTML.Tokenizer do
       end)
 
     self_closing = :self_closing in args
-    token = %Token.StartTag{name: name, attributes: attributes, self_closing: self_closing}
+
+    token =
+      struct!(Token.StartTag, name: name, attributes: attributes, self_closing: self_closing)
+
     {rest, [token], context}
   end
 
@@ -192,7 +209,7 @@ defmodule DOM.HTML.Tokenizer do
         _ -> nil
       end)
 
-    {rest, [%Token.EndTag{name: name}], context}
+    {rest, [struct!(Token.EndTag, name: name)], context}
   end
 
   defp tag_name(rest, [name], context, _loc, _col) do
@@ -226,13 +243,17 @@ defmodule DOM.HTML.Tokenizer do
     {rest, [{:attr_value, unquote_value(value)}], context}
   end
 
-  defp character(rest, [data], context, _loc, _col) do
-    {rest, [%Token.Character{data: data}], context}
+  defp character(rest, codepoints, context, _loc, _col) do
+    {rest, [struct!(Token.Character, data: to_string_utf8(Enum.reverse(codepoints)))], context}
   end
 
   # ==========================================================================
   # Helpers
   # ==========================================================================
+
+  # `.` matches UTF-8 codepoints; reassemble with List.to_string (NOT
+  # IO.iodata_to_binary, which would mis-encode multibyte chars as raw bytes).
+  defp to_string_utf8(codepoints), do: List.to_string(codepoints)
 
   defp unquote_value(<<?", rest::binary>>), do: String.trim_trailing(rest, "\"")
   defp unquote_value(<<?', rest::binary>>), do: String.trim_trailing(rest, "'")

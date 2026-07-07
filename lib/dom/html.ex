@@ -22,9 +22,10 @@ after
   @doc """
   Tokenizes an HTML string into a list of `DOM.HTML.Token.*` structs
   (`StartTag`, `EndTag`, `Character`, `Comment`, `Doctype`). Tokenization only —
-  no tree construction; character references are left undecoded.
+  no tree construction. Character references are left undecoded; apply
+  `Enum.map(tokens, &DOM.HTML.Token.decode/1)` to resolve them.
   """
-  defdelegate tokenize(html), to: DOM.HTML.Tokenizer
+  defdelegate tokenize(html), to: DOM.HTML.Token
 
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input link meta source track wbr)

@@ -7,10 +7,15 @@ defmodule DOM.HTML.Token.Doctype do
 
   defstruct [:name, :public_id, :system_id, force_quirks: false]
 
+  use DOM.HTML.Token
+
   @type t :: %__MODULE__{
           name: String.t() | nil,
           public_id: String.t() | nil,
           system_id: String.t() | nil,
           force_quirks: boolean()
         }
+
+  @impl DOM.HTML.Token
+  def decode(%__MODULE__{} = token), do: token
 end
