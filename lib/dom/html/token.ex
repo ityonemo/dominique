@@ -62,7 +62,10 @@ after
       script_escaped_item: [],
       script_double_escape: [],
       script_dbl_open: [],
+      script_dbl_body: [],
+      script_dbl_end: [],
       script_dbl_close: [],
+      script_tag_term: [],
       script_kw: [],
       raw_tag_end: [ignore: true]
     ] ++

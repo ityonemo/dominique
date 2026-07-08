@@ -90,22 +90,40 @@ raw_name_noframes <- [Nn][Oo][Ff][Rr][Aa][Mm][Ee][Ss]
 # escaped and does NOT close. So: consume `<!-- ... -->` escape regions as data,
 # and within them consume nested `<script>...</script>` double-escapes as data;
 # a bare </script> (outside a double-escape) falls through to raw_close_script.
+# The <script> interior is a small state machine (WHATWG script-data states),
+# transcribed as PEG rules. Outside an escape, the interior runs to the first
+# real </script>. Once `<!--` opens an ESCAPE, a </script> still closes UNLESS a
+# nested `<script`-tag has entered DOUBLE-ESCAPE, where </script> only returns to
+# the escape. An escape ends at `-->`. The "tag name terminator" for </script and
+# <script is whitespace / `/` / `>` (or EOF) — the tag need NOT be closed with `>`.
+# The outer close is the general raw_close_script (terminator/EOF tolerant). The
+# interior is a run of segments: an escape region, or a single character.
 raw_text_script <- (!raw_close_script script_segment)*
 script_segment  <- script_escape / .
-# `<!-- ... -->` escaped region. A </script> here closes normally, so the region
-# body stops at `-->` OR a </script>; only nested double-escapes hide a </script>.
-# The internal lookahead uses the STRICT close (`</script>` with a real `>`), not
-# the EOF/whitespace-tolerant raw_tag_end, so an incomplete `</script ` inside an
-# escape stays as data.
-script_escape <- '<!--' script_escaped_body ('-->' / &script_strict_close / !.)
-script_escaped_body <- (!'-->' !script_strict_close script_escaped_item)*
+
+# `<!-- … -->` escaped region. Its body ends at `-->` (end of escape) or at a
+# real </script> close (raw_close_script — which then closes the outer element);
+# nested double-escapes hide their own </script>.
+script_escape <- '<!--' script_escaped_body ('-->' / &raw_close_script / !.)
+script_escaped_body <- (!'-->' !raw_close_script script_escaped_item)*
 script_escaped_item <- script_double_escape / .
-script_strict_close <- '</' script_kw ws '>'
-# A nested <script>...</script> region, captured as plain characters (name and
-# attributes are NOT tokenized — this is script data, not markup).
-script_double_escape <- script_dbl_open (!script_dbl_close .)* script_dbl_close
-script_dbl_open  <- '<' script_kw (!'>' .)* '>'
-script_dbl_close <- '</' script_kw ws '>'
+
+# A nested `<script`(term) … `</script`(term) region (double escape), captured as
+# plain characters — its interior </script> does NOT close the outer element. The
+# opener is `<script` followed by a tag-name terminator (whitespace / `/` / `>`);
+# the tag need NOT be closed with `>` (`<script ` alone is enough). The region
+# ends (returns to single-escaped) at the FIRST `</script`(term) or at `-->`; the
+# closer consumes only `</script` + its single terminator char (not trailing junk,
+# so a following `</script` can still close the outer element).
+script_double_escape <- script_dbl_open script_dbl_body script_dbl_end
+script_dbl_open  <- '<' script_kw &script_tag_term
+script_dbl_body  <- (!script_dbl_close !'-->' .)*
+script_dbl_end   <- script_dbl_close / &'-->'
+script_dbl_close <- '</' script_kw script_tag_term
+
+# Tag-name terminator (whitespace / `/` / `>` / EOF), a single-char lookahead's
+# worth — consumed by the close, peeked by the opener.
+script_tag_term <- [ \t\r\n\f/>] / !.
 script_kw <- [Ss][Cc][Rr][Ii][Pp][Tt]
 
 raw_text_style    <- (!raw_close_style    .)*

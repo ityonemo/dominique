@@ -5,6 +5,15 @@ defmodule DOM.HTML.TokenizerTest do
 
   defp tokenize(html), do: DOM.HTML.tokenize(html)
 
+  # The single Character run captured as a <script> element's interior. Assumes
+  # the input opens with `<script>`; returns "" when the interior is empty.
+  defp script_interior(html) do
+    case tokenize(html) do
+      [%Token.StartTag{name: "script"}, %Token.Character{data: data} | _] -> data
+      [%Token.StartTag{name: "script"} | _] -> ""
+    end
+  end
+
   describe "tags" do
     test "a single start tag" do
       assert tokenize("<h>") == [%Token.StartTag{name: "h", attributes: [], self_closing: false}]
@@ -280,6 +289,55 @@ defmodule DOM.HTML.TokenizerTest do
     test "a nested script without a comment closes at the first </script>" do
       assert [_, %Token.Character{data: "<script>"}, %Token.EndTag{name: "script"} | _] =
                tokenize("<script><script></script></script>")
+    end
+  end
+
+  # The WHATWG script-data escape / double-escape state machine, asserted against
+  # the html5lib tree-construction expectations (scripting DISABLED). Each entry
+  # is {input, expected <script> interior}. `script_interior/1` returns the single
+  # Character run between the <script> start and its real close.
+  describe "script-data escape state machine" do
+    # `<script` (the double-escape start) is recognized when followed by ANY of
+    # whitespace / `/` / `>` — the tag name need not be closed with `>`.
+    test "a nested <script followed by whitespace enters double-escape" do
+      # inside `<!--`, `<script ` starts double-escape, so the following </script>
+      # does NOT close the outer element.
+      assert script_interior("<script><!--<script </script>") == "<!--<script </script>"
+    end
+
+    # In double-escape, a </script> returns to (single) escaped; a LATER </script>
+    # (whitespace/EOF terminated) then closes the outer script.
+    test "the second </script> closes after a double-escape returns to escaped" do
+      assert script_interior("<script><!--<script </script </script ") ==
+               "<!--<script </script "
+
+      assert script_interior("<script><!--<script </script </script>") ==
+               "<!--<script </script "
+    end
+
+    # `-->` ends the escaped state; a following </script> then closes normally.
+    test "--> ends the escape, then </script> closes" do
+      assert script_interior("<script><!--<script --></script>") == "<!--<script -->"
+      assert script_interior("<script><!--<script --></script ") == "<!--<script -->"
+    end
+
+    # In (single) escaped state (no nested <script>), a </script> — even
+    # whitespace/EOF terminated — closes.
+    test "a </script in escaped state closes at EOF" do
+      assert script_interior("<script><!--</script ") == "<!--"
+    end
+
+    # A fully nested-and-closed double-escape keeps everything up to the outer
+    # close (regression guard for the already-passing shape).
+    test "a complete double-escape keeps its interior" do
+      assert script_interior("<script><!--<script></script>--></script>") ==
+               "<!--<script></script>-->"
+    end
+
+    # Two nested <script></script> pairs, then the outer close.
+    test "multiple nested pairs before the close" do
+      assert script_interior("<script><!--<script></script><script></script>--></script>") ==
+               "<!--<script></script><script></script>-->"
     end
   end
 
