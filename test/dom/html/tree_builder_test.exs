@@ -817,7 +817,11 @@ defmodule DOM.HTML.TreeBuilderTest do
     # PUBLIC + SYSTEM ids are preserved and serialized.
     test "public and system identifiers are preserved" do
       out = tree(~s(<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://x">))
-      assert String.starts_with?(out, ~s(| <!DOCTYPE html "-//W3C//DTD HTML 4.01//EN" "http://x">\n))
+
+      assert String.starts_with?(
+               out,
+               ~s(| <!DOCTYPE html "-//W3C//DTD HTML 4.01//EN" "http://x">\n)
+             )
     end
 
     # A SYSTEM-only doctype renders the public id as "".

@@ -74,13 +74,14 @@ after
         malformed_tag: [tag: true, post_traverse: :malformed_tag],
         doctype: [tag: true, post_traverse: :doctype],
         doctype_keyword: [ignore: true],
-        doctype_ws: [ignore: true],
-        doctype_name: [collect: true, post_traverse: :doctype_name],
+        doctype_name: [tag: true, post_traverse: :doctype_name],
+        doctype_end: [ignore: true],
+        doctype_junk: [ignore: true],
         doctype_public: [tag: true, post_traverse: :doctype_public],
         doctype_system: [tag: true, post_traverse: :doctype_system],
         public_kw: [ignore: true],
         system_kw: [ignore: true],
-        doctype_str: [collect: true, post_traverse: :doctype_str],
+        doctype_str: [tag: true, post_traverse: :doctype_str],
         start_tag: [tag: true, post_traverse: :start_tag],
         end_tag: [tag: true, post_traverse: :end_tag],
         self_closing: [token: :self_closing],
@@ -222,8 +223,8 @@ after
     {rest, [token], context}
   end
 
-  defp doctype_name(rest, [name], context, _loc, _col) do
-    {rest, [{:doctype_name, String.downcase(name)}], context}
+  defp doctype_name(rest, [{:doctype_name, cps}], context, _loc, _col) do
+    {rest, [{:doctype_name, cps |> to_string_utf8() |> String.downcase()}], context}
   end
 
   # PUBLIC "pub" "sys"?  -> a public id and optionally a system id.
@@ -239,8 +240,15 @@ after
     {rest, [{:system_id, system}], context}
   end
 
-  defp doctype_str(rest, [str], context, _loc, _col) do
-    {rest, [String.slice(str, 1..-2//1)], context}
+  # The captured string is the opening quote + content + an optional matching
+  # close quote (missing when the id ran into `>`/EOF). Strip the leading quote
+  # and a trailing quote if present.
+  defp doctype_str(rest, [{:doctype_str, cps}], context, _loc, _col) do
+    {rest, [strip_quotes(to_string_utf8(cps))], context}
+  end
+
+  defp strip_quotes(<<q, rest::binary>>) when q in [?", ?'] do
+    String.trim_trailing(rest, <<q>>)
   end
 
   defp start_tag(rest, [{:start_tag, args}], context, _loc, _col) do

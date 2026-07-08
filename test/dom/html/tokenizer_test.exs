@@ -121,6 +121,34 @@ defmodule DOM.HTML.TokenizerTest do
       assert [%Token.Doctype{name: "html", public_id: "pub", system_id: "sys"}] =
                tokenize(~s(<!DOCTYPE html PUBLIC "pub" "sys">))
     end
+
+    # WHATWG doctype state: no space is required after the keyword.
+    test "a doctype needs no space after the keyword" do
+      assert [%Token.Doctype{name: "html"}] = tokenize("<!DOCTYPEhtml>")
+    end
+
+    # A doctype with no name still tokenizes (empty name).
+    test "a nameless doctype tokenizes with an empty name" do
+      assert [%Token.Doctype{name: ""}] = tokenize("<!DOCTYPE>")
+    end
+
+    # Junk after the name is consumed and ignored (force-quirks in the tree).
+    test "junk after the name is ignored" do
+      assert [%Token.Doctype{name: "potato", public_id: nil, system_id: nil}] =
+               tokenize("<!DOCTYPE potato taco>")
+    end
+
+    # A SYSTEM-only doctype captures the system id.
+    test "a SYSTEM-only doctype captures the system id" do
+      assert [%Token.Doctype{name: "potato", public_id: nil, system_id: "taco"}] =
+               tokenize("<!DOCTYPE potato SYSTEM 'taco'>")
+    end
+
+    # A single-quoted public id ends at the next single quote (a nested quote
+    # terminates it early).
+    test "a public id ends at its matching quote" do
+      assert [%Token.Doctype{public_id: "go"}] = tokenize("<!DOCTYPE potato PUBLIC 'go'of'>")
+    end
   end
 
   describe "raw-text elements" do

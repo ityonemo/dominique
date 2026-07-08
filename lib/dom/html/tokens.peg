@@ -135,17 +135,30 @@ comment <- '<!--' comment_data comment_close
 comment_close <- '-->' / !.
 comment_data <- (!'-->' .)*
 
-doctype <- '<!' doctype_keyword doctype_ws doctype_name doctype_ids? ws '>'
+# Permissive DOCTYPE (WHATWG doctype states): the keyword needs no following
+# space (`<!DOCTYPEhtml>`), the name may be empty, PUBLIC/SYSTEM ids are captured
+# when present, and any other trailing junk is consumed and ignored (force-quirks
+# in the spec — the outline shows only name +, if either id is present, the ids).
+# Terminated by `>` or EOF.
+doctype <- '<!' doctype_keyword ws doctype_name doctype_ids? doctype_junk doctype_end
 doctype_keyword <- [Dd][Oo][Cc][Tt][Yy][Pp][Ee]
-doctype_ws <- [ \t\r\n\f]+
-doctype_name <- [^ \t\r\n\f>]+
+doctype_name <- [^ \t\r\n\f>]*
+doctype_end <- '>' / !.
 
-doctype_ids <- doctype_ws (doctype_public / doctype_system)
-doctype_public <- public_kw doctype_ws doctype_str (doctype_ws doctype_str)?
-doctype_system <- system_kw doctype_ws doctype_str
+# ids: PUBLIC (public + optional system) or SYSTEM (system), each id a quoted
+# string. Whitespace between keyword and id is optional (WHATWG tolerates
+# `SYSTEMtaco`-style errors elsewhere, but a quoted id may abut the keyword).
+doctype_ids <- ws (doctype_public / doctype_system)
+doctype_public <- public_kw ws doctype_str (ws doctype_str)?
+doctype_system <- system_kw ws doctype_str
 public_kw <- [Pp][Uu][Bb][Ll][Ii][Cc]
 system_kw <- [Ss][Yy][Ss][Tt][Ee][Mm]
-doctype_str <- '"' [^"]* '"' / "'" [^']* "'"
+# A quoted id ends at the matching quote (single OR double), or at `>`/EOF if the
+# closing quote is missing.
+doctype_str <- '"' [^">]* ('"' / &'>' / !.) / "'" [^'>]* ("'" / &'>' / !.)
+
+# Any residual junk before the closing `>` (unquoted ids, extra tokens) — ignored.
+doctype_junk <- (!'>' .)*
 
 # --- bogus comments & malformed tags ---------------------------------------
 # WHATWG bogus-comment / recovery. Ordering (in `token`) puts these AFTER real
