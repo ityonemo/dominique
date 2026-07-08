@@ -465,6 +465,18 @@ defmodule DOM.HTML.TreeBuilder do
     process(:in_body, token, state)
   end
 
+  # A start tag for a head element (base/link/meta/title/style/script/…): parse
+  # error. Push the head element back onto the stack, process using "in head",
+  # then remove the head element from the stack again (so it lands in <head>).
+  defp process(:after_head, %Token.StartTag{name: name} = token, state)
+       when name in ~w(base basefont bgsound link meta noframes script style
+                       template title) do
+    head = state.head
+    state = %{state | open_elements: [head | state.open_elements]}
+    state = process(:in_head, token, state)
+    %{state | open_elements: List.delete(state.open_elements, head)}
+  end
+
   # A start tag whose tag name is "body": insert an HTML element, set frameset-ok
   # to "not ok", switch to "in body".
   defp process(:after_head, %Token.StartTag{name: "body"} = token, state) do

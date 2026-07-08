@@ -160,6 +160,21 @@ defmodule DOM.HTML.TreeBuilderTest do
     end
   end
 
+  describe "after head — §13.2.6.4.6" do
+    # spec §13.2.6.4.6: a head-element start tag after </head> re-enters the head
+    # (push head, process in-head, pop head) — so <base> lands in <head>, not body.
+    test "a base start tag after </head> goes back into head" do
+      assert tree("</head><base>X") ==
+               "| <html>\n|   <head>\n|     <base>\n|   <body>\n|     \"X\""
+    end
+
+    # spec §13.2.6.4.6: likewise a <title> after </head> is parsed as head RCDATA.
+    test "a title after </head> goes back into head" do
+      assert tree("<head></head><title>X</title>") ==
+               "| <html>\n|   <head>\n|     <title>\n|       \"X\"\n|   <body>"
+    end
+  end
+
   describe "in body — §13.2.6.4.7 the table start tag" do
     # spec §13.2.6.4.7: "A start tag whose tag name is table" — close a p in
     # button scope, insert, switch to "in table".
