@@ -2902,7 +2902,10 @@ defmodule DOM.HTML.TreeBuilder do
   # §13.2.6.5  Rules for parsing tokens in foreign content.
 
   # A NULL character: insert a U+FFFD replacement character.
+  # A foreign character token: insert it (NUL becomes U+FFFD); a non-whitespace
+  # character additionally sets frameset-ok to "not ok" (§13.2.6.5).
   defp process_foreign(%Token.Character{data: data}, state) do
+    state = if whitespace?(data), do: state, else: %{state | frameset_ok: false}
     insert_characters(String.replace(data, "\0", "�"), state)
   end
 

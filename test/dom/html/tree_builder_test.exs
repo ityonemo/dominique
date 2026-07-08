@@ -678,6 +678,14 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|       \"x\""
                ])
     end
+
+    # spec §13.2.6.5 (foreign character token): a non-whitespace character in
+    # foreign content sets frameset-ok to "not ok", so a later <frameset> is
+    # ignored (it would otherwise replace the body).
+    test "non-whitespace text in svg makes frameset-ok not ok" do
+      assert tree("<svg>a</svg><frameset>") ==
+               doc(["|     <svg svg>", "|       \"a\""])
+    end
   end
 
   describe "fragment parsing — §13.4" do
