@@ -34,6 +34,19 @@ defmodule DOM.HTML.TreeBuilder do
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input keygen link meta param source track wbr)
 
+  # "generate implied end tags" (§13.2.6.3): while the current node is one of
+  # these, pop it. An optional exception name is excluded from the set.
+  @implied_end_tags ~w(dd dt li optgroup option p rb rp rt rtc)
+
+  # "have an element in scope" default scope set (§13.2.4.2): elements that
+  # terminate the upward scope search. (Foreign-content members deferred to
+  # tier 5; all HTML-namespace here since we have no namespace model yet.)
+  @scope_markers ~w(applet caption html table td th marquee object template)
+
+  # "in button scope" adds "button"; "in list item scope" adds "ol"/"ul".
+  @button_scope_markers ["button" | @scope_markers]
+  @list_item_scope_markers ~w(ol ul) ++ @scope_markers
+
   @doc "Builds a document tree from a decoded token list (§13.2.6.4)."
   @spec build([struct()]) :: Node.t()
   def build(tokens) do
@@ -270,7 +283,7 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # ==========================================================================
-  # §13.2.6.4.7  The "in body" insertion mode (partial — tier 1)
+  # §13.2.6.4.7  The "in body" insertion mode (tier 2 — in-body repairs)
   # ==========================================================================
 
   # A comment token: insert a comment.
@@ -285,6 +298,47 @@ defmodule DOM.HTML.TreeBuilder do
   # A start tag whose tag name is "html": (tier 1) parse error, ignore.
   defp process(:in_body, %Token.StartTag{name: "html"}, state), do: state
 
+  # A start tag whose tag name is one of the "in head" tags (base/link/meta/…/
+  # title/style/script/…): process using the "in head" rules.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(base basefont bgsound link meta) or name in @rawtext do
+    process(:in_head, token, state)
+  end
+
+  # A start tag "hr": if a p is in button scope, close it; insert an HTML
+  # element, immediately pop it (void), acknowledge self-closing; frameset-ok
+  # not ok.
+  defp process(:in_body, %Token.StartTag{name: "hr"} = token, state) do
+    {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
+    %{pop(state) | frameset_ok: false}
+  end
+
+  # A start tag "image": a parse error — act as if it were "img".
+  defp process(:in_body, %Token.StartTag{name: "image"} = token, state) do
+    process(:in_body, %{token | name: "img"}, state)
+  end
+
+  # A start tag "pre"/"listing": close a p element in button scope, insert an
+  # HTML element; a following newline character is dropped (§13.2.6.4.7 — handled
+  # by the tokenizer/text step is deferred); frameset-ok not ok.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(pre listing) do
+    {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
+    %{state | frameset_ok: false}
+  end
+
+  # A start tag "form": if there is a form element pointer and no template on the
+  # stack, ignore (parse error). Otherwise close a p in button scope, insert, and
+  # set the form element pointer.
+  defp process(:in_body, %Token.StartTag{name: "form"} = token, state) do
+    if state.form do
+      state
+    else
+      {form, state} = insert_html_element(token, close_p_if_button_scope(state))
+      %{state | form: form}
+    end
+  end
+
   # A start tag for a void element: insert an HTML element, immediately pop it,
   # acknowledge the self-closing flag.
   defp process(:in_body, %Token.StartTag{name: name} = token, state) when name in @void do
@@ -292,10 +346,59 @@ defmodule DOM.HTML.TreeBuilder do
     pop(state)
   end
 
-  # A start tag for a rawtext/RCDATA element: insert + switch to "text".
-  defp process(:in_body, %Token.StartTag{name: name} = token, state) when name in @rawtext do
+  # A start tag for "address, article, aside, …, div, dl, …, p, section, …"
+  # (the block-level group): if the stack has a p element in button scope, close
+  # it; then insert an HTML element.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(address article aside blockquote center details dialog dir
+                       div dl fieldset figcaption figure footer header hgroup main
+                       menu nav ol p section summary ul) do
+    {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
+    state
+  end
+
+  # A start tag "h1".."h6": close a p element in button scope; if the current
+  # node is itself a heading, pop it (parse error); insert an HTML element.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(h1 h2 h3 h4 h5 h6) do
+    state = close_p_if_button_scope(state)
+    state = if heading?(current_node(state)), do: pop(state), else: state
     {_el, state} = insert_html_element(token, state)
-    %{state | original_mode: :in_body, mode: :text}
+    state
+  end
+
+  # A start tag "li": frameset-ok not ok (deferred); walk the stack popping
+  # generate-implied-end-tags-style from any open "li", closing it; then close a
+  # p element in button scope and insert.
+  defp process(:in_body, %Token.StartTag{name: "li"} = token, state) do
+    state = close_list_item(state, ["li"])
+    state = close_p_if_button_scope(state)
+    {_el, state} = insert_html_element(token, state)
+    state
+  end
+
+  # A start tag "dd"/"dt": as "li" but keyed on dd/dt.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(dd dt) do
+    state = close_list_item(state, ~w(dd dt))
+    state = close_p_if_button_scope(state)
+    {_el, state} = insert_html_element(token, state)
+    state
+  end
+
+  # A start tag "button": if a button is in scope, generate implied end tags and
+  # pop through the button (parse error); reconstruct (tier 4); insert; frameset-
+  # ok not ok.
+  defp process(:in_body, %Token.StartTag{name: "button"} = token, state) do
+    state =
+      if has_in_scope?(state, "button", @scope_markers) do
+        state |> generate_implied_end_tags() |> pop_through("button")
+      else
+        state
+      end
+
+    {_el, state} = insert_html_element(token, state)
+    state
   end
 
   # Any other start tag: reconstruct active formatting elements (tier 4 — no-op
@@ -311,10 +414,86 @@ defmodule DOM.HTML.TreeBuilder do
     %{state | mode: :after_body}
   end
 
-  # Any other end tag (tier 1 simplification): pop the stack to the named element
-  # if present. (The full "generate implied end tags" + scope handling is tier 2.)
+  # An end tag for a block-level element ("address, …, div, …, ul, …"): if it is
+  # in scope, generate implied end tags then pop through it (else parse error,
+  # ignore).
+  defp process(:in_body, %Token.EndTag{name: name}, state)
+       when name in ~w(address article aside blockquote button center details
+                       dialog dir div dl fieldset figcaption figure footer header
+                       hgroup listing main menu nav ol pre section summary ul) do
+    if has_in_scope?(state, name, @scope_markers) do
+      state |> generate_implied_end_tags() |> pop_through(name)
+    else
+      state
+    end
+  end
+
+  # An end tag "form" (no template on the stack — templates are a later tier):
+  # let node be the form pointer and clear it; if node is null or not in scope,
+  # ignore; otherwise generate implied end tags and remove node from the stack.
+  defp process(:in_body, %Token.EndTag{name: "form"}, state) do
+    node = state.form
+    state = %{state | form: nil}
+
+    if node && has_in_scope?(state, "form", @scope_markers) do
+      state
+      |> generate_implied_end_tags()
+      |> then(&%{&1 | open_elements: drop_including(&1.open_elements, node)})
+    else
+      state
+    end
+  end
+
+  # An end tag "p": if there is no p element in button scope, insert one (parse
+  # error) then close it; otherwise close a p element.
+  defp process(:in_body, %Token.EndTag{name: "p"}, state) do
+    state =
+      if has_in_scope?(state, "p", @button_scope_markers) do
+        state
+      else
+        {_el, state} = insert_html_element(%Token.StartTag{name: "p"}, state)
+        state
+      end
+
+    close_p_element(state)
+  end
+
+  # An end tag "li": if in list-item scope, generate implied end tags except li,
+  # then pop through the li (else parse error, ignore).
+  defp process(:in_body, %Token.EndTag{name: "li"}, state) do
+    if has_in_scope?(state, "li", @list_item_scope_markers) do
+      state |> generate_implied_end_tags("li") |> pop_through("li")
+    else
+      state
+    end
+  end
+
+  # An end tag "dd"/"dt": if in scope, generate implied end tags except it, then
+  # pop through it (else parse error, ignore).
+  defp process(:in_body, %Token.EndTag{name: name}, state) when name in ~w(dd dt) do
+    if has_in_scope?(state, name, @scope_markers) do
+      state |> generate_implied_end_tags(name) |> pop_through(name)
+    else
+      state
+    end
+  end
+
+  # An end tag "h1".."h6": if any heading is in scope, generate implied end tags
+  # then pop through the first heading on the stack (else parse error, ignore).
+  defp process(:in_body, %Token.EndTag{name: name}, state) when name in ~w(h1 h2 h3 h4 h5 h6) do
+    if any_heading_in_scope?(state) do
+      state |> generate_implied_end_tags() |> pop_through_heading()
+    else
+      state
+    end
+  end
+
+  # Any other end tag: walk the stack from the current node; on a node whose name
+  # matches, generate implied end tags (except that name) and pop through it; on
+  # a "special" element, stop (parse error, ignore). (Non-special elements not
+  # matching are the adoption-agency's job — tier 4; here we walk past them.)
   defp process(:in_body, %Token.EndTag{name: name}, state) do
-    %{state | open_elements: pop_to(state.open_elements, name)}
+    any_other_end_tag(state, name, state.open_elements)
   end
 
   # ==========================================================================
@@ -471,6 +650,138 @@ defmodule DOM.HTML.TreeBuilder do
   defp pop_to([], _name, original), do: original
 
   defp append(parent, child), do: Node.append_child(parent, child)
+
+  # Pop the stack down to and INCLUDING the first element named `name`. (Callers
+  # guarantee it is present via a scope check.)
+  defp pop_through(state, name) do
+    %{state | open_elements: pop_to(state.open_elements, name)}
+  end
+
+  # Pop down to and including the first heading (h1..h6) on the stack.
+  defp pop_through_heading(%__MODULE__{open_elements: [el | rest]} = state) do
+    if heading?(el),
+      do: %{state | open_elements: rest},
+      else: pop_through_heading(%{state | open_elements: rest})
+  end
+
+  # ==========================================================================
+  # §13.2.6.3 / §13.2.4.2  Implied-end-tag and scope algorithms
+  # ==========================================================================
+
+  # "Generate implied end tags": while the current node is an implied-end-tag
+  # element (optionally excluding `except`), pop it.
+  defp generate_implied_end_tags(state, except \\ nil) do
+    node = current_node(state)
+    name = Node.node_name(node)
+
+    if name in @implied_end_tags and name != except do
+      generate_implied_end_tags(pop(state), except)
+    else
+      state
+    end
+  end
+
+  # "Close a p element" (§13.2.6.4.7): generate implied end tags except p, then
+  # pop through the p element.
+  defp close_p_element(state) do
+    state |> generate_implied_end_tags("p") |> pop_through("p")
+  end
+
+  # If a p element is in button scope, close it (used by block-level start tags).
+  defp close_p_if_button_scope(state) do
+    if has_in_scope?(state, "p", @button_scope_markers), do: close_p_element(state), else: state
+  end
+
+  # "li"/"dd"/"dt" start tags (§13.2.6.4.7): walk the stack from the current
+  # node; on a `names` element, generate implied end tags (except it) and pop
+  # through it, stopping. Stop early (without closing) on a "special" element
+  # that is not address/div/p.
+  defp close_list_item(state, names), do: close_list_item(state, names, state.open_elements)
+
+  defp close_list_item(state, names, [node | rest]) do
+    name = Node.node_name(node)
+
+    cond do
+      name in names -> state |> generate_implied_end_tags(name) |> pop_through(name)
+      special?(name) and name not in ~w(address div p) -> state
+      :else -> close_list_item(state, names, rest)
+    end
+  end
+
+  defp close_list_item(state, _names, []), do: state
+
+  # "Have an element named `name` in scope", parameterized by the terminating
+  # marker set: walk the stack; a match returns true, a marker returns false.
+  defp has_in_scope?(state, name, markers), do: in_scope?(state.open_elements, name, markers)
+
+  defp in_scope?([el | rest], name, markers) do
+    node_name = Node.node_name(el)
+
+    cond do
+      node_name == name -> true
+      node_name in markers -> false
+      :else -> in_scope?(rest, name, markers)
+    end
+  end
+
+  defp in_scope?([], _name, _markers), do: false
+
+  # "Have a heading (h1..h6) in scope" (for the heading end tag): walk the stack;
+  # any heading returns true, a default-scope marker returns false.
+  defp any_heading_in_scope?(state), do: heading_in_scope?(state.open_elements)
+
+  defp heading_in_scope?([el | rest]) do
+    name = Node.node_name(el)
+
+    cond do
+      heading?(el) -> true
+      name in @scope_markers -> false
+      :else -> heading_in_scope?(rest)
+    end
+  end
+
+  defp heading_in_scope?([]), do: false
+
+  # "Any other end tag" loop (§13.2.6.4.7): walk from the current node; a matching
+  # element closes (generate implied end tags except it, pop through it); a
+  # "special" element stops the loop (parse error, ignore).
+  defp any_other_end_tag(state, name, [el | rest]) do
+    node_name = Node.node_name(el)
+
+    cond do
+      node_name == name ->
+        state
+        |> generate_implied_end_tags(name)
+        |> then(&%{&1 | open_elements: drop_including(&1.open_elements, el)})
+
+      special?(node_name) ->
+        state
+
+      :else ->
+        any_other_end_tag(state, name, rest)
+    end
+  end
+
+  defp any_other_end_tag(state, _name, []), do: state
+
+  # Drop stack entries up to and including `el` (by identity).
+  defp drop_including([el | rest], el), do: rest
+  defp drop_including([_ | rest], el), do: drop_including(rest, el)
+
+  defp heading?(node), do: Node.node_name(node) in ~w(h1 h2 h3 h4 h5 h6)
+
+  # "Special" category elements (§13.2.6.4.7 — subset relevant to tier 2's end-tag
+  # loop; the full list grows as later tiers add table/foreign handling).
+  @special ~w(address applet area article aside base basefont bgsound blockquote
+              body br button caption center col colgroup dd details dir div dl dt
+              embed fieldset figcaption figure footer form frame frameset h1 h2 h3
+              h4 h5 h6 head header hgroup hr html iframe img input keygen li link
+              listing main marquee menu meta nav noembed noframes noscript object
+              ol p param plaintext pre script section select source style summary
+              table tbody td template textarea tfoot th thead title tr track ul
+              wbr xmp)
+
+  defp special?(name), do: name in @special
 
   # ==========================================================================
   # Whitespace helpers
