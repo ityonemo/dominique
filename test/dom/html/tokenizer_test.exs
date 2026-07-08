@@ -64,6 +64,12 @@ defmodule DOM.HTML.TokenizerTest do
     test "a comment" do
       assert tokenize("<!--note-->") == [%Token.Comment{data: "note"}]
     end
+
+    # WHATWG "EOF in comment": a comment with no closing `-->` still tokenizes up
+    # to end-of-input.
+    test "an unclosed comment tokenizes to EOF" do
+      assert tokenize("<!--unclosed") == [%Token.Comment{data: "unclosed"}]
+    end
   end
 
   describe "doctype" do
@@ -117,6 +123,20 @@ defmodule DOM.HTML.TokenizerTest do
     test "the close tag is matched case-insensitively" do
       assert [_, %Token.Character{data: "x"}, %Token.EndTag{name: "script"}] =
                tokenize("<script>x</SCRIPT>")
+    end
+
+    # WHATWG "EOF in script data": an unclosed script/style/... tokenizes its
+    # interior up to end-of-input, with no end tag.
+    test "an unclosed script tokenizes its interior to EOF, no end tag" do
+      assert tokenize("<script>foo") == [
+               %Token.StartTag{name: "script", attributes: [], self_closing: false},
+               %Token.Character{data: "foo"}
+             ]
+    end
+
+    test "an unclosed style tokenizes to EOF" do
+      assert [%Token.StartTag{name: "style"}, %Token.Character{data: ".a{}"}] =
+               tokenize("<style>.a{}")
     end
   end
 

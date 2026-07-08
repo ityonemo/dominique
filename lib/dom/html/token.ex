@@ -33,6 +33,10 @@ after
         {:"raw_open_#{name}", tag: true, post_traverse: :raw_open},
         {:"raw_name_#{name}", token: {:raw_name, name}},
         {:"raw_text_#{name}", tag: true, post_traverse: :raw_text},
+        # raw_end_X is a transparent wrapper: raw_close_X / !. (EOF). When it
+        # matches the close it forwards raw_close_X's EndTag; at EOF it adds
+        # nothing.
+        {:"raw_end_#{name}", []},
         {:"raw_close_#{name}", tag: true, post_traverse: :raw_close}
       ]
     end)
@@ -48,6 +52,7 @@ after
       [
         comment: [tag: true, post_traverse: :comment],
         comment_data: [tag: true, post_traverse: :codepoints],
+        comment_close: [ignore: true],
         doctype: [tag: true, post_traverse: :doctype],
         doctype_keyword: [ignore: true],
         doctype_ws: [ignore: true],
@@ -133,7 +138,7 @@ after
     {rest, [to_string_utf8(cps)], context}
   end
 
-  defp comment(rest, [{:comment, ["<!--", data, "-->"]}], context, _loc, _col) do
+  defp comment(rest, [{:comment, ["<!--", data]}], context, _loc, _col) do
     {rest, [struct!(Token.Comment, data: data)], context}
   end
 

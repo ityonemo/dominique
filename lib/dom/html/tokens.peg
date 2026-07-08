@@ -17,15 +17,35 @@ token <- comment / doctype / raw_element / end_tag / start_tag / character
 raw_element <- raw_script / raw_style / raw_textarea / raw_title / raw_xmp
              / raw_iframe / raw_noembed / raw_noframes / raw_noscript
 
-raw_script   <- raw_open_script   raw_text_script   raw_close_script
-raw_style    <- raw_open_style    raw_text_style    raw_close_style
-raw_textarea <- raw_open_textarea raw_text_textarea raw_close_textarea
-raw_title    <- raw_open_title    raw_text_title    raw_close_title
-raw_xmp      <- raw_open_xmp      raw_text_xmp      raw_close_xmp
-raw_iframe   <- raw_open_iframe   raw_text_iframe   raw_close_iframe
-raw_noembed  <- raw_open_noembed  raw_text_noembed  raw_close_noembed
-raw_noframes <- raw_open_noframes raw_text_noframes raw_close_noframes
-raw_noscript <- raw_open_noscript raw_text_noscript raw_close_noscript
+# The close tag is EOF-tolerant: a raw-text element that reaches end-of-input
+# without its close tag still tokenizes (emitting its start tag + interior, no
+# end tag), matching the WHATWG "EOF in raw text" recovery.
+raw_script   <- raw_open_script   raw_text_script   raw_end_script
+raw_style    <- raw_open_style    raw_text_style    raw_end_style
+raw_textarea <- raw_open_textarea raw_text_textarea raw_end_textarea
+raw_title    <- raw_open_title    raw_text_title    raw_end_title
+raw_xmp      <- raw_open_xmp      raw_text_xmp      raw_end_xmp
+raw_iframe   <- raw_open_iframe   raw_text_iframe   raw_end_iframe
+raw_noembed  <- raw_open_noembed  raw_text_noembed  raw_end_noembed
+raw_noframes <- raw_open_noframes raw_text_noframes raw_end_noframes
+raw_noscript <- raw_open_noscript raw_text_noscript raw_end_noscript
+
+# NOTE: title/noscript/noframes are RCDATA/optional elements that also appear in
+# SVG/MathML foreign content, where they are ORDINARY elements (not raw-text). Our
+# context-free tokenizer cannot see that context, but when such an element is
+# unclosed the raw rule must FAIL so the token falls back to a normal start tag
+# (letting the tree builder treat the interior as markup). So those keep the
+# strict close (no EOF branch); script/style/textarea/xmp/iframe — which are
+# raw-text in every context — get EOF tolerance.
+raw_end_script   <- raw_close_script   / !.
+raw_end_style    <- raw_close_style    / !.
+raw_end_textarea <- raw_close_textarea / !.
+raw_end_title    <- raw_close_title
+raw_end_xmp      <- raw_close_xmp      / !.
+raw_end_iframe   <- raw_close_iframe   / !.
+raw_end_noembed  <- raw_close_noembed  / !.
+raw_end_noframes <- raw_close_noframes
+raw_end_noscript <- raw_close_noscript
 
 raw_open_script   <- '<' raw_name_script   attributes ws '>'
 raw_open_style    <- '<' raw_name_style    attributes ws '>'
@@ -69,7 +89,10 @@ raw_close_noscript <- '</' raw_name_noscript ws '>'
 
 # --- comments & doctype -----------------------------------------------------
 
-comment <- '<!--' comment_data '-->'
+# The close is EOF-tolerant: `<!--` without a closing `-->` still tokenizes as a
+# comment up to end-of-input (WHATWG "EOF in comment" recovery).
+comment <- '<!--' comment_data comment_close
+comment_close <- '-->' / !.
 comment_data <- (!'-->' .)*
 
 doctype <- '<!' doctype_keyword doctype_ws doctype_name doctype_ids? ws '>'
