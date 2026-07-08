@@ -741,4 +741,70 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
   end
+
+  describe "in body — §13.2.6.4.7 ruby / plaintext" do
+    # spec §13.2.6.4.7: a start tag "rp"/"rt" — if a ruby is in scope, generate
+    # implied end tags (except rtc). So an open <p> inside <ruby> closes before
+    # the <rp>, making them siblings.
+    test "an rp start tag closes an implied-open p inside a ruby" do
+      assert tree("<ruby><p><rp>") ==
+               doc(["|     <ruby>", "|       <p>", "|       <rp>"])
+    end
+
+    # spec §13.2.6.4.7: a start tag "rb" — if a ruby is in scope, generate implied
+    # end tags; a preceding rp/rt closes.
+    test "an rb start tag closes a preceding rt" do
+      assert tree("<ruby><rt>a<rb>b") ==
+               doc([
+                 "|     <ruby>",
+                 "|       <rt>",
+                 "|         \"a\"",
+                 "|       <rb>",
+                 "|         \"b\""
+               ])
+    end
+
+    # spec §13.2.6.4.7: a start tag "plaintext" closes a p in button scope and is
+    # inserted as a sibling; the rest of input is its raw text.
+    test "a plaintext start tag closes an open p" do
+      assert tree("<p>a<plaintext>b</p>c") ==
+               doc([
+                 "|     <p>",
+                 "|       \"a\"",
+                 "|     <plaintext>",
+                 "|       \"b</p>c\""
+               ])
+    end
+
+    # spec §13.2.6.4.7: textarea/xmp/iframe are in-body-only rawtext elements —
+    # they must imply a <body> (not land in <head>) when they open the document.
+    test "a leading textarea implies a body (not head)" do
+      assert tree("<textarea>x</textarea>") ==
+               doc(["|     <textarea>", "|       \"x\""])
+    end
+  end
+
+  describe "foreign content — §13.2.6.5 attribute case fixups" do
+    # spec §13.2.6.5 (adjust MathML attributes): a nested MathML element's
+    # definitionurl attribute is case-corrected to definitionURL.
+    test "definitionurl is corrected on a nested MathML element" do
+      assert tree(~s(<math><mn definitionurl="foo">)) ==
+               doc([
+                 "|     <math math>",
+                 "|       <math mn>",
+                 "|         definitionURL=\"foo\""
+               ])
+    end
+
+    # spec §13.2.6.5 (adjust SVG attributes): a nested SVG element's attribute
+    # name is case-corrected (e.g. gradientunits -> gradientUnits).
+    test "an SVG attribute name is corrected on a nested SVG element" do
+      assert tree(~s(<svg><lineargradient gradientunits="x">)) ==
+               doc([
+                 "|     <svg svg>",
+                 "|       <svg linearGradient>",
+                 "|         gradientUnits=\"x\""
+               ])
+    end
+  end
 end

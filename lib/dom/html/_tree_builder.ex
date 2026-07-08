@@ -53,9 +53,11 @@ defmodule DOM.HTML.TreeBuilder do
   # recreate the element during reconstruction and to compare attributes for the
   # Noah's Ark clause). Most-recent entry is the list head.
 
-  # Elements parsed with the "generic raw text" (rawtext) or "generic RCDATA"
-  # element parsing algorithms — both switch to the "text" insertion mode.
-  @rawtext ~w(style script noframes noscript title textarea xmp iframe noembed)
+  # Rawtext/RCDATA elements the "in head" mode parses with the generic rawtext
+  # algorithm (switch to the "text" insertion mode). textarea/xmp/iframe/noembed
+  # are in-body-only and have their own "in body" rules — they must NOT be
+  # consumed here, else they land in <head> instead of implying a <body>.
+  @head_rawtext ~w(style script noframes noscript title)
 
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input keygen link meta param source track wbr)
@@ -375,7 +377,7 @@ defmodule DOM.HTML.TreeBuilder do
   # switch to "text" mode, saving the CURRENT insertion mode (which may be
   # "in body" when this clause is reached via the in-body delegation).
   defp process(:in_head, %Token.StartTag{name: name} = token, state)
-       when name in @rawtext do
+       when name in @head_rawtext do
     {_el, state} = insert_html_element(token, state)
     %{state | original_mode: state.mode, mode: :text}
   end
@@ -518,15 +520,30 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A start tag "xmp"/"iframe"/"textarea": these use the raw-text/RCDATA parsing
   # algorithm (via "in head") but additionally set frameset-ok to "not ok".
-  defp process(:in_body, %Token.StartTag{name: name} = token, state)
-       when name in ~w(xmp iframe textarea) do
-    process(:in_head, token, %{state | frameset_ok: false})
+  # A start tag "xmp": close a p in button scope, reconstruct, frameset-ok not ok,
+  # then follow the generic rawtext algorithm (insert + switch to "text").
+  defp process(:in_body, %Token.StartTag{name: "xmp"} = token, state) do
+    state = state |> close_p_if_button_scope() |> reconstruct_formatting()
+    {_el, state} = insert_html_element(token, %{state | frameset_ok: false})
+    %{state | original_mode: :in_body, mode: :text}
   end
 
-  # A start tag whose tag name is one of the "in head" tags (base/link/meta/…/
-  # title/style/script/…): process using the "in head" rules.
+  # A start tag "textarea"/"iframe"/"noembed": frameset-ok not ok (for
+  # textarea/iframe), then the generic rawtext/RCDATA algorithm in the in-body
+  # context (insert + switch to "text"). (The leading-newline skip for textarea
+  # is handled by coalesced text; deferred.)
   defp process(:in_body, %Token.StartTag{name: name} = token, state)
-       when name in ~w(base basefont bgsound link meta) or name in @rawtext do
+       when name in ~w(textarea iframe noembed) do
+    frameset_ok = name == "noembed" and state.frameset_ok
+    {_el, state} = insert_html_element(token, %{state | frameset_ok: frameset_ok})
+    %{state | original_mode: :in_body, mode: :text}
+  end
+
+  # A start tag whose tag name is one of the genuine "in head" tags
+  # (base/link/meta/… + title/style/script/noframes/noscript): process using the
+  # "in head" rules.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(base basefont bgsound link meta) or name in @head_rawtext do
     process(:in_head, token, state)
   end
 
@@ -550,6 +567,14 @@ defmodule DOM.HTML.TreeBuilder do
        when name in ~w(pre listing) do
     {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
     %{state | frameset_ok: false}
+  end
+
+  # A start tag "plaintext": if a p is in button scope, close it; insert an HTML
+  # element and switch the tokenizer to the PLAINTEXT state (already handled by
+  # the tokenizer — the whole rest of input arrives as one Character run).
+  defp process(:in_body, %Token.StartTag{name: "plaintext"} = token, state) do
+    {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
+    state
   end
 
   # A start tag "form": if there is a form element pointer and no template on the
@@ -656,6 +681,32 @@ defmodule DOM.HTML.TreeBuilder do
        when name in ~w(optgroup option) do
     state = if Node.node_name(current_node(state)) == "option", do: pop(state), else: state
     {_el, state} = insert_html_element(token, reconstruct_formatting(state))
+    state
+  end
+
+  # A start tag "rb"/"rtc": if a ruby is in scope, generate implied end tags
+  # (current node should then be ruby, else parse error); insert.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(rb rtc) do
+    state =
+      if has_in_scope?(state, "ruby", @scope_markers),
+        do: generate_implied_end_tags(state),
+        else: state
+
+    {_el, state} = insert_html_element(token, state)
+    state
+  end
+
+  # A start tag "rp"/"rt": if a ruby is in scope, generate implied end tags
+  # EXCEPT rtc (so an open rtc keeps its rt/rp children); insert.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(rp rt) do
+    state =
+      if has_in_scope?(state, "ruby", @scope_markers),
+        do: generate_implied_end_tags(state, "rtc"),
+        else: state
+
+    {_el, state} = insert_html_element(token, state)
     state
   end
 
@@ -2733,15 +2784,27 @@ defmodule DOM.HTML.TreeBuilder do
 
   defp foreign_other_start(token, state) do
     namespace = namespace_of(state, adjusted_current_node(state))
-    token = token |> adjust_foreign_tag(namespace) |> adjust_foreign_attributes()
+
+    token =
+      token
+      |> adjust_foreign_tag(namespace)
+      |> adjust_ns_attributes(namespace)
+      |> adjust_foreign_attributes()
+
     {_el, state} = insert_foreign_element(token, namespace, state)
     if token.self_closing, do: pop(state), else: state
   end
 
-  # Adjust the tag name + attributes of a foreign start tag for `namespace`:
-  # SVG gets tag-name + attribute case fixups; MathML gets attribute fixups.
+  # Adjust the tag name of a foreign start tag: SVG gets the camelCase fixup.
   defp adjust_foreign_tag(token, :svg), do: %{token | name: svg_tag_name(token.name)}
   defp adjust_foreign_tag(token, _namespace), do: token
+
+  # Per-namespace attribute case fixups (§13.2.6.5): SVG attribute names and the
+  # MathML definitionURL are corrected. (Applied to any foreign element, not just
+  # the top-level math/svg — fixes e.g. <mn definitionurl=…> inside <math>.)
+  defp adjust_ns_attributes(token, :svg), do: adjust_svg_attributes(token)
+  defp adjust_ns_attributes(token, :mathml), do: adjust_mathml_attributes(token)
+  defp adjust_ns_attributes(token, _namespace), do: token
 
   defp adjust_svg_attributes(%Token.StartTag{} = token) do
     %{token | attributes: Enum.map(token.attributes, &adjust_svg_attribute/1)}
