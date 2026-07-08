@@ -166,6 +166,15 @@ defmodule DOM.HTML.TreeBuilderTest do
     end
   end
 
+  describe "before head — §13.2.6.4.3" do
+    # spec §13.2.6.4.3: whitespace in the "before head" mode is IGNORED (not
+    # inserted), so a newline between <html> and the first content does not become
+    # a stray text child of <html>.
+    test "leading whitespace before the head is dropped" do
+      assert tree("<html>\n<p>x") == doc(["|     <p>", "|       \"x\""])
+    end
+  end
+
   describe "after head — §13.2.6.4.6" do
     # spec §13.2.6.4.6: a head-element start tag after </head> re-enters the head
     # (push head, process in-head, pop head) — so <base> lands in <head>, not body.

@@ -1667,22 +1667,22 @@ defmodule DOM.HTML.TreeBuilder do
   # Character-token handling per mode (whitespace vs. the rest)
   # ==========================================================================
 
-  # "initial"/"before html": whitespace characters are ignored; the non-whitespace
-  # remainder runs the mode's "anything else" (the process/3 clause, which for a
-  # character token performs the implied element + reprocess in the next mode).
+  # "initial"/"before html"/"before head": whitespace characters are IGNORED; the
+  # non-whitespace remainder runs the mode's "anything else" (the process/3 clause,
+  # which for a character token performs the implied element + reprocess).
   defp process_characters(mode, %Token.Character{data: data} = token, state)
-       when mode in [:initial, :before_html] do
+       when mode in [:initial, :before_html, :before_head] do
     case strip_leading_whitespace(data) do
       "" -> state
       rest -> process(mode, %{token | data: rest}, state)
     end
   end
 
-  # "before head"/"in head"/"in head noscript"/"after head": leading whitespace is
-  # inserted; the non-whitespace remainder runs the mode's "anything else"
-  # (process/3 — which for in_head_noscript pops the noscript and reprocesses).
+  # "in head"/"in head noscript"/"after head": leading whitespace is INSERTED; the
+  # non-whitespace remainder runs the mode's "anything else" (process/3 — which
+  # for in_head_noscript pops the noscript and reprocesses).
   defp process_characters(mode, %Token.Character{data: data} = token, state)
-       when mode in [:before_head, :in_head, :in_head_noscript, :after_head] do
+       when mode in [:in_head, :in_head_noscript, :after_head] do
     {ws, rest} = split_leading_whitespace(data)
     state = if ws != "", do: insert_characters(ws, state), else: state
     if rest == "", do: state, else: process(mode, %{token | data: rest}, state)
