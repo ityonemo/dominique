@@ -72,6 +72,46 @@ defmodule DOM.HTML.TokenizerTest do
     end
   end
 
+  describe "bogus comments" do
+    # WHATWG bogus comment: `<?` KEEPS the `?` in the comment data.
+    test "a processing-instruction-like `<?...>` keeps the ?" do
+      assert tokenize(~s(<?xml version="1.0">)) == [%Token.Comment{data: ~s(?xml version="1.0")}]
+    end
+
+    # `<!` that is not a valid comment/doctype DROPS the `!`.
+    test "a `<!...>` that is not a comment/doctype drops the bang" do
+      assert tokenize("<!COMMENT>") == [%Token.Comment{data: "COMMENT"}]
+    end
+
+    # `</` followed by a non-letter DROPS the slash.
+    test "a `</` followed by a non-letter is a bogus comment" do
+      assert tokenize("</ COMMENT >") == [%Token.Comment{data: " COMMENT "}]
+    end
+
+    # A bogus comment is EOF-tolerant.
+    test "a bogus comment with no `>` tokenizes to EOF" do
+      assert tokenize("<?x") == [%Token.Comment{data: "?x"}]
+    end
+  end
+
+  describe "malformed tags" do
+    # `<>` (empty tag name) is literal character data.
+    test "an empty tag `<>` is character data" do
+      assert tokenize("<>") == [%Token.Character{data: "<>"}]
+    end
+
+    # A bare `</` at end of input is character data.
+    test "a bare `</` is character data" do
+      assert tokenize("</") == [%Token.Character{data: "</"}]
+    end
+
+    # A stray `<` at EOF recovers as character data (tolerant tail-emit) rather
+    # than raising.
+    test "a stray `<` recovers as character data" do
+      assert tokenize("<") == [%Token.Character{data: "<"}]
+    end
+  end
+
   describe "doctype" do
     test "a doctype, name lowercased" do
       assert [%Token.Doctype{name: "html"}] = tokenize("<!DOCTYPE HTML>")

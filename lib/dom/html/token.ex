@@ -68,6 +68,10 @@ after
         comment: [tag: true, post_traverse: :comment],
         comment_data: [tag: true, post_traverse: :codepoints],
         comment_close: [ignore: true],
+        bogus_comment: [tag: true, post_traverse: :bogus_comment],
+        bogus_body: [tag: true, post_traverse: :bogus_data],
+        bogus_end: [ignore: true],
+        malformed_tag: [tag: true, post_traverse: :malformed_tag],
         doctype: [tag: true, post_traverse: :doctype],
         doctype_keyword: [ignore: true],
         doctype_ws: [ignore: true],
@@ -95,12 +99,23 @@ after
 
   @spec tokenize(String.t()) :: [struct()]
   def tokenize(html) do
-    case html |> normalize_newlines() |> parse_tokens() do
+    html |> normalize_newlines() |> tokenize_from()
+  end
+
+  # Tokenize, tolerating an unconsumed tail: the grammar covers the well-formed
+  # and known-malformed forms, but for any residual stray byte (e.g. a lone `<`
+  # at EOF) we emit that byte as character data and retry the remainder rather
+  # than aborting the whole parse. A hard PEG error is still a real bug and raises.
+  defp tokenize_from(""), do: []
+
+  defp tokenize_from(html) do
+    case parse_tokens(html) do
       {:ok, tokens, "", _context, _loc, _offset} ->
         tokens
 
-      {:ok, _tokens, rest, _context, _loc, _offset} ->
-        raise ArgumentError, "could not tokenize HTML (unparsed: #{inspect(rest)})"
+      {:ok, tokens, rest, _context, _loc, _offset} ->
+        <<stray::utf8, tail::binary>> = rest
+        tokens ++ [struct!(Token.Character, data: <<stray::utf8>>)] ++ tokenize_from(tail)
 
       {:error, reason, _rest, _context, _loc, _offset} ->
         raise ArgumentError, "could not tokenize HTML: #{reason}"
@@ -156,6 +171,33 @@ after
   defp comment(rest, [{:comment, ["<!--", data]}], context, _loc, _col) do
     {rest, [struct!(Token.Comment, data: data)], context}
   end
+
+  # The bogus-comment body is tagged {:bogus_data, str} so it is unambiguous even
+  # when empty (the marker literals '<'/'<!'/'</' are separate string args). `<?`
+  # keeps its `?` because the `?` was matched by bogus_body, not the marker.
+  defp bogus_data(rest, [{:bogus_body, cps}], context, _loc, _col) do
+    {rest, [{:bogus_data, to_string_utf8(cps)}], context}
+  end
+
+  defp bogus_comment(rest, [{:bogus_comment, args}], context, _loc, _col) do
+    data =
+      Enum.find_value(args, "", fn
+        {:bogus_data, s} -> s
+        _ -> nil
+      end)
+
+    {rest, [struct!(Token.Comment, data: data)], context}
+  end
+
+  # `<>` is literal text; `</>` and a bare `</` recover with no token / as text.
+  defp malformed_tag(rest, [{:malformed_tag, ["<>"]}], context, _loc, _col),
+    do: {rest, [struct!(Token.Character, data: "<>")], context}
+
+  defp malformed_tag(rest, [{:malformed_tag, ["</"]}], context, _loc, _col),
+    do: {rest, [struct!(Token.Character, data: "</")], context}
+
+  defp malformed_tag(rest, [{:malformed_tag, ["</>"]}], context, _loc, _col),
+    do: {rest, [], context}
 
   defp doctype(rest, [{:doctype, args}], context, _loc, _col) do
     name =

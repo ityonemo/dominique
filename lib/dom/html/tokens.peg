@@ -8,7 +8,13 @@
 
 tokens <- token*
 
-token <- comment / doctype / raw_element / end_tag / start_tag / character
+# Ordered choice = the tokenizer's precedence. Well-formed markup (comment,
+# doctype, raw elements, real tags) is tried first; bogus_comment catches the
+# `<?`/`<!`/`</`-non-letter fallthroughs; malformed_tag handles `<>`/`</>`;
+# character is the final fallback. Getting this order wrong turns real tags into
+# comments or vice-versa.
+token <- comment / doctype / raw_element / end_tag / start_tag
+       / bogus_comment / malformed_tag / character
 
 # --- raw-text / RCDATA elements ---------------------------------------------
 # Their interior is captured verbatim as one character run, up to the matching
@@ -140,6 +146,22 @@ doctype_system <- system_kw doctype_ws doctype_str
 public_kw <- [Pp][Uu][Bb][Ll][Ii][Cc]
 system_kw <- [Ss][Yy][Ss][Tt][Ee][Mm]
 doctype_str <- '"' [^"]* '"' / "'" [^']* "'"
+
+# --- bogus comments & malformed tags ---------------------------------------
+# WHATWG bogus-comment / recovery. Ordering (in `token`) puts these AFTER real
+# comment/doctype/tags. `<?` KEEPS the `?` in the comment data (lookahead, don't
+# consume); `<!` and `</`-non-letter DROP the marker. Each is `>`-or-EOF
+# terminated.
+bogus_comment <- bogus_q / bogus_bang / bogus_slash
+bogus_q     <- '<' &'?' bogus_body bogus_end
+bogus_bang  <- '<!' bogus_body bogus_end
+bogus_slash <- '</' ![a-zA-Z] &. bogus_body bogus_end
+bogus_body  <- (!'>' .)*
+bogus_end   <- '>' / !.
+
+# `<>` is literal character data; `</>` is a discarded (empty) end tag; a bare
+# `</` (nothing after) is literal character data.
+malformed_tag <- '</>' / '<>' / '</'
 
 # --- tags -------------------------------------------------------------------
 
