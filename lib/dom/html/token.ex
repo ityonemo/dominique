@@ -61,7 +61,8 @@ after
       script_double_escape: [],
       script_dbl_open: [],
       script_dbl_close: [],
-      script_kw: []
+      script_kw: [],
+      raw_tag_end: [ignore: true]
     ] ++
       raw_rules ++
       [

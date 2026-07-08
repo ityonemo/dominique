@@ -98,9 +98,13 @@ raw_text_script <- (!raw_close_script script_segment)*
 script_segment  <- script_escape / .
 # `<!-- ... -->` escaped region. A </script> here closes normally, so the region
 # body stops at `-->` OR a </script>; only nested double-escapes hide a </script>.
-script_escape <- '<!--' script_escaped_body ('-->' / &raw_close_script / !.)
-script_escaped_body <- (!'-->' !raw_close_script script_escaped_item)*
+# The internal lookahead uses the STRICT close (`</script>` with a real `>`), not
+# the EOF/whitespace-tolerant raw_tag_end, so an incomplete `</script ` inside an
+# escape stays as data.
+script_escape <- '<!--' script_escaped_body ('-->' / &script_strict_close / !.)
+script_escaped_body <- (!'-->' !script_strict_close script_escaped_item)*
 script_escaped_item <- script_double_escape / .
+script_strict_close <- '</' script_kw ws '>'
 # A nested <script>...</script> region, captured as plain characters (name and
 # attributes are NOT tokenized — this is script data, not markup).
 script_double_escape <- script_dbl_open (!script_dbl_close .)* script_dbl_close
@@ -117,15 +121,21 @@ raw_text_noembed  <- (!raw_close_noembed  .)*
 raw_text_noframes <- (!raw_close_noframes .)*
 raw_text_noscript <- (!raw_close_noscript .)*
 
-raw_close_script   <- '</' raw_name_script   ws '>'
-raw_close_style    <- '</' raw_name_style    ws '>'
-raw_close_textarea <- '</' raw_name_textarea ws '>'
-raw_close_title    <- '</' raw_name_title    ws '>'
-raw_close_xmp      <- '</' raw_name_xmp      ws '>'
-raw_close_iframe   <- '</' raw_name_iframe   ws '>'
-raw_close_noembed  <- '</' raw_name_noembed  ws '>'
-raw_close_noframes <- '</' raw_name_noframes ws '>'
-raw_close_noscript <- '</' raw_name_noscript ws '>'
+# The close tag matches `</name` followed by a terminator: `>`, or a whitespace/
+# `/` (which per the WHATWG end-tag states switches to before-attribute-name /
+# self-closing, consuming any junk up to `>` OR end-of-input — an unterminated
+# `</script ` at EOF still closes the element).
+raw_close_script   <- '</' raw_name_script   raw_tag_end
+raw_close_style    <- '</' raw_name_style    raw_tag_end
+raw_close_textarea <- '</' raw_name_textarea raw_tag_end
+raw_close_title    <- '</' raw_name_title    raw_tag_end
+raw_close_xmp      <- '</' raw_name_xmp      raw_tag_end
+raw_close_iframe   <- '</' raw_name_iframe   raw_tag_end
+raw_close_noembed  <- '</' raw_name_noembed  raw_tag_end
+raw_close_noframes <- '</' raw_name_noframes raw_tag_end
+raw_close_noscript <- '</' raw_name_noscript raw_tag_end
+
+raw_tag_end <- '>' / [ \t\r\n\f/] (!'>' .)* ('>' / !.)
 
 # --- comments & doctype -----------------------------------------------------
 
