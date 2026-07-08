@@ -950,4 +950,38 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert tree("<body t1=1><body t2=2>") =~ ~s(|   <body>\n|     t1="1"\n|     t2="2")
     end
   end
+
+  # The <title> element is RCDATA in the HTML namespace but an ORDINARY element in
+  # foreign (SVG/MathML) content. A context-free tokenizer can't tell them apart;
+  # a foreign-content flag threaded through the parse context lets the two coexist.
+  describe "title RCDATA vs foreign content — §13.2.5 + §13.2.6.5" do
+    # spec §13.2.5.73 (RCDATA): in a document, <title> is RCDATA — its content runs
+    # to a real </title> (or EOF). `foo/title>` (a `/` not `</`) is NOT a close, so
+    # everything up to EOF is the title's text.
+    test "a bare /title> does not close a document <title> (RCDATA to EOF)" do
+      assert tree("<title>foo/title><link></head><body>X") ==
+               ~s(| <html>\n|   <head>\n|     <title>\n) <>
+                 ~s(|       "foo/title><link></head><body>X"\n|   <body>)
+    end
+
+    test "with a doctype, a bare /title> still keeps the whole title RCDATA" do
+      assert tree("<!DOCTYPE html><title>foo/title><link></head><body>X") ==
+               ~s(| <!DOCTYPE html>\n| <html>\n|   <head>\n|     <title>\n) <>
+                 ~s(|       "foo/title><link></head><body>X"\n|   <body>)
+    end
+
+    # spec §13.2.6.5: inside <svg>, <title> is an ORDINARY foreign element — its
+    # children are parsed as markup, not RCDATA. Regression guard for the fix.
+    test "a <title> inside <svg> is an ordinary foreign element" do
+      assert tree("<svg><title><b>x</b></title></svg>") ==
+               ~s(| <html>\n|   <head>\n|   <body>\n|     <svg svg>\n) <>
+                 ~s(|       <svg title>\n|         <b>\n|           "x")
+    end
+
+    # A closed document <title> still behaves (regression guard).
+    test "a normally-closed document <title> keeps its RCDATA content" do
+      assert tree("<title>a<b>c</title>") ==
+               ~s(| <html>\n|   <head>\n|     <title>\n|       "a<b>c"\n|   <body>)
+    end
+  end
 end
