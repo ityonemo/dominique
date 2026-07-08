@@ -139,11 +139,15 @@ raw_tag_end <- '>' / [ \t\r\n\f/] (!'>' .)* ('>' / !.)
 
 # --- comments & doctype -----------------------------------------------------
 
-# The close is EOF-tolerant: `<!--` without a closing `-->` still tokenizes as a
-# comment up to end-of-input (WHATWG "EOF in comment" recovery).
-comment <- '<!--' comment_data comment_close
-comment_close <- '-->' / !.
-comment_data <- (!'-->' .)*
+# Comment states (WHATWG §13.2.5.4x):
+#  - abrupt close: `<!-->` and `<!--->` are empty comments (the `>` right after
+#    `<!--` / `<!---` closes with no data).
+#  - normal: data up to `-->`, the incorrectly-closed `--!>`, or EOF.
+comment <- '<!--' (comment_abrupt / comment_normal)
+comment_abrupt <- '-'? '>'                       # `<!-->` or `<!--->` -> empty
+comment_normal <- comment_data comment_close
+comment_close <- '-->' / '--!>' / !.
+comment_data <- (!'-->' !'--!>' .)*
 
 # Permissive DOCTYPE (WHATWG doctype states): the keyword needs no following
 # space (`<!DOCTYPEhtml>`), the name may be empty, PUBLIC/SYSTEM ids are captured

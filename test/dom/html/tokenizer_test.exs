@@ -70,6 +70,17 @@ defmodule DOM.HTML.TokenizerTest do
     test "an unclosed comment tokenizes to EOF" do
       assert tokenize("<!--unclosed") == [%Token.Comment{data: "unclosed"}]
     end
+
+    # WHATWG "incorrectly-closed-comment": `--!>` also closes the comment.
+    test "a --!> closes the comment" do
+      assert tokenize("<!-- x --!>y") == [%Token.Comment{data: " x "}, %Token.Character{data: "y"}]
+    end
+
+    # WHATWG "abrupt-closing-of-empty-comment": `<!-->` and `<!--->` are empty.
+    test "an abrupt close yields an empty comment" do
+      assert tokenize("<!-->x") == [%Token.Comment{data: ""}, %Token.Character{data: "x"}]
+      assert tokenize("<!--->x") == [%Token.Comment{data: ""}, %Token.Character{data: "x"}]
+    end
   end
 
   describe "bogus comments" do

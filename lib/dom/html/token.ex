@@ -67,6 +67,8 @@ after
       raw_rules ++
       [
         comment: [tag: true, post_traverse: :comment],
+        comment_abrupt: [ignore: true],
+        comment_normal: [],
         comment_data: [tag: true, post_traverse: :codepoints],
         comment_close: [ignore: true],
         bogus_comment: [tag: true, post_traverse: :bogus_comment],
@@ -170,8 +172,14 @@ after
     {rest, [to_string_utf8(cps)], context}
   end
 
+  # Normal comment carries its data; an abrupt-close comment (`<!-->`/`<!--->`)
+  # has no data arg.
   defp comment(rest, [{:comment, ["<!--", data]}], context, _loc, _col) do
     {rest, [struct!(Token.Comment, data: data)], context}
+  end
+
+  defp comment(rest, [{:comment, ["<!--"]}], context, _loc, _col) do
+    {rest, [struct!(Token.Comment, data: "")], context}
   end
 
   # The bogus-comment body is tagged {:bogus_data, str} so it is unambiguous even
