@@ -629,6 +629,22 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
 
+    # Customizable select: arbitrary content (button/div/datalist) nests inside a
+    # select via the "in body" fallback (not ignored).
+    test "customizable-select content nests inside the select" do
+      assert tree("<select><button>b</button><div>d</div><datalist><option>o") ==
+               doc([
+                 "|     <select>",
+                 "|       <button>",
+                 "|         \"b\"",
+                 "|       <div>",
+                 "|         \"d\"",
+                 "|       <datalist>",
+                 "|         <option>",
+                 "|           \"o\""
+               ])
+    end
+
     # spec §13.2.6.4.16 (<hr> start tag): an hr pops a current option/optgroup and
     # is inserted as a void child of the select.
     test "an hr in a select is a void child" do

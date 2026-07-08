@@ -1372,8 +1372,11 @@ defmodule DOM.HTML.TreeBuilder do
     process(:in_head, token, state)
   end
 
-  # Anything else: parse error, ignore.
-  defp process(:in_select, _token, state), do: state
+  # Anything else (customizable select): process using the "in body" rules, so
+  # arbitrary content (div/button/datalist/formatting/…) nests inside the select
+  # with normal reconstruction. (The older spec ignored these; the vendored
+  # html5lib data expects the customizable-select behavior.)
+  defp process(:in_select, token, state), do: process(:in_body, token, state)
 
   # ==========================================================================
   # The "in select in table" insertion mode (§13.2.6.4.17)
@@ -1662,10 +1665,12 @@ defmodule DOM.HTML.TreeBuilder do
     insert_characters(data, state)
   end
 
-  # "in select"/"in select in table": insert the characters (NULL is dropped).
+  # "in select"/"in select in table": reconstruct the active formatting elements
+  # (so text inside a reconstructed div/button/formatting element nests), then
+  # insert the characters (NULL is dropped).
   defp process_characters(mode, %Token.Character{data: data}, state)
        when mode in [:in_select, :in_select_in_table] do
-    insert_characters(String.replace(data, "\0", ""), state)
+    insert_characters(String.replace(data, "\0", ""), reconstruct_formatting(state))
   end
 
   # "in template": character tokens are processed using "in body".
