@@ -200,6 +200,38 @@ defmodule DOM.HTML.TokenizerTest do
                tokenize("<style>.x > .y {}</style>")
     end
 
+    # A document <title> is RCDATA: `foo/title>` (a `/`, not `</`) does not close
+    # it, so the whole run is one Character token (up to EOF).
+    test "an unclosed document <title> is RCDATA to EOF" do
+      assert [%Token.StartTag{name: "title"}, %Token.Character{data: "foo/title><b>"}] =
+               tokenize("<title>foo/title><b>")
+    end
+
+    # Inside SVG foreign content, <title> is an ORDINARY element (foreign-depth
+    # context): its interior is tokenized as markup, not captured as raw text.
+    test "a <title> inside <svg> tokenizes its interior as markup" do
+      assert [
+               %Token.StartTag{name: "svg"},
+               %Token.StartTag{name: "title"},
+               %Token.StartTag{name: "b"},
+               %Token.Character{data: "x"},
+               %Token.EndTag{name: "b"},
+               %Token.EndTag{name: "title"} | _
+             ] = tokenize("<svg><title><b>x</b></title></svg>")
+    end
+
+    # Leaving the SVG subtree restores HTML tokenization: a <title> AFTER </svg> is
+    # RCDATA again.
+    test "a <title> after </svg> is RCDATA again" do
+      assert [
+               %Token.StartTag{name: "svg"},
+               %Token.EndTag{name: "svg"},
+               %Token.StartTag{name: "title"},
+               %Token.Character{data: "a<b>c"},
+               %Token.EndTag{name: "title"}
+             ] = tokenize("<svg></svg><title>a<b>c</title>")
+    end
+
     test "a script with attributes" do
       assert [%Token.StartTag{name: "script", attributes: [{"src", "a.js"}]} | _] =
                tokenize(~s(<script src="a.js">x</script>))

@@ -28,10 +28,18 @@ after
   # DISABLED parser, where <noscript> content is ordinary markup.
   @raw_names ~w(script style textarea title xmp iframe noembed noframes)
 
+  # title/noframes are RCDATA in HTML but ORDINARY elements in SVG/MathML foreign
+  # content; their `raw_X` rule uses the :raw_rcdata post_traverse, which rejects
+  # (backtracks to a normal start tag) when the context's foreign depth is > 0.
+  # The rest are raw-text in every context and use :raw_element.
+  @rcdata_in_foreign ~w(title noframes)
+
   raw_rules =
     Enum.flat_map(@raw_names, fn name ->
+      handler = if name in @rcdata_in_foreign, do: :raw_rcdata, else: :raw_element
+
       [
-        {:"raw_#{name}", tag: true, post_traverse: :raw_element},
+        {:"raw_#{name}", tag: true, post_traverse: handler},
         {:"raw_open_#{name}", tag: true, post_traverse: :raw_open},
         {:"raw_name_#{name}", token: {:raw_name, name}},
         {:"raw_text_#{name}", tag: true, post_traverse: :raw_text},
@@ -146,6 +154,18 @@ after
   # The three sub-tokens (start tag, character interior, end tag) accumulate on
   # the stack in reverse; restore document order.
   defp raw_element(rest, [{_tag, tokens}], context, _loc, _col) do
+    {rest, Enum.reverse(tokens), context}
+  end
+
+  # An RCDATA element (title/noframes) that is also an ordinary element in foreign
+  # content: inside SVG/MathML (foreign depth > 0) REJECT the raw-text match so the
+  # ordered choice falls through to `start_tag`, letting the tree builder treat the
+  # interior as markup. Outside foreign content it behaves like raw_element.
+  defp raw_rcdata(_rest, _tokens, %{foreign: depth}, _loc, _col) when depth > 0 do
+    {:error, "rcdata element is ordinary in foreign content"}
+  end
+
+  defp raw_rcdata(rest, [{_tag, tokens}], context, _loc, _col) do
     {rest, Enum.reverse(tokens), context}
   end
 
@@ -286,7 +306,7 @@ after
     token =
       struct!(Token.StartTag, name: name, attributes: attributes, self_closing: self_closing)
 
-    {rest, [token], context}
+    {rest, [token], enter_foreign(context, name, self_closing)}
   end
 
   defp end_tag(rest, [{:end_tag, args}], context, _loc, _col) do
@@ -296,8 +316,26 @@ after
         _ -> nil
       end)
 
-    {rest, [struct!(Token.EndTag, name: name)], context}
+    {rest, [struct!(Token.EndTag, name: name)], leave_foreign(context, name)}
   end
+
+  # A foreign-content depth counter threaded through the parse context. Entering
+  # <svg>/<math> (not self-closed) increments it; the matching end tag decrements.
+  # It lets the RCDATA raw-text rules (e.g. <title>) know they are inside foreign
+  # content, where those elements are ORDINARY (their content is markup, not raw
+  # text) — see raw_rcdata/5. The `foreignObject`/`annotation-xml` HTML-integration
+  # points are not modeled here; nested HTML inside them keeps the outer depth.
+  defp enter_foreign(context, name, false) when name in ~w(svg math) do
+    Map.update(context, :foreign, 1, &(&1 + 1))
+  end
+
+  defp enter_foreign(context, _name, _self_closing), do: context
+
+  defp leave_foreign(context, name) when name in ~w(svg math) do
+    Map.update(context, :foreign, 0, &max(&1 - 1, 0))
+  end
+
+  defp leave_foreign(context, _name), do: context
 
   defp tag_name(rest, [name], context, _loc, _col) do
     {rest, [{:tag_name, String.downcase(name)}], context}

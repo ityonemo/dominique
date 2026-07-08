@@ -44,21 +44,20 @@ raw_iframe   <- raw_open_iframe   raw_text_iframe   raw_end_iframe
 raw_noembed  <- raw_open_noembed  raw_text_noembed  raw_end_noembed
 raw_noframes <- raw_open_noframes raw_text_noframes raw_end_noframes
 
-# NOTE: title/noframes are RCDATA/optional elements that also appear in
-# SVG/MathML foreign content, where they are ORDINARY elements (not raw-text). Our
-# context-free tokenizer cannot see that context, but when such an element is
-# unclosed the raw rule must FAIL so the token falls back to a normal start tag
-# (letting the tree builder treat the interior as markup). So those keep the
-# strict close (no EOF branch); script/style/textarea/xmp/iframe — which are
-# raw-text in every context — get EOF tolerance.
+# The close is EOF-tolerant for all raw-text elements (RCDATA runs to a real close
+# or end-of-input). title/noframes ALSO appear in SVG/MathML foreign content where
+# they are ORDINARY elements, not raw-text — that distinction is NOT expressible
+# context-free, so raw_title/raw_noframes carry a `post_traverse: :raw_rcdata`
+# hook that REJECTS (backtracks to a normal start tag) when the parse context's
+# foreign-content depth is > 0. See raw_rcdata/5 + enter_foreign/3 in token.ex.
 raw_end_script   <- raw_close_script   / !.
 raw_end_style    <- raw_close_style    / !.
 raw_end_textarea <- raw_close_textarea / !.
-raw_end_title    <- raw_close_title
+raw_end_title    <- raw_close_title    / !.
 raw_end_xmp      <- raw_close_xmp      / !.
 raw_end_iframe   <- raw_close_iframe   / !.
 raw_end_noembed  <- raw_close_noembed  / !.
-raw_end_noframes <- raw_close_noframes
+raw_end_noframes <- raw_close_noframes / !.
 
 raw_open_script   <- '<' raw_name_script   attributes ws '>'
 raw_open_style    <- '<' raw_name_style    attributes ws '>'
