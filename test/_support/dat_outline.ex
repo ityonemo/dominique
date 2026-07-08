@@ -51,8 +51,21 @@ defmodule DatOutline do
     [line(["| ", indent(depth), "<!-- ", Node.value(comment), " -->"])]
   end
 
+  # `<!DOCTYPE name>` when both ids are absent; otherwise
+  # `<!DOCTYPE name "public" "system">` (a nil id renders as "").
   defp lines(%Node{type: :document_type} = doctype, depth) do
-    [line(["| ", indent(depth), "<!DOCTYPE ", Node.node_name(doctype), ">"])]
+    name = Node.node_name(doctype)
+
+    body =
+      case Node.doctype_ids(doctype) do
+        {nil, nil} ->
+          ["<!DOCTYPE ", name, ">"]
+
+        {public, system} ->
+          ["<!DOCTYPE ", name, " \"", public || "", "\" \"", system || "", "\">"]
+      end
+
+    [line(["| ", indent(depth) | body])]
   end
 
   # Attributes are dumped as pseudo-children, sorted lexicographically by name.

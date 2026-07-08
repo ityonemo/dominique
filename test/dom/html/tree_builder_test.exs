@@ -807,4 +807,37 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
   end
+
+  describe "DOCTYPE public/system identifiers (§13.2.6.4.1 + serialization)" do
+    # A doctype with no ids renders bare.
+    test "a bare doctype renders without ids" do
+      assert tree("<!DOCTYPE html>") |> String.starts_with?("| <!DOCTYPE html>\n")
+    end
+
+    # PUBLIC + SYSTEM ids are preserved and serialized.
+    test "public and system identifiers are preserved" do
+      out = tree(~s(<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://x">))
+      assert String.starts_with?(out, ~s(| <!DOCTYPE html "-//W3C//DTD HTML 4.01//EN" "http://x">\n))
+    end
+
+    # A SYSTEM-only doctype renders the public id as "".
+    test "a system-only doctype renders an empty public id" do
+      out = tree("<!DOCTYPE potato SYSTEM 'taco'>")
+      assert String.starts_with?(out, ~s(| <!DOCTYPE potato "" "taco">\n))
+    end
+  end
+
+  describe "in body — §13.2.6.4.7 duplicate html/body attribute merging" do
+    # spec §13.2.6.4.7: a duplicate <html> start tag merges any attribute not
+    # already present onto the existing html element.
+    test "a duplicate html start tag merges new attributes" do
+      out = tree("<html a=b><head></head><html c=d>")
+      assert out =~ ~s(| <html>\n|   a="b"\n|   c="d"\n)
+    end
+
+    # spec §13.2.6.4.7: a duplicate <body> start tag merges onto the existing body.
+    test "a duplicate body start tag merges new attributes" do
+      assert tree("<body t1=1><body t2=2>") =~ ~s(|   <body>\n|     t1="1"\n|     t2="2")
+    end
+  end
 end

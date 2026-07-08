@@ -256,15 +256,16 @@ defmodule DOM.HTML.TreeBuilder do
     state
   end
 
-  # A DOCTYPE token: append a DocumentType node to the Document (name/public/
-  # system, empty string when missing). (Quirks-mode detection is deferred.)
+  # A DOCTYPE token: append a DocumentType node to the Document. Public/system
+  # ids are preserved as-is (nil when absent) so the serializer can distinguish
+  # `<!DOCTYPE name>` from `<!DOCTYPE name "" "">`. (Quirks detection deferred.)
   defp process(:initial, %Token.Doctype{} = token, state) do
     doctype =
       DOM.create_document_type(
         state.document,
         token.name || "",
-        token.public_id || "",
-        token.system_id || ""
+        token.public_id,
+        token.system_id
       )
 
     append(state.document, doctype)
@@ -494,13 +495,19 @@ defmodule DOM.HTML.TreeBuilder do
   # A DOCTYPE token: parse error, ignore.
   defp process(:in_body, %Token.Doctype{}, state), do: state
 
-  # A start tag whose tag name is "html": (tier 1) parse error, ignore.
-  defp process(:in_body, %Token.StartTag{name: "html"}, state), do: state
+  # A start tag "html": parse error. If there is no template on the stack, merge
+  # any attribute not already present onto the top (html) element.
+  defp process(:in_body, %Token.StartTag{name: "html"} = token, state) do
+    merge_attributes(List.last(state.open_elements), token.attributes)
+    state
+  end
 
-  # A start tag "body": (tier 1) parse error — the body already exists (or, in the
-  # fragment case, there is no body to merge into); ignore the token. (Attribute
-  # merging onto the existing body is deferred.)
-  defp process(:in_body, %Token.StartTag{name: "body"}, state), do: state
+  # A start tag "body": parse error. If a body exists (second element on the
+  # stack), merge any attribute not already present onto it.
+  defp process(:in_body, %Token.StartTag{name: "body"} = token, state) do
+    if body = second_element(state), do: merge_attributes(body, token.attributes)
+    state
+  end
 
   # A start tag "frameset": parse error. If the stack has only one node, or the
   # second element is not a body, or frameset-ok is "not ok", ignore. Otherwise
@@ -1785,6 +1792,17 @@ defmodule DOM.HTML.TreeBuilder do
   # insert immediately before reference.
   defp insert_at({parent, nil}, child), do: Node.append_child(parent, child)
   defp insert_at({parent, reference}, child), do: Node.insert_before(parent, child, reference)
+
+  # Add each attribute not already present on `element` (the html/body attribute
+  # merge for a duplicate start tag). `nil` element (fragment case) is a no-op.
+  defp merge_attributes(nil, _attributes), do: :ok
+
+  defp merge_attributes(element, attributes) do
+    Enum.each(attributes, fn {name, value} ->
+      if not Element.has_attribute(element, name),
+        do: Element.set_attribute(element, name, value)
+    end)
+  end
 
   # "Create an element for the token": element + its attributes.
   defp create_element_for(token, state) do

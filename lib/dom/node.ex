@@ -257,6 +257,17 @@ defmodule DOM.Node do
     {^node_id, %{__struct__: NodeData.DocumentFragment}} -> "#document-fragment"
   end
 
+  @doc "A DocumentType's `{public_id, system_id}` (each `nil` when absent)."
+  @spec doctype_ids(t()) :: {String.t() | nil, String.t() | nil}
+  def doctype_ids(%__MODULE__{type: :document_type} = node) do
+    [ids] = DOM._select(node.server, doctype_ids_spec(node.id))
+    ids
+  end
+
+  defmatchspecp doctype_ids_spec(node_id) do
+    {^node_id, %{__struct__: NodeData.DocumentType, public_id: p, system_id: s}} -> {p, s}
+  end
+
   @doc "The node's character data value (Text/Comment), else `nil`."
   @spec value(t()) :: String.t() | nil
   def value(%__MODULE__{} = node) do
