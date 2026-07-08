@@ -16,6 +16,15 @@ token <- comment / doctype / raw_element / end_tag / start_tag / character
 
 raw_element <- raw_script / raw_style / raw_textarea / raw_title / raw_xmp
              / raw_iframe / raw_noembed / raw_noframes / raw_noscript
+             / raw_plaintext
+
+# <plaintext> switches the tokenizer to the PLAINTEXT state: everything after the
+# start tag is a single character run to end-of-input, with no further tags and
+# no close tag.
+raw_plaintext <- raw_open_plaintext plaintext_body
+raw_open_plaintext <- '<' raw_name_plaintext attributes ws '>'
+raw_name_plaintext <- [Pp][Ll][Aa][Ii][Nn][Tt][Ee][Xx][Tt]
+plaintext_body <- .*
 
 # The close tag is EOF-tolerant: a raw-text element that reaches end-of-input
 # without its close tag still tokenizes (emitting its start tag + interior, no

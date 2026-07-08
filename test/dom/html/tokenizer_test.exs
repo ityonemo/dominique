@@ -138,6 +138,15 @@ defmodule DOM.HTML.TokenizerTest do
       assert [%Token.StartTag{name: "style"}, %Token.Character{data: ".a{}"}] =
                tokenize("<style>.a{}")
     end
+
+    # WHATWG PLAINTEXT state: everything after <plaintext> is one character run to
+    # EOF — no tags, no close tag.
+    test "plaintext consumes the rest of the input as one character token" do
+      assert tokenize("<plaintext><div>foo</div>") == [
+               %Token.StartTag{name: "plaintext", attributes: [], self_closing: false},
+               %Token.Character{data: "<div>foo</div>"}
+             ]
+    end
   end
 
   describe "multibyte text" do

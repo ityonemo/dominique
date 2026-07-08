@@ -46,7 +46,12 @@ after
     [
       tokens: [parser: :parse_tokens, post_traverse: :tokens],
       token: [],
-      raw_element: []
+      raw_element: [],
+      # <plaintext> has no close/text pair — it consumes the rest of input.
+      raw_plaintext: [tag: true, post_traverse: :raw_element],
+      raw_open_plaintext: [tag: true, post_traverse: :raw_open],
+      raw_name_plaintext: [token: {:raw_name, "plaintext"}],
+      plaintext_body: [tag: true, post_traverse: :raw_text]
     ] ++
       raw_rules ++
       [
