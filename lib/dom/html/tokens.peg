@@ -140,8 +140,12 @@ raw_tag_end <- '>' / [ \t\r\n\f/] (!'>' .)* ('>' / !.)
 comment <- '<!--' (comment_abrupt / comment_normal)
 comment_abrupt <- '-'? '>'                       # `<!-->` or `<!--->` -> empty
 comment_normal <- comment_data comment_close
-comment_close <- '-->' / '--!>' / !.
-comment_data <- (!'-->' !'--!>' .)*
+# EOF close also swallows a trailing `--` (the failed comment-end that ran into
+# EOF), so `<!--x--` is comment "x", not "x--".
+comment_close <- '-->' / '--!>' / '--'? !.
+# Data stops at a close marker; a `-` run that leads straight to EOF is NOT data
+# (it is the trailing dashes consumed by the EOF close above).
+comment_data <- (!'-->' !'--!>' !('-'* !.) .)*
 
 # Permissive DOCTYPE (WHATWG doctype states): the keyword needs no following
 # space (`<!DOCTYPEhtml>`), the name may be empty, PUBLIC/SYSTEM ids are captured
