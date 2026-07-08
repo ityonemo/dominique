@@ -27,8 +27,14 @@ defmodule DOM.HTML.TreeBuilder do
     active_formatting: [],
     frameset_ok: true,
     foster_parenting: false,
-    pending_table_chars: []
+    pending_table_chars: [],
+    namespaces: %{}
   ]
+
+  # `namespaces` maps a foreign element handle to its namespace atom (:svg |
+  # :mathml). HTML elements are not stored — the default is :html. Populated when
+  # a foreign element is inserted; used by the tree-construction dispatcher to
+  # decide HTML-content vs. foreign-content processing.
 
   # The list of active formatting elements (§13.2.4.3). Entries are either the
   # atom :marker or a {element_handle, token} tuple (the token is retained to
@@ -71,12 +77,58 @@ defmodule DOM.HTML.TreeBuilder do
     tokens |> Enum.reduce(state, &step/2) |> eof() |> Map.fetch!(:document)
   end
 
+  # The "tree construction dispatcher" (§13.2.6): route each token to HTML-content
+  # processing or foreign-content processing based on the adjusted current node's
+  # namespace and integration-point status.
+  defp step(token, state) do
+    if html_content?(token, state) do
+      step_html(token, state)
+    else
+      process_foreign(token, state)
+    end
+  end
+
   # A character token may carry a run of text; the spec processes one character
   # at a time, so split into leading whitespace + the rest where a mode treats
   # them differently. Modes that treat all characters the same handle the whole
   # run in one clause.
-  defp step(%Token.Character{} = token, state), do: process_characters(state.mode, token, state)
-  defp step(token, state), do: process(state.mode, token, state)
+  defp step_html(%Token.Character{} = token, state),
+    do: process_characters(state.mode, token, state)
+
+  defp step_html(token, state), do: process(state.mode, token, state)
+
+  # Whether `token` is processed in HTML content (else foreign content) — the
+  # dispatcher's condition list.
+  defp html_content?(token, state) do
+    node = adjusted_current_node(state)
+
+    cond do
+      state.open_elements == [] -> true
+      namespace_of(state, node) == :html -> true
+      mathml_text_point?(state, node) and mathml_text_html?(token) -> true
+      annotation_xml_svg?(state, node, token) -> true
+      html_integration_point?(state, node) and html_integration_token?(token) -> true
+      :else -> false
+    end
+  end
+
+  # A MathML text integration point processes start tags (except mglyph/
+  # malignmark) and character tokens as HTML content.
+  defp mathml_text_html?(%Token.StartTag{name: name}), do: name not in ~w(mglyph malignmark)
+  defp mathml_text_html?(%Token.Character{}), do: true
+  defp mathml_text_html?(_token), do: false
+
+  # An HTML integration point processes start tags and character tokens as HTML.
+  defp html_integration_token?(%Token.StartTag{}), do: true
+  defp html_integration_token?(%Token.Character{}), do: true
+  defp html_integration_token?(_token), do: false
+
+  # An annotation-xml (MathML) element with an "svg" start tag stays HTML content.
+  defp annotation_xml_svg?(state, node, %Token.StartTag{name: "svg"}) do
+    namespace_of(state, node) == :mathml and Node.node_name(node) == "annotation-xml"
+  end
+
+  defp annotation_xml_svg?(_state, _node, _token), do: false
 
   # End-of-file: the pre-body insertion modes imply the missing elements (so an
   # empty or head-only document still yields <html><head><body>). Each mode's EOF
@@ -474,6 +526,17 @@ defmodule DOM.HTML.TreeBuilder do
       end
 
     insert_and_push(state, token)
+  end
+
+  # A start tag "math"/"svg": reconstruct; adjust MathML/SVG + foreign attributes;
+  # insert a foreign element in the MathML/SVG namespace; if self-closing, pop and
+  # acknowledge. (§13.2.6.4.7 — the foreign-content integration points.)
+  defp process(:in_body, %Token.StartTag{name: "math"} = token, state) do
+    insert_foreign_start(:mathml, adjust_mathml_attributes(token), state)
+  end
+
+  defp process(:in_body, %Token.StartTag{name: "svg"} = token, state) do
+    insert_foreign_start(:svg, adjust_svg_attributes(token), state)
   end
 
   # Any other start tag: reconstruct active formatting elements, then insert an
@@ -1252,20 +1315,32 @@ defmodule DOM.HTML.TreeBuilder do
   defp close_list_item(state, _names, []), do: state
 
   # "Have an element named `name` in scope", parameterized by the terminating
-  # marker set: walk the stack; a match returns true, a marker returns false.
-  defp has_in_scope?(state, name, markers), do: in_scope?(state.open_elements, name, markers)
+  # marker set: walk the stack; a match (an HTML-namespace element with that name)
+  # returns true; a scope boundary returns false. Foreign integration-point and
+  # foreign elements are always boundaries (their names only count in-namespace).
+  defp has_in_scope?(state, name, markers),
+    do: in_scope?(state, state.open_elements, name, markers)
 
-  defp in_scope?([el | rest], name, markers) do
+  defp in_scope?(state, [el | rest], name, markers) do
+    html? = namespace_of(state, el) == :html
     node_name = Node.node_name(el)
 
     cond do
-      node_name == name -> true
-      node_name in markers -> false
-      :else -> in_scope?(rest, name, markers)
+      html? and node_name == name -> true
+      html? and node_name in markers -> false
+      not html? and foreign_scope_marker?(state, el) -> false
+      :else -> in_scope?(state, rest, name, markers)
     end
   end
 
-  defp in_scope?([], _name, _markers), do: false
+  defp in_scope?(_state, [], _name, _markers), do: false
+
+  # The foreign members of the default scope set: MathML text integration points
+  # and annotation-xml; SVG foreignObject/desc/title.
+  defp foreign_scope_marker?(state, el) do
+    mathml_text_point?(state, el) or html_integration_point?(state, el) or
+      (namespace_of(state, el) == :mathml and Node.node_name(el) == "annotation-xml")
+  end
 
   # "Have a heading (h1..h6) in scope" (for the heading end tag): walk the stack;
   # any heading returns true, a default-scope marker returns false.
@@ -1786,6 +1861,303 @@ defmodule DOM.HTML.TreeBuilder do
   defp inner_step(false, ctx, state, node, last_node, inner, bookmark, above) do
     adoption_inner_loop(ctx, remove_from_stack(state, above), node, last_node, inner, bookmark)
   end
+
+  # ==========================================================================
+  # §13.2.6 / §13.2.6.5  Foreign content (SVG / MathML)
+  # ==========================================================================
+
+  # SVG element tag-name case fixups (§13.2.6.5).
+  @svg_tags %{
+    "altglyph" => "altGlyph",
+    "altglyphdef" => "altGlyphDef",
+    "altglyphitem" => "altGlyphItem",
+    "animatecolor" => "animateColor",
+    "animatemotion" => "animateMotion",
+    "animatetransform" => "animateTransform",
+    "clippath" => "clipPath",
+    "feblend" => "feBlend",
+    "fecolormatrix" => "feColorMatrix",
+    "fecomponenttransfer" => "feComponentTransfer",
+    "fecomposite" => "feComposite",
+    "feconvolvematrix" => "feConvolveMatrix",
+    "fediffuselighting" => "feDiffuseLighting",
+    "fedisplacementmap" => "feDisplacementMap",
+    "fedistantlight" => "feDistantLight",
+    "fedropshadow" => "feDropShadow",
+    "feflood" => "feFlood",
+    "fefunca" => "feFuncA",
+    "fefuncb" => "feFuncB",
+    "fefuncg" => "feFuncG",
+    "fefuncr" => "feFuncR",
+    "fegaussianblur" => "feGaussianBlur",
+    "feimage" => "feImage",
+    "femerge" => "feMerge",
+    "femergenode" => "feMergeNode",
+    "femorphology" => "feMorphology",
+    "feoffset" => "feOffset",
+    "fepointlight" => "fePointLight",
+    "fespecularlighting" => "feSpecularLighting",
+    "fespotlight" => "feSpotLight",
+    "fetile" => "feTile",
+    "feturbulence" => "feTurbulence",
+    "foreignobject" => "foreignObject",
+    "glyphref" => "glyphRef",
+    "lineargradient" => "linearGradient",
+    "radialgradient" => "radialGradient",
+    "textpath" => "textPath"
+  }
+
+  # SVG attribute-name case fixups (§13.2.6.5).
+  @svg_attributes %{
+    "attributename" => "attributeName",
+    "attributetype" => "attributeType",
+    "basefrequency" => "baseFrequency",
+    "baseprofile" => "baseProfile",
+    "calcmode" => "calcMode",
+    "clippathunits" => "clipPathUnits",
+    "diffuseconstant" => "diffuseConstant",
+    "edgemode" => "edgeMode",
+    "filterunits" => "filterUnits",
+    "glyphref" => "glyphRef",
+    "gradienttransform" => "gradientTransform",
+    "gradientunits" => "gradientUnits",
+    "kernelmatrix" => "kernelMatrix",
+    "kernelunitlength" => "kernelUnitLength",
+    "keypoints" => "keyPoints",
+    "keysplines" => "keySplines",
+    "keytimes" => "keyTimes",
+    "lengthadjust" => "lengthAdjust",
+    "limitingconeangle" => "limitingConeAngle",
+    "markerheight" => "markerHeight",
+    "markerunits" => "markerUnits",
+    "markerwidth" => "markerWidth",
+    "maskcontentunits" => "maskContentUnits",
+    "maskunits" => "maskUnits",
+    "numoctaves" => "numOctaves",
+    "pathlength" => "pathLength",
+    "patterncontentunits" => "patternContentUnits",
+    "patterntransform" => "patternTransform",
+    "patternunits" => "patternUnits",
+    "pointsatx" => "pointsAtX",
+    "pointsaty" => "pointsAtY",
+    "pointsatz" => "pointsAtZ",
+    "preservealpha" => "preserveAlpha",
+    "preserveaspectratio" => "preserveAspectRatio",
+    "primitiveunits" => "primitiveUnits",
+    "refx" => "refX",
+    "refy" => "refY",
+    "repeatcount" => "repeatCount",
+    "repeatdur" => "repeatDur",
+    "requiredextensions" => "requiredExtensions",
+    "requiredfeatures" => "requiredFeatures",
+    "specularconstant" => "specularConstant",
+    "specularexponent" => "specularExponent",
+    "spreadmethod" => "spreadMethod",
+    "startoffset" => "startOffset",
+    "stddeviation" => "stdDeviation",
+    "stitchtiles" => "stitchTiles",
+    "surfacescale" => "surfaceScale",
+    "systemlanguage" => "systemLanguage",
+    "tablevalues" => "tableValues",
+    "targetx" => "targetX",
+    "targety" => "targetY",
+    "textlength" => "textLength",
+    "viewbox" => "viewBox",
+    "viewtarget" => "viewTarget",
+    "xchannelselector" => "xChannelSelector",
+    "ychannelselector" => "yChannelSelector",
+    "zoomandpan" => "zoomAndPan"
+  }
+
+  # "Adjust foreign attributes" prefix table (§13.2.6.5): a prefixed name becomes
+  # "prefix local" (space-separated) so the .dat outline renders both columns.
+  @foreign_attributes %{
+    "xlink:actuate" => "xlink actuate",
+    "xlink:arcrole" => "xlink arcrole",
+    "xlink:href" => "xlink href",
+    "xlink:role" => "xlink role",
+    "xlink:show" => "xlink show",
+    "xlink:title" => "xlink title",
+    "xlink:type" => "xlink type",
+    "xml:lang" => "xml lang",
+    "xml:space" => "xml space",
+    "xmlns" => "xmlns",
+    "xmlns:xlink" => "xmlns xlink"
+  }
+
+  defp svg_tag_name(name), do: Map.get(@svg_tags, name, name)
+
+  # The adjusted current node. (In the fragment case this is the context element
+  # when the stack has one entry — fragment parsing is tier 6, so it is just the
+  # current node here.)
+  defp adjusted_current_node(state), do: current_node(state)
+
+  # The namespace of an element handle: :svg / :mathml if recorded, else :html.
+  defp namespace_of(_state, %Node{type: type}) when type != :element, do: :html
+  defp namespace_of(state, %Node{} = el), do: Map.get(state.namespaces, el, :html)
+
+  # A MathML text integration point: an mi/mo/mn/ms/mtext element in the MathML
+  # namespace.
+  defp mathml_text_point?(state, node) do
+    namespace_of(state, node) == :mathml and Node.node_name(node) in ~w(mi mo mn ms mtext)
+  end
+
+  # An HTML integration point: a MathML annotation-xml whose encoding attribute is
+  # text/html or application/xhtml+xml; or an SVG foreignObject/desc/title.
+  defp html_integration_point?(state, node) do
+    case namespace_of(state, node) do
+      :svg -> Node.node_name(node) in ~w(foreignObject desc title)
+      :mathml -> annotation_xml_html?(node)
+      :html -> false
+    end
+  end
+
+  defp annotation_xml_html?(node) do
+    Node.node_name(node) == "annotation-xml" and
+      String.downcase(Element.get_attribute(node, "encoding") || "") in [
+        "text/html",
+        "application/xhtml+xml"
+      ]
+  end
+
+  # "Insert a foreign element" from an in-body svg/math start tag: reconstruct,
+  # adjust foreign attributes, insert in `namespace`; a self-closing tag is
+  # immediately popped.
+  defp insert_foreign_start(namespace, token, state) do
+    state = reconstruct_formatting(state)
+    {_el, state} = insert_foreign_element(adjust_foreign_attributes(token), namespace, state)
+    if token.self_closing, do: pop(state), else: state
+  end
+
+  # "Insert a foreign element": create it in `namespace` (with adjusted attrs),
+  # insert at the appropriate place, push it, and record its namespace.
+  defp insert_foreign_element(token, namespace, state) do
+    element = DOM._create_element_ns(state.document, token.name, namespace, token.attributes)
+    insert_at(appropriate_insertion_location(state), element)
+
+    {element,
+     %{
+       state
+       | open_elements: [element | state.open_elements],
+         namespaces: Map.put(state.namespaces, element, namespace)
+     }}
+  end
+
+  # §13.2.6.5  Rules for parsing tokens in foreign content.
+
+  # A NULL character: insert a U+FFFD replacement character.
+  defp process_foreign(%Token.Character{data: data}, state) do
+    insert_characters(String.replace(data, "\0", "�"), state)
+  end
+
+  defp process_foreign(%Token.Comment{} = token, state) do
+    insert_comment(token, state)
+    state
+  end
+
+  defp process_foreign(%Token.Doctype{}, state), do: state
+
+  # A start tag that "breaks out" of foreign content (b/big/…/font-with-attrs) or
+  # an end tag br/p: pop foreign elements until an integration point or HTML
+  # element, then reprocess in HTML content.
+  defp process_foreign(%Token.StartTag{name: name} = token, state)
+       when name in ~w(b big blockquote body br center code dd div dl dt em embed
+                       h1 h2 h3 h4 h5 h6 head hr i img li listing menu meta nobr
+                       ol p pre ruby s small span strong strike sub sup table tt u
+                       ul var) do
+    breakout(token, state)
+  end
+
+  defp process_foreign(%Token.StartTag{name: "font"} = token, state) do
+    if Enum.any?(token.attributes, fn {n, _} -> n in ~w(color face size) end),
+      do: breakout(token, state),
+      else: foreign_other_start(token, state)
+  end
+
+  defp process_foreign(%Token.EndTag{name: name} = token, state) when name in ~w(br p) do
+    breakout(token, state)
+  end
+
+  # Any other start tag: adjust attributes for the adjusted current node's
+  # namespace, insert a foreign element; a self-closing tag is popped.
+  defp process_foreign(%Token.StartTag{} = token, state), do: foreign_other_start(token, state)
+
+  # Any other end tag: walk the stack; if a node's lowercased name matches, pop
+  # to it; on reaching an HTML-namespace element, process in HTML content.
+  defp process_foreign(%Token.EndTag{name: name}, state) do
+    foreign_end_tag(state, name, state.open_elements)
+  end
+
+  # "Breaks out" of foreign content: pop until an integration point or an HTML
+  # element is the current node, then reprocess the token in HTML content.
+  defp breakout(token, state) do
+    state = pop_until_html_or_integration_point(state)
+    step_html(token, state)
+  end
+
+  defp pop_until_html_or_integration_point(state) do
+    node = current_node(state)
+
+    if namespace_of(state, node) == :html or mathml_text_point?(state, node) or
+         html_integration_point?(state, node) do
+      state
+    else
+      pop_until_html_or_integration_point(pop(state))
+    end
+  end
+
+  defp foreign_other_start(token, state) do
+    namespace = namespace_of(state, adjusted_current_node(state))
+    token = token |> adjust_foreign_tag(namespace) |> adjust_foreign_attributes()
+    {_el, state} = insert_foreign_element(token, namespace, state)
+    if token.self_closing, do: pop(state), else: state
+  end
+
+  # Adjust the tag name + attributes of a foreign start tag for `namespace`:
+  # SVG gets tag-name + attribute case fixups; MathML gets attribute fixups.
+  defp adjust_foreign_tag(token, :svg), do: %{token | name: svg_tag_name(token.name)}
+  defp adjust_foreign_tag(token, _namespace), do: token
+
+  defp adjust_svg_attributes(%Token.StartTag{} = token) do
+    %{token | attributes: Enum.map(token.attributes, &adjust_svg_attribute/1)}
+  end
+
+  defp adjust_mathml_attributes(%Token.StartTag{} = token) do
+    %{token | attributes: Enum.map(token.attributes, &adjust_mathml_attribute/1)}
+  end
+
+  # Per-namespace attribute adjust dispatched inside foreign_other_start's
+  # adjust_foreign_attributes is not enough — SVG/MathML case fixups run first.
+  defp adjust_svg_attribute({name, value}), do: {Map.get(@svg_attributes, name, name), value}
+
+  defp adjust_mathml_attribute({"definitionurl", value}), do: {"definitionURL", value}
+  defp adjust_mathml_attribute(attr), do: attr
+
+  # "Adjust foreign attributes": rewrite the fixed prefixed attribute names so the
+  # outline renders them as "prefix local" (a namespaced attribute).
+  defp adjust_foreign_attributes(%Token.StartTag{} = token) do
+    %{token | attributes: Enum.map(token.attributes, &adjust_foreign_attribute/1)}
+  end
+
+  defp adjust_foreign_attribute({name, value}),
+    do: {Map.get(@foreign_attributes, name, name), value}
+
+  # Any-other-end-tag loop (§13.2.6.5): from the current node down, a name match
+  # pops to it; an HTML-namespace node hands off to HTML content.
+  defp foreign_end_tag(state, name, [node | rest]) do
+    cond do
+      String.downcase(Node.node_name(node)) == name ->
+        %{state | open_elements: drop_including(state.open_elements, node)}
+
+      namespace_of(state, node) == :html ->
+        process(state.mode, %Token.EndTag{name: name}, state)
+
+      :else ->
+        foreign_end_tag(state, name, rest)
+    end
+  end
+
+  defp foreign_end_tag(state, _name, []), do: state
 
   # ==========================================================================
   # Whitespace helpers

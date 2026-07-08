@@ -99,6 +99,18 @@ defmodule DOM do
     create(document, %NodeData.Element{local_name: local_name})
   end
 
+  @doc false
+  # Internal: build an element with an explicit namespace and pre-adjusted
+  # attribute list in one hop (used by the HTML tree builder for foreign
+  # content). Attributes are stored verbatim — no name normalization.
+  def _create_element_ns(document, local_name, namespace, attributes) do
+    create(document, %NodeData.Element{
+      local_name: local_name,
+      namespace: namespace,
+      attributes: attributes
+    })
+  end
+
   def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
 
   def create_comment(document, value), do: create(document, %NodeData.Comment{value: value})

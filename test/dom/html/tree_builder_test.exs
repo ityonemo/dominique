@@ -476,4 +476,77 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
   end
+
+  describe "foreign content — §13.2.6.4.7 / §13.2.6.5 (SVG / MathML)" do
+    # spec §13.2.6.4.7 (<svg> start tag): insert a foreign element in the SVG
+    # namespace; its children are also SVG (outline shows the `svg ` prefix).
+    test "an svg element and its children are in the SVG namespace" do
+      assert tree("<svg><circle></svg>") ==
+               doc(["|     <svg svg>", "|       <svg circle>"])
+    end
+
+    # spec §13.2.6.4.7 (<math> start tag): insert a foreign element in the MathML
+    # namespace.
+    test "a math element and its children are in the MathML namespace" do
+      assert tree("<math><mi>x</mi></math>") ==
+               doc(["|     <math math>", "|       <math mi>", "|         \"x\""])
+    end
+
+    # spec §13.2.6.5 (any other start tag, SVG tag fixup): a lowercased SVG tag
+    # name is corrected to its canonical camelCase form.
+    test "an SVG tag name is case-corrected" do
+      assert tree("<svg><clippath></svg>") ==
+               doc(["|     <svg svg>", "|       <svg clipPath>"])
+    end
+
+    # spec §13.2.6.5 (adjust foreign attributes): a prefixed foreign attribute is
+    # rendered as two columns (`xlink href`).
+    test "a foreign xlink attribute is namespaced" do
+      assert tree("<svg xlink:href=foo></svg>") ==
+               doc(["|     <svg svg>", "|       xlink href=\"foo\""])
+    end
+
+    # spec §13.2.6.5 (adjust SVG attributes): a lowercased SVG attribute name is
+    # case-corrected.
+    test "an SVG attribute name is case-corrected" do
+      assert tree("<svg viewbox=\"0\"></svg>") ==
+               doc(["|     <svg svg>", "|       viewBox=\"0\""])
+    end
+
+    # spec §13.2.6 (HTML integration point): inside SVG foreignObject, HTML
+    # content resumes — a div is an HTML-namespace element.
+    test "content inside foreignObject is HTML" do
+      assert tree("<svg><foreignObject><div>x</div></foreignObject></svg>") ==
+               doc([
+                 "|     <svg svg>",
+                 "|       <svg foreignObject>",
+                 "|         <div>",
+                 "|           \"x\""
+               ])
+    end
+
+    # spec §13.2.6 (MathML text integration point): inside mtext, HTML content
+    # resumes.
+    test "content inside an mtext integration point is HTML" do
+      assert tree("<math><mtext><b>x</b></mtext></math>") ==
+               doc([
+                 "|     <math math>",
+                 "|       <math mtext>",
+                 "|         <b>",
+                 "|           \"x\""
+               ])
+    end
+
+    # spec §13.2.6.5 (breakout start tag): an HTML block start tag inside foreign
+    # content pops back out to HTML content.
+    test "a breakout start tag exits foreign content" do
+      assert tree("<svg><circle><p>x") ==
+               doc([
+                 "|     <svg svg>",
+                 "|       <svg circle>",
+                 "|     <p>",
+                 "|       \"x\""
+               ])
+    end
+  end
 end

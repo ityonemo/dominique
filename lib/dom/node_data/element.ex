@@ -2,13 +2,16 @@ defmodule DOM.NodeData.Element do
   @moduledoc "ETS record for an element node."
 
   @enforce_keys [:local_name]
-  defstruct [:local_name, parent: nil, children: [], attributes: []]
+  defstruct [:local_name, namespace: :html, parent: nil, children: [], attributes: []]
 
   use DOM.NodeData
   use DOM.HTML
 
+  @type namespace :: :html | :svg | :mathml
+
   @type t :: %__MODULE__{
           local_name: String.t(),
+          namespace: namespace(),
           parent: reference() | nil,
           children: [reference()],
           attributes: [{String.t(), String.t()}]

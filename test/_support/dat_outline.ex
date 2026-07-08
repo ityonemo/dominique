@@ -21,9 +21,10 @@ defmodule DatOutline do
     |> Enum.join("\n")
   end
 
-  # Returns the outline lines for a node and its subtree at `depth`.
+  # Returns the outline lines for a node and its subtree at `depth`. A foreign
+  # (SVG/MathML) element gets a `svg `/`math ` namespace prefix before its name.
   defp lines(%Node{type: :element} = element, depth) do
-    tag = ["| ", indent(depth), "<", Node.node_name(element), ">"]
+    tag = ["| ", indent(depth), "<", namespace_prefix(element), Node.node_name(element), ">"]
     attrs = attribute_lines(element, depth + 1)
     children = element |> Node.child_nodes() |> Enum.flat_map(&lines(&1, depth + 1))
     [line(tag) | attrs ++ children]
@@ -49,6 +50,14 @@ defmodule DatOutline do
     |> Enum.map(fn name ->
       line(["| ", indent(depth), name, "=", ?", Element.get_attribute(element, name), ?"])
     end)
+  end
+
+  defp namespace_prefix(element) do
+    case Element.namespace(element) do
+      :svg -> "svg "
+      :mathml -> "math "
+      _ -> ""
+    end
   end
 
   defp indent(depth), do: String.duplicate("  ", depth)

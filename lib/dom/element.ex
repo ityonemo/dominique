@@ -25,6 +25,19 @@ defmodule DOM.Element do
 
   def local_name(%Node{}), do: nil
 
+  @doc "The element's namespace (`:html | :svg | :mathml`), or `nil` for a non-element."
+  @spec namespace(Node.t()) :: DOM.NodeData.Element.namespace() | nil
+  def namespace(%Node{type: :element} = element) do
+    [namespace] = DOM._select(element.server, namespace_spec(element.id))
+    namespace
+  end
+
+  defmatchspecp namespace_spec(node_id) do
+    {^node_id, %{__struct__: Element, namespace: namespace}} -> namespace
+  end
+
+  def namespace(%Node{}), do: nil
+
   @doc "The value of an attribute, or `nil` when absent."
   @spec get_attribute(Node.t(), String.t()) :: String.t() | nil
   def get_attribute(%Node{type: :element} = element, name) do

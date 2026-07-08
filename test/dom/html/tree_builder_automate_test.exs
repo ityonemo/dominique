@@ -10,7 +10,8 @@ defmodule DOM.HTML.TreeBuilderAutomateTest do
 
   @files ~w(doctype01.dat comments01.dat entities01.dat tests1.dat
             tests2.dat tests4.dat tests15.dat tests17.dat inbody01.dat
-            tables01.dat adoption01.dat adoption02.dat tests8.dat tricky01.dat)
+            tables01.dat adoption01.dat adoption02.dat tests8.dat tricky01.dat
+            webkit02.dat tests9.dat tests10.dat math.dat svg.dat)
 
   for file <- @files do
     for c <- HTML5libTree.cases(file) do

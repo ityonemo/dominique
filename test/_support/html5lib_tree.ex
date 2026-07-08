@@ -28,14 +28,12 @@ defmodule HTML5libTree do
   end
 
   @doc """
-  Whether a case is runnable at the given tier. Early tiers skip fragment cases
-  (`#document-fragment`) and foreign content (svg/math in the expected tree).
+  Whether a case is runnable at the given tier. Whole-document parsing skips only
+  fragment cases (`#document-fragment`); foreign content (svg/math) is supported.
   """
   def applicable?(test, :whole_document) do
-    is_nil(test.fragment_context) and not foreign?(test)
+    is_nil(test.fragment_context)
   end
-
-  defp foreign?(test), do: String.contains?(test.document, ["svg ", "math "])
 
   # A test block ends at "\n\n#data" (the blank line before the next test). We
   # split on that boundary rather than any blank line, since text/comment content
