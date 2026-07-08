@@ -231,6 +231,14 @@ defmodule DOM.HTML.TreeBuilder do
   # template is open).
   defp eof(%__MODULE__{template_modes: [_ | _]} = state), do: eof_in_template(state)
 
+  # "text" mode at EOF (§13.2.6.4.8): an unclosed rawtext/RCDATA element (e.g.
+  # <script> with no </script>) — parse error; pop the current node, switch back
+  # to the original insertion mode, and continue EOF there (so a head-level
+  # <script> still implies a <body>).
+  defp eof(%__MODULE__{mode: :text} = state) do
+    eof(%{pop(state) | mode: state.original_mode})
+  end
+
   defp eof(state), do: state
 
   defp eof_in_template(state) do
