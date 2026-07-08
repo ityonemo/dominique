@@ -75,6 +75,10 @@ defmodule DOM.HTML.TreeBuilder do
   # this group shares one.
   @formatting ~w(b big code em font i s small strike strong tt u)
 
+  # The table-related insertion modes: a <select> opened while in one of these
+  # switches to "in select in table" rather than "in select" (§13.2.6.4.7).
+  @table_modes [:in_table, :in_caption, :in_table_body, :in_row, :in_cell]
+
   @doc "Builds a document tree from a decoded token list (§13.2.6.4)."
   @spec build([struct()]) :: Node.t()
   def build(tokens) do
@@ -533,6 +537,23 @@ defmodule DOM.HTML.TreeBuilder do
   # "head"): parse error, ignore in the "in body" mode.
   defp process(:in_body, %Token.StartTag{name: name}, state)
        when name in ~w(caption col colgroup frame head tbody td tfoot th thead tr) do
+    state
+  end
+
+  # A start tag "select": reconstruct, insert, frameset-ok not ok; switch to "in
+  # select in table" when currently within a table mode, else "in select".
+  defp process(:in_body, %Token.StartTag{name: "select"} = token, state) do
+    {_el, state} = insert_html_element(token, reconstruct_formatting(state))
+    mode = if state.mode in @table_modes, do: :in_select_in_table, else: :in_select
+    %{state | frameset_ok: false, mode: mode}
+  end
+
+  # A start tag "optgroup"/"option": if the current node is an "option", pop it,
+  # then reconstruct and insert (they do not nest).
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(optgroup option) do
+    state = if Node.node_name(current_node(state)) == "option", do: pop(state), else: state
+    {_el, state} = insert_html_element(token, reconstruct_formatting(state))
     state
   end
 
@@ -1070,6 +1091,119 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_cell, token, state), do: process(:in_body, token, state)
 
   # ==========================================================================
+  # The "in select" insertion mode (§13.2.6.4.16)
+  # ==========================================================================
+
+  defp process(:in_select, %Token.Comment{} = token, state) do
+    insert_comment(token, state)
+    state
+  end
+
+  defp process(:in_select, %Token.Doctype{}, state), do: state
+
+  # A start tag "html": process using "in body".
+  defp process(:in_select, %Token.StartTag{name: "html"} = token, state) do
+    process(:in_body, token, state)
+  end
+
+  # A start tag "option": if the current node is an option, pop it; insert.
+  defp process(:in_select, %Token.StartTag{name: "option"} = token, state) do
+    state = pop_if_current(state, "option")
+    {_el, state} = insert_html_element(token, state)
+    state
+  end
+
+  # A start tag "optgroup": pop a current option, then a current optgroup; insert.
+  defp process(:in_select, %Token.StartTag{name: "optgroup"} = token, state) do
+    state = state |> pop_if_current("option") |> pop_if_current("optgroup")
+    {_el, state} = insert_html_element(token, state)
+    state
+  end
+
+  # A start tag "hr": pop a current option, then a current optgroup; insert and
+  # immediately pop (void), acknowledge self-closing.
+  defp process(:in_select, %Token.StartTag{name: "hr"} = token, state) do
+    state = state |> pop_if_current("option") |> pop_if_current("optgroup")
+    {_el, state} = insert_html_element(token, state)
+    pop(state)
+  end
+
+  # An end tag "optgroup": pop a current option first (if its parent is an
+  # optgroup); then, if the current node is an optgroup, pop it.
+  defp process(:in_select, %Token.EndTag{name: "optgroup"}, state) do
+    state = pop_option_before_optgroup(state)
+    if Node.node_name(current_node(state)) == "optgroup", do: pop(state), else: state
+  end
+
+  # An end tag "option": if the current node is an option, pop it.
+  defp process(:in_select, %Token.EndTag{name: "option"}, state) do
+    pop_if_current(state, "option")
+  end
+
+  # An end tag "select": if a select is in select scope, pop through it and reset
+  # the insertion mode (else parse error, ignore — the fragment case).
+  defp process(:in_select, %Token.EndTag{name: "select"}, state) do
+    if select_in_scope?(state) do
+      state |> pop_through("select") |> reset_insertion_mode()
+    else
+      state
+    end
+  end
+
+  # A start tag "select": parse error — treat as </select> (close the select).
+  defp process(:in_select, %Token.StartTag{name: "select"}, state) do
+    if select_in_scope?(state) do
+      state |> pop_through("select") |> reset_insertion_mode()
+    else
+      state
+    end
+  end
+
+  # A start tag "input"/"keygen"/"textarea": if a select is in select scope, pop
+  # through it, reset, and reprocess the token (else ignore).
+  defp process(:in_select, %Token.StartTag{name: name} = token, state)
+       when name in ~w(input keygen textarea) do
+    if select_in_scope?(state) do
+      state = state |> pop_through("select") |> reset_insertion_mode()
+      reprocess(state.mode, token, state)
+    else
+      state
+    end
+  end
+
+  # script/template start + template end: process using "in head".
+  defp process(:in_select, %Token.StartTag{name: name} = token, state)
+       when name in ~w(script template) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:in_select, %Token.EndTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  # Anything else: parse error, ignore.
+  defp process(:in_select, _token, state), do: state
+
+  # ==========================================================================
+  # The "in select in table" insertion mode (§13.2.6.4.17)
+  # ==========================================================================
+
+  # A start tag for a table element / an end tag for a table element: parse error;
+  # pop through the select, reset the insertion mode, and reprocess.
+  defp process(:in_select_in_table, %Token.StartTag{name: name} = token, state)
+       when name in ~w(caption table tbody tfoot thead tr td th) do
+    select_in_table_out(token, state)
+  end
+
+  defp process(:in_select_in_table, %Token.EndTag{name: name} = token, state)
+       when name in ~w(caption table tbody tfoot thead tr td th) do
+    select_in_table_out(token, state)
+  end
+
+  # Anything else: process using "in select".
+  defp process(:in_select_in_table, token, state), do: process(:in_select, token, state)
+
+  # ==========================================================================
   # §13.2.6.4.19  The "after body" insertion mode (partial — tier 1)
   # ==========================================================================
 
@@ -1189,6 +1323,12 @@ defmodule DOM.HTML.TreeBuilder do
   defp process_characters(mode, %Token.Character{data: data}, state)
        when mode in [:in_caption, :in_cell] do
     insert_characters(data, state)
+  end
+
+  # "in select"/"in select in table": insert the characters (NULL is dropped).
+  defp process_characters(mode, %Token.Character{data: data}, state)
+       when mode in [:in_select, :in_select_in_table] do
+    insert_characters(String.replace(data, "\0", ""), state)
   end
 
   defp process_characters(_mode, _token, state), do: state
@@ -1318,6 +1458,40 @@ defmodule DOM.HTML.TreeBuilder do
     if heading?(el),
       do: %{state | open_elements: rest},
       else: pop_through_heading(%{state | open_elements: rest})
+  end
+
+  # Pop the current node if it is named `name`.
+  defp pop_if_current(state, name) do
+    if Node.node_name(current_node(state)) == name, do: pop(state), else: state
+  end
+
+  # "Have a select in select scope" (§13.2.4.2): walk the stack while nodes are
+  # optgroup/option; a select returns true, any other element returns false.
+  defp select_in_scope?(%__MODULE__{open_elements: [el | rest]} = state) do
+    case Node.node_name(el) do
+      "select" -> true
+      name when name in ~w(optgroup option) -> select_in_scope?(%{state | open_elements: rest})
+      _ -> false
+    end
+  end
+
+  defp select_in_scope?(%__MODULE__{open_elements: []}), do: false
+
+  # For </optgroup>: if the current node is an option whose immediately-lower
+  # stack entry is an optgroup, pop the option first (so the optgroup can close).
+  defp pop_option_before_optgroup(%__MODULE__{open_elements: [a, b | _]} = state) do
+    if Node.node_name(a) == "option" and Node.node_name(b) == "optgroup",
+      do: pop(state),
+      else: state
+  end
+
+  defp pop_option_before_optgroup(state), do: state
+
+  # "in select in table" table-element tokens: pop through the select, reset the
+  # insertion mode, and reprocess the token in the new mode.
+  defp select_in_table_out(token, state) do
+    state = state |> pop_through("select") |> reset_insertion_mode()
+    reprocess(state.mode, token, state)
   end
 
   # ==========================================================================
@@ -1577,14 +1751,27 @@ defmodule DOM.HTML.TreeBuilder do
   # The last node on the stack, in the fragment case, is the context element.
   defp reset_mode_for(state, [last]) do
     node = if state.context, do: state.context, else: last
-    mode_for_node(node) || :in_body
+    select_mode(node, []) || mode_for_node(node) || :in_body
   end
 
   defp reset_mode_for(state, [node | rest]) do
-    mode_for_node(node) || reset_mode_for(state, rest)
+    select_mode(node, rest) || mode_for_node(node) || reset_mode_for(state, rest)
   end
 
   defp reset_mode_for(_state, []), do: :in_body
+
+  # A "select" open element resets to "in select in table" if a table is below it
+  # on the stack (before a template), else "in select" (§13.2.6.3).
+  defp select_mode(node, below) do
+    if Node.node_name(node) == "select" do
+      if Enum.any?(
+           Enum.take_while(below, &(Node.node_name(&1) != "template")),
+           &(Node.node_name(&1) == "table")
+         ),
+         do: :in_select_in_table,
+         else: :in_select
+    end
+  end
 
   # The insertion mode a given open element selects when resetting (§13.2.6.3 —
   # table subset). nil = keep scanning further up the stack.
