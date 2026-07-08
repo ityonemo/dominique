@@ -1918,16 +1918,37 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # Foster-parenting location: before the last open table if it has a parent,
-  # else inside the element above it on the stack (templates deferred to tier 6).
+  # Foster-parenting location (§13.2.6.1). The stack list has head = most recent.
+  # If a template is more recent than any table (or there is no table), the
+  # location is inside that template's content. Otherwise it is before the last
+  # table (if parented), else inside the element above the table on the stack.
   defp foster_location(state) do
+    last_template = Enum.find(state.open_elements, &(Node.node_name(&1) == "template"))
     last_table = Enum.find(state.open_elements, &(Node.node_name(&1) == "table"))
 
     cond do
-      is_nil(last_table) -> {List.last(state.open_elements) || state.document, nil}
-      parent = Node.parent_node(last_table) -> {parent, last_table}
-      :else -> {element_above(state.open_elements, last_table), nil}
+      template_before_table?(state.open_elements, last_template, last_table) ->
+        {Map.get(state.contents, last_template), nil}
+
+      is_nil(last_table) ->
+        {List.last(state.open_elements) || state.document, nil}
+
+      parent = Node.parent_node(last_table) ->
+        {parent, last_table}
+
+      :else ->
+        {element_above(state.open_elements, last_table), nil}
     end
+  end
+
+  # Whether `template` is on the stack and is more recently added than `table`
+  # (or there is no table) — the stack list has head = most recent, so "more
+  # recent" means appearing earlier in the list.
+  defp template_before_table?(_open, nil, _table), do: false
+  defp template_before_table?(_open, _template, nil), do: true
+
+  defp template_before_table?(open, template, table) do
+    Enum.find_index(open, &(&1 == template)) < Enum.find_index(open, &(&1 == table))
   end
 
   # The element immediately above `node` in the stack of open elements — i.e.

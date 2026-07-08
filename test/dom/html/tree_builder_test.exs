@@ -898,6 +898,19 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
 
+    # spec §13.2.6.1 (foster parenting): with a <tr> open in a template but NO
+    # table, a fostered <div> stays inside the template content (the template is
+    # the foster target), a sibling of the <tr> — it does not escape to the html.
+    test "a fostered element in a template stays in the template content" do
+      assert tree("<body><template><tr><div></div></tr></template>") ==
+               doc([
+                 "|     <template>",
+                 "|       content",
+                 "|         <tr>",
+                 "|         <div>"
+               ])
+    end
+
     # spec §13.2.6.4.16 (</template> end tag): closing a template returns to the
     # enclosing insertion mode, so following content is a sibling of the template.
     test "content after a closed template is a sibling" do
