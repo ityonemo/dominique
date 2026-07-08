@@ -76,7 +76,32 @@ raw_name_noembed  <- [Nn][Oo][Ee][Mm][Bb][Ee][Dd]
 raw_name_noframes <- [Nn][Oo][Ff][Rr][Aa][Mm][Ee][Ss]
 raw_name_noscript <- [Nn][Oo][Ss][Cc][Rr][Ii][Pp][Tt]
 
-raw_text_script   <- (!raw_close_script   .)*
+# The <script> interior is NOT a flat "up to </script>" run: once `<!--` opens a
+# script-data escape, a `</script>` inside it does not close the element — only
+# `-->` ends the escape. A nested `<script>...</script>` inside the escape is a
+# double-escape consumed as a unit. Each of these sub-states is a named rule; the
+# ordered choice inside script_body is the state machine.
+# The interior stops at a closing </script> — EXCEPT inside a double-escape,
+# which is only reachable AFTER a `<!--` opens the "escaped" state (WHATWG
+# script-data states). In escaped state a bare </script> still CLOSES; a nested
+# `<script>` start enters "double-escaped", where a </script> only returns to
+# escaped and does NOT close. So: consume `<!-- ... -->` escape regions as data,
+# and within them consume nested `<script>...</script>` double-escapes as data;
+# a bare </script> (outside a double-escape) falls through to raw_close_script.
+raw_text_script <- (!raw_close_script script_segment)*
+script_segment  <- script_escape / .
+# `<!-- ... -->` escaped region. A </script> here closes normally, so the region
+# body stops at `-->` OR a </script>; only nested double-escapes hide a </script>.
+script_escape <- '<!--' script_escaped_body ('-->' / &raw_close_script / !.)
+script_escaped_body <- (!'-->' !raw_close_script script_escaped_item)*
+script_escaped_item <- script_double_escape / .
+# A nested <script>...</script> region, captured as plain characters (name and
+# attributes are NOT tokenized — this is script data, not markup).
+script_double_escape <- script_dbl_open (!script_dbl_close .)* script_dbl_close
+script_dbl_open  <- '<' script_kw (!'>' .)* '>'
+script_dbl_close <- '</' script_kw ws '>'
+script_kw <- [Ss][Cc][Rr][Ii][Pp][Tt]
+
 raw_text_style    <- (!raw_close_style    .)*
 raw_text_textarea <- (!raw_close_textarea .)*
 raw_text_title    <- (!raw_close_title    .)*

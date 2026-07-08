@@ -51,7 +51,17 @@ after
       raw_plaintext: [tag: true, post_traverse: :raw_element],
       raw_open_plaintext: [tag: true, post_traverse: :raw_open],
       raw_name_plaintext: [token: {:raw_name, "plaintext"}],
-      plaintext_body: [tag: true, post_traverse: :raw_text]
+      plaintext_body: [tag: true, post_traverse: :raw_text],
+      # script-data escape sub-states: plain rules whose matched codepoints flow
+      # up into raw_text_script's character collection.
+      script_segment: [],
+      script_escape: [],
+      script_escaped_body: [],
+      script_escaped_item: [],
+      script_double_escape: [],
+      script_dbl_open: [],
+      script_dbl_close: [],
+      script_kw: []
     ] ++
       raw_rules ++
       [

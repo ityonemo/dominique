@@ -147,6 +147,30 @@ defmodule DOM.HTML.TokenizerTest do
                %Token.Character{data: "<div>foo</div>"}
              ]
     end
+
+    # WHATWG script-data-escaped: after `<!--`, a bare </script> still CLOSES the
+    # element (this input closes at the first </script>).
+    test "a bare </script> inside a script comment still closes the script" do
+      assert [_, %Token.Character{data: " <!-- "}, %Token.EndTag{name: "script"} | _] =
+               tokenize("<script> <!-- </script> --> </script>")
+    end
+
+    # WHATWG script-data-double-escaped: a nested <script>...</script> inside the
+    # `<!-- -->` escape hides its own </script>, so the real close is the last one.
+    test "a nested script inside a comment is double-escaped, not a close" do
+      assert [
+               _,
+               %Token.Character{data: "<!--<script></script>-->"},
+               %Token.EndTag{name: "script"}
+             ] = tokenize("<script><!--<script></script>--></script>")
+    end
+
+    # Without a `<!--`, a nested <script> is NOT double-escaped: the first
+    # </script> closes the outer script.
+    test "a nested script without a comment closes at the first </script>" do
+      assert [_, %Token.Character{data: "<script>"}, %Token.EndTag{name: "script"} | _] =
+               tokenize("<script><script></script></script>")
+    end
   end
 
   describe "multibyte text" do
