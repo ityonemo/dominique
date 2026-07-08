@@ -224,8 +224,11 @@ defmodule DOM.HTML.TokenizerTest do
     # WHATWG end-tag states: a close tag terminated by whitespace (not `>`) at EOF
     # still closes the element (the trailing junk is dropped, eof-in-tag).
     test "a close tag terminated by whitespace at EOF still closes" do
-      assert [%Token.StartTag{name: "script"}, %Token.EndTag{name: "script"}] =
-               tokenize("<script></SCRIPT ")
+      assert [
+               %Token.StartTag{name: "script"},
+               %Token.Character{data: "x"},
+               %Token.EndTag{name: "script"}
+             ] = tokenize("<script>x</SCRIPT ")
     end
 
     # A `</name` not followed by a terminator is not a close — it stays raw text.

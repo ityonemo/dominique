@@ -21,7 +21,7 @@ token <- comment / doctype / raw_element / end_tag / start_tag
 # close tag (case-insensitive). RCDATA entity decoding is a later concern.
 
 raw_element <- raw_script / raw_style / raw_textarea / raw_title / raw_xmp
-             / raw_iframe / raw_noembed / raw_noframes / raw_noscript
+             / raw_iframe / raw_noembed / raw_noframes
              / raw_plaintext
 
 # <plaintext> switches the tokenizer to the PLAINTEXT state: everything after the
@@ -43,9 +43,8 @@ raw_xmp      <- raw_open_xmp      raw_text_xmp      raw_end_xmp
 raw_iframe   <- raw_open_iframe   raw_text_iframe   raw_end_iframe
 raw_noembed  <- raw_open_noembed  raw_text_noembed  raw_end_noembed
 raw_noframes <- raw_open_noframes raw_text_noframes raw_end_noframes
-raw_noscript <- raw_open_noscript raw_text_noscript raw_end_noscript
 
-# NOTE: title/noscript/noframes are RCDATA/optional elements that also appear in
+# NOTE: title/noframes are RCDATA/optional elements that also appear in
 # SVG/MathML foreign content, where they are ORDINARY elements (not raw-text). Our
 # context-free tokenizer cannot see that context, but when such an element is
 # unclosed the raw rule must FAIL so the token falls back to a normal start tag
@@ -60,7 +59,6 @@ raw_end_xmp      <- raw_close_xmp      / !.
 raw_end_iframe   <- raw_close_iframe   / !.
 raw_end_noembed  <- raw_close_noembed  / !.
 raw_end_noframes <- raw_close_noframes
-raw_end_noscript <- raw_close_noscript
 
 raw_open_script   <- '<' raw_name_script   attributes ws '>'
 raw_open_style    <- '<' raw_name_style    attributes ws '>'
@@ -70,7 +68,6 @@ raw_open_xmp      <- '<' raw_name_xmp      attributes ws '>'
 raw_open_iframe   <- '<' raw_name_iframe   attributes ws '>'
 raw_open_noembed  <- '<' raw_name_noembed  attributes ws '>'
 raw_open_noframes <- '<' raw_name_noframes attributes ws '>'
-raw_open_noscript <- '<' raw_name_noscript attributes ws '>'
 
 raw_name_script   <- [Ss][Cc][Rr][Ii][Pp][Tt]
 raw_name_style    <- [Ss][Tt][Yy][Ll][Ee]
@@ -80,7 +77,6 @@ raw_name_xmp      <- [Xx][Mm][Pp]
 raw_name_iframe   <- [Ii][Ff][Rr][Aa][Mm][Ee]
 raw_name_noembed  <- [Nn][Oo][Ee][Mm][Bb][Ee][Dd]
 raw_name_noframes <- [Nn][Oo][Ff][Rr][Aa][Mm][Ee][Ss]
-raw_name_noscript <- [Nn][Oo][Ss][Cc][Rr][Ii][Pp][Tt]
 
 # The <script> interior is NOT a flat "up to </script>" run: once `<!--` opens a
 # script-data escape, a `</script>` inside it does not close the element — only
@@ -119,7 +115,6 @@ raw_text_xmp      <- (!raw_close_xmp      .)*
 raw_text_iframe   <- (!raw_close_iframe   .)*
 raw_text_noembed  <- (!raw_close_noembed  .)*
 raw_text_noframes <- (!raw_close_noframes .)*
-raw_text_noscript <- (!raw_close_noscript .)*
 
 # The close tag matches `</name` followed by a terminator: `>`, or a whitespace/
 # `/` (which per the WHATWG end-tag states switches to before-attribute-name /
@@ -133,7 +128,6 @@ raw_close_xmp      <- '</' raw_name_xmp      raw_tag_end
 raw_close_iframe   <- '</' raw_name_iframe   raw_tag_end
 raw_close_noembed  <- '</' raw_name_noembed  raw_tag_end
 raw_close_noframes <- '</' raw_name_noframes raw_tag_end
-raw_close_noscript <- '</' raw_name_noscript raw_tag_end
 
 raw_tag_end <- '>' / [ \t\r\n\f/] (!'>' .)* ('>' / !.)
 

@@ -24,7 +24,9 @@ after
   # triggers regeneration (Pegasus.parser_from_file does not register it).
   @external_resource Path.join(__DIR__, "tokens.peg")
 
-  @raw_names ~w(script style textarea title xmp iframe noembed noframes noscript)
+  # noscript is NOT a tokenizer rawtext element for us: we model the scripting-
+  # DISABLED parser, where <noscript> content is ordinary markup.
+  @raw_names ~w(script style textarea title xmp iframe noembed noframes)
 
   raw_rules =
     Enum.flat_map(@raw_names, fn name ->

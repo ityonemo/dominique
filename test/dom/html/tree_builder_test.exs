@@ -181,6 +181,25 @@ defmodule DOM.HTML.TreeBuilderTest do
     end
   end
 
+  describe "in head noscript — §13.2.6.4.5 (scripting disabled)" do
+    # spec §13.2.6.4.5: with scripting disabled, <noscript> in head opens the
+    # "in head noscript" mode; a disallowed start tag (e.g. iframe) pops the
+    # noscript and is reprocessed — landing in the body. (iframe is rawtext, so
+    # its interior `</noscript>X` is text.)
+    test "an iframe inside head noscript pops out to the body" do
+      assert tree("<noscript><iframe></noscript>X") ==
+               "| <html>\n|   <head>\n|     <noscript>\n|   <body>\n" <>
+                 "|     <iframe>\n|       \"</noscript>X\""
+    end
+
+    # spec §13.2.6.4.5: a metadata element (link) inside head noscript stays in
+    # head via the "in head" delegation.
+    test "a link inside head noscript stays in head" do
+      assert tree("<noscript><link></noscript>") ==
+               "| <html>\n|   <head>\n|     <noscript>\n|       <link>\n|   <body>"
+    end
+  end
+
   describe "in body — §13.2.6.4.7 the table start tag" do
     # spec §13.2.6.4.7: "A start tag whose tag name is table" — close a p in
     # button scope, insert, switch to "in table".

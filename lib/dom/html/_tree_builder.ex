@@ -55,9 +55,10 @@ defmodule DOM.HTML.TreeBuilder do
 
   # Rawtext/RCDATA elements the "in head" mode parses with the generic rawtext
   # algorithm (switch to the "text" insertion mode). textarea/xmp/iframe/noembed
-  # are in-body-only and have their own "in body" rules — they must NOT be
-  # consumed here, else they land in <head> instead of implying a <body>.
-  @head_rawtext ~w(style script noframes noscript title)
+  # are in-body-only and have their own "in body" rules; noscript (scripting
+  # disabled) has its own "in head noscript" handling — none must be consumed
+  # here, else they land in <head> instead of imply a <body> / open the mode.
+  @head_rawtext ~w(style script noframes title)
 
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input keygen link meta param source track wbr)
@@ -400,6 +401,14 @@ defmodule DOM.HTML.TreeBuilder do
     %{state | original_mode: state.mode, mode: :text}
   end
 
+  # A start tag "noscript" (scripting DISABLED): insert an HTML element, switch to
+  # "in head noscript". (With scripting enabled it would be rawtext; we model the
+  # scripting-off parser.)
+  defp process(:in_head, %Token.StartTag{name: "noscript"} = token, state) do
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_head_noscript}
+  end
+
   # A start tag "template": insert a template element (its children go into the
   # content fragment), insert a marker, frameset-ok not ok, push "in template"
   # onto the template insertion modes, switch to "in template".
@@ -445,6 +454,46 @@ defmodule DOM.HTML.TreeBuilder do
   # Anything else: pop the head element, switch to "after head", reprocess.
   defp process(:in_head, token, state) do
     reprocess(:after_head, token, %{pop(state) | mode: :after_head})
+  end
+
+  # ==========================================================================
+  # §13.2.6.4.5  The "in head noscript" insertion mode (scripting disabled)
+  # ==========================================================================
+
+  # A DOCTYPE: parse error, ignore.
+  defp process(:in_head_noscript, %Token.Doctype{}, state), do: state
+
+  # A start tag "html": process using "in body".
+  defp process(:in_head_noscript, %Token.StartTag{name: "html"} = token, state) do
+    process(:in_body, token, state)
+  end
+
+  # An end tag "noscript": pop the noscript, switch back to "in head".
+  defp process(:in_head_noscript, %Token.EndTag{name: "noscript"}, state) do
+    %{pop(state) | mode: :in_head}
+  end
+
+  # Comment + the head-level metadata start tags (basefont/bgsound/link/meta/
+  # noframes/style): process using "in head".
+  defp process(:in_head_noscript, %Token.Comment{} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:in_head_noscript, %Token.StartTag{name: name} = token, state)
+       when name in ~w(basefont bgsound link meta noframes style) do
+    process(:in_head, token, state)
+  end
+
+  # A start tag "head"/"noscript": parse error, ignore.
+  defp process(:in_head_noscript, %Token.StartTag{name: name}, state)
+       when name in ~w(head noscript) do
+    state
+  end
+
+  # Anything else (incl. </br>): parse error — pop the noscript, switch to "in
+  # head", and reprocess.
+  defp process(:in_head_noscript, token, state) do
+    reprocess(:in_head, token, %{pop(state) | mode: :in_head})
   end
 
   # ==========================================================================
@@ -1629,10 +1678,11 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # "before head"/"in head"/"after head": leading whitespace is inserted; the
-  # non-whitespace remainder runs the mode's "anything else" (process/3).
+  # "before head"/"in head"/"in head noscript"/"after head": leading whitespace is
+  # inserted; the non-whitespace remainder runs the mode's "anything else"
+  # (process/3 — which for in_head_noscript pops the noscript and reprocesses).
   defp process_characters(mode, %Token.Character{data: data} = token, state)
-       when mode in [:before_head, :in_head, :after_head] do
+       when mode in [:before_head, :in_head, :in_head_noscript, :after_head] do
     {ws, rest} = split_leading_whitespace(data)
     state = if ws != "", do: insert_characters(ws, state), else: state
     if rest == "", do: state, else: process(mode, %{token | data: rest}, state)
