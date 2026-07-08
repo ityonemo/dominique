@@ -875,10 +875,16 @@ defmodule DOM.HTML.TreeBuilder do
     state
   end
 
-  # An end tag whose tag name is "body"/"html": switch to "after body". ("html"
-  # additionally reprocesses; tier 1 treats them alike.)
-  defp process(:in_body, %Token.EndTag{name: name}, state) when name in ~w(body html) do
+  # An end tag "body": switch to "after body". (Body-in-scope check deferred.)
+  defp process(:in_body, %Token.EndTag{name: "body"}, state) do
     %{state | mode: :after_body}
+  end
+
+  # An end tag "html": switch to "after body" and REPROCESS the token (so it runs
+  # the after-body </html> rule → after-after-body). This is why a comment after
+  # </html> lands on the Document, not inside <body>.
+  defp process(:in_body, %Token.EndTag{name: "html"} = token, state) do
+    reprocess(:after_body, token, %{state | mode: :after_body})
   end
 
   # An end tag for a block-level element ("address, …, div, …, ul, …"): if it is

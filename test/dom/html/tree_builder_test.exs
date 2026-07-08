@@ -175,6 +175,16 @@ defmodule DOM.HTML.TreeBuilderTest do
     end
   end
 
+  describe "after body / after after body — §13.2.6.4.7 + .19" do
+    # spec §13.2.6.4.7: an in-body </html> end tag switches to "after body" and
+    # reprocesses (→ "after after body"), so a comment after </html> lands on the
+    # Document, not inside <body>.
+    test "a comment after </html> lands on the document" do
+      assert tree("<html></html><!-- foo -->") ==
+               "| <html>\n|   <head>\n|   <body>\n| <!--  foo  -->"
+    end
+  end
+
   describe "after head — §13.2.6.4.6" do
     # spec §13.2.6.4.6: a head-element start tag after </head> re-enters the head
     # (push head, process in-head, pop head) — so <base> lands in <head>, not body.
