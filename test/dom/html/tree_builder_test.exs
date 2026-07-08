@@ -158,6 +158,12 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert tree("<b>a</b>b") ==
                doc(["|     <b>", "|       \"a\"", "|     \"b\""])
     end
+
+    # spec §13.2.6.4.7: "An end tag whose tag name is br" — act as if a <br>
+    # START tag had been seen (a void <br> element is inserted).
+    test "</br> is treated as a <br> start tag" do
+      assert tree("a</br>b") == doc(["|     \"a\"", "|     <br>", "|     \"b\""])
+    end
   end
 
   describe "after head — §13.2.6.4.6" do

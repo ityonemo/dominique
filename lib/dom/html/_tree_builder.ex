@@ -915,6 +915,13 @@ defmodule DOM.HTML.TreeBuilder do
     adoption_agency(state, token)
   end
 
+  # An end tag "br": parse error — act as if a "br" START tag had been seen (a
+  # void element: reconstruct, insert, pop; frameset-ok not ok). Any attributes
+  # on the end tag are dropped.
+  defp process(:in_body, %Token.EndTag{name: "br"}, state) do
+    process(:in_body, %Token.StartTag{name: "br"}, state)
+  end
+
   # Any other end tag: walk the stack from the current node; on a node whose name
   # matches, generate implied end tags (except that name) and pop through it; on
   # a "special" element, stop (parse error, ignore).

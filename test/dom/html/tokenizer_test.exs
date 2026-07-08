@@ -73,7 +73,10 @@ defmodule DOM.HTML.TokenizerTest do
 
     # WHATWG "incorrectly-closed-comment": `--!>` also closes the comment.
     test "a --!> closes the comment" do
-      assert tokenize("<!-- x --!>y") == [%Token.Comment{data: " x "}, %Token.Character{data: "y"}]
+      assert tokenize("<!-- x --!>y") == [
+               %Token.Comment{data: " x "},
+               %Token.Character{data: "y"}
+             ]
     end
 
     # WHATWG "abrupt-closing-of-empty-comment": `<!-->` and `<!--->` are empty.
