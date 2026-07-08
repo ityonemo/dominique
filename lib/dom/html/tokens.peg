@@ -14,7 +14,7 @@ tokens <- token*
 # character is the final fallback. Getting this order wrong turns real tags into
 # comments or vice-versa.
 token <- comment / doctype / raw_element / end_tag / start_tag
-       / bogus_comment / malformed_tag / character
+       / eof_tag / bogus_comment / malformed_tag / character
 
 # --- raw-text / RCDATA elements ---------------------------------------------
 # Their interior is captured verbatim as one character run, up to the matching
@@ -210,6 +210,12 @@ malformed_tag <- '</>' / '<>' / '</'
 start_tag <- '<' tag_name attributes ws self_closing? '>'
 end_tag <- '</' tag_name attributes ws '>'
 
+# WHATWG "eof-in-tag": a start/end tag that reaches end-of-input WITHOUT its `>`
+# (including an unterminated quoted attribute value that swallowed the rest of the
+# input) has its incomplete tag token DROPPED. It is tried AFTER the real
+# `>`-terminated tags (so those win) and emits nothing (handler returns []).
+eof_tag <- ('</' / '<') tag_name attributes ws self_closing? !.
+
 # A trailing `/` right before `>` is the self-closing flag; any OTHER `/` inside
 # the tag is just an attribute separator (WHATWG before-attribute-name: a `/` not
 # forming `/>` is reconsumed as whitespace).
@@ -232,8 +238,10 @@ attribute <- attr_name (ws '=' ws attr_value)?
 attr_name <- [^ \t\r\n\f/>=]+
 
 attr_value <- dq_value / sq_value / uq_value
-dq_value <- '"' [^"]* '"'
-sq_value <- "'" [^']* "'"
+# Quoted values are EOF-tolerant: a missing closing quote runs to end-of-input,
+# so the surrounding tag matches `eof_tag` (dropped) rather than falling through.
+dq_value <- '"' [^"]* ('"' / !.)
+sq_value <- "'" [^']* ("'" / !.)
 uq_value <- [^ \t\r\n\f>]+
 
 ws <- [ \t\r\n\f]*

@@ -100,6 +100,7 @@ after
         doctype_str: [tag: true, post_traverse: :doctype_str],
         start_tag: [tag: true, post_traverse: :start_tag],
         end_tag: [tag: true, post_traverse: :end_tag],
+        eof_tag: [tag: true, post_traverse: :eof_tag],
         self_closing: [token: :self_closing],
         tag_name: [collect: true, post_traverse: :tag_name],
         attributes: [tag: true, post_traverse: :attributes],
@@ -318,6 +319,9 @@ after
 
     {rest, [struct!(Token.EndTag, name: name)], leave_foreign(context, name)}
   end
+
+  # WHATWG "eof-in-tag": a tag that ran to end-of-input without its `>` is dropped.
+  defp eof_tag(rest, [{:eof_tag, _args}], context, _loc, _col), do: {rest, [], context}
 
   # A foreign-content depth counter threaded through the parse context. Entering
   # <svg>/<math> (not self-closed) increments it; the matching end tag decrements.

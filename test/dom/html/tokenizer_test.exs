@@ -65,6 +65,14 @@ defmodule DOM.HTML.TokenizerTest do
     test "lowercases attribute names, in order" do
       assert [%Token.StartTag{attributes: [{"a", ""}, {"b", ""}]}] = tokenize("<h a B>")
     end
+
+    # WHATWG "eof-in-tag": a tag whose quoted attribute value never closes runs to
+    # end-of-input and the whole (incomplete) tag token is DROPPED — the rest of
+    # the input is swallowed as the value, not re-tokenized as markup.
+    test "an unterminated quoted attribute value drops the tag at EOF" do
+      assert tokenize(~s(<img alt="><div>A</div>)) == []
+      assert tokenize("<a b='c<d>") == []
+    end
   end
 
   describe "character data" do
