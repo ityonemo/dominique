@@ -24,7 +24,9 @@ defmodule DOM.HTML.TreeBuilder do
     :head,
     :form,
     open_elements: [],
-    frameset_ok: true
+    frameset_ok: true,
+    foster_parenting: false,
+    pending_table_chars: []
   ]
 
   # Elements parsed with the "generic raw text" (rawtext) or "generic RCDATA"
@@ -46,6 +48,10 @@ defmodule DOM.HTML.TreeBuilder do
   # "in button scope" adds "button"; "in list item scope" adds "ol"/"ul".
   @button_scope_markers ["button" | @scope_markers]
   @list_item_scope_markers ~w(ol ul) ++ @scope_markers
+
+  # "have an element in table scope" (§13.2.4.2): terminates only on html, table,
+  # template — used by the table insertion modes.
+  @table_scope_markers ~w(html table template)
 
   @doc "Builds a document tree from a decoded token list (§13.2.6.4)."
   @spec build([struct()]) :: Node.t()
@@ -401,6 +407,20 @@ defmodule DOM.HTML.TreeBuilder do
     state
   end
 
+  # A start tag "table": (not quirks-mode — quirks detection deferred) if a p is
+  # in button scope, close it; insert; frameset-ok not ok; switch to "in table".
+  defp process(:in_body, %Token.StartTag{name: "table"} = token, state) do
+    {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
+    %{state | frameset_ok: false, mode: :in_table}
+  end
+
+  # A start tag for a table-child tag ("caption"/"col"/"tbody"/… /"tr"/"frame"/
+  # "head"): parse error, ignore in the "in body" mode.
+  defp process(:in_body, %Token.StartTag{name: name}, state)
+       when name in ~w(caption col colgroup frame head tbody td tfoot th thead tr) do
+    state
+  end
+
   # Any other start tag: reconstruct active formatting elements (tier 4 — no-op
   # here), then insert an HTML element for the token.
   defp process(:in_body, %Token.StartTag{} = token, state) do
@@ -504,6 +524,391 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:text, %Token.EndTag{}, state), do: %{pop(state) | mode: state.original_mode}
 
   # ==========================================================================
+  # §13.2.6.4.9  The "in table" insertion mode
+  # ==========================================================================
+
+  # A comment token: insert a comment.
+  defp process(:in_table, %Token.Comment{} = token, state) do
+    insert_comment(token, state)
+    state
+  end
+
+  # A DOCTYPE token: parse error, ignore.
+  defp process(:in_table, %Token.Doctype{}, state), do: state
+
+  # A start tag "caption": clear the stack back to a table context, insert a
+  # marker (tier 4 — no-op), insert an HTML element, switch to "in caption".
+  defp process(:in_table, %Token.StartTag{name: "caption"} = token, state) do
+    state = clear_to_table_context(state)
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_caption}
+  end
+
+  # A start tag "colgroup": clear the stack back to a table context, insert,
+  # switch to "in column group".
+  defp process(:in_table, %Token.StartTag{name: "colgroup"} = token, state) do
+    state = clear_to_table_context(state)
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_column_group}
+  end
+
+  # A start tag "col": act as if a "colgroup" start tag had been seen, then
+  # reprocess the "col" token in "in column group".
+  defp process(:in_table, %Token.StartTag{name: "col"} = token, state) do
+    state = clear_to_table_context(state)
+    {_el, state} = insert_html_element(%Token.StartTag{name: "colgroup"}, state)
+    reprocess(:in_column_group, token, %{state | mode: :in_column_group})
+  end
+
+  # A start tag "tbody"/"tfoot"/"thead": clear the stack back to a table context,
+  # insert, switch to "in table body".
+  defp process(:in_table, %Token.StartTag{name: name} = token, state)
+       when name in ~w(tbody tfoot thead) do
+    state = clear_to_table_context(state)
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_table_body}
+  end
+
+  # A start tag "td"/"th"/"tr": act as if a "tbody" start tag had been seen, then
+  # reprocess in "in table body".
+  defp process(:in_table, %Token.StartTag{name: name} = token, state)
+       when name in ~w(td th tr) do
+    state = clear_to_table_context(state)
+    {_el, state} = insert_html_element(%Token.StartTag{name: "tbody"}, state)
+    reprocess(:in_table_body, token, %{state | mode: :in_table_body})
+  end
+
+  # A start tag "table": parse error. If no table is in table scope, ignore.
+  # Otherwise pop through the table, reset the insertion mode, reprocess.
+  defp process(:in_table, %Token.StartTag{name: "table"} = token, state) do
+    if has_in_scope?(state, "table", @table_scope_markers) do
+      state = pop_through(state, "table")
+      state = reset_insertion_mode(state)
+      reprocess(state.mode, token, state)
+    else
+      state
+    end
+  end
+
+  # An end tag "table": if no table is in table scope, parse error, ignore.
+  # Otherwise pop through the table and reset the insertion mode.
+  defp process(:in_table, %Token.EndTag{name: "table"}, state) do
+    if has_in_scope?(state, "table", @table_scope_markers) do
+      state |> pop_through("table") |> reset_insertion_mode()
+    else
+      state
+    end
+  end
+
+  # An end tag "body"/"caption"/"col"/…/"tr": parse error, ignore.
+  defp process(:in_table, %Token.EndTag{name: name}, state)
+       when name in ~w(body caption col colgroup html tbody td tfoot th thead tr) do
+    state
+  end
+
+  # style/script/template start tags + template end tag: process using "in head".
+  defp process(:in_table, %Token.StartTag{name: name} = token, state)
+       when name in ~w(style script template) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:in_table, %Token.EndTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  # A start tag "input" that is type=hidden: insert, pop, acknowledge self-
+  # closing. Any other input falls through to "anything else".
+  defp process(:in_table, %Token.StartTag{name: "input"} = token, state) do
+    if hidden_input?(token) do
+      {_el, state} = insert_html_element(token, state)
+      pop(state)
+    else
+      anything_else_in_table(token, state)
+    end
+  end
+
+  # A start tag "form": if a form pointer is set (or a template is on the stack —
+  # tier 6), ignore; else insert and set the pointer, then pop it.
+  defp process(:in_table, %Token.StartTag{name: "form"} = token, state) do
+    if state.form do
+      state
+    else
+      {form, state} = insert_html_element(token, state)
+      pop(%{state | form: form})
+    end
+  end
+
+  # Anything else: parse error. Enable foster parenting, process using "in body",
+  # then disable foster parenting.
+  defp process(:in_table, token, state), do: anything_else_in_table(token, state)
+
+  # ==========================================================================
+  # §13.2.6.4.10  The "in table text" insertion mode (non-character tokens)
+  # ==========================================================================
+
+  # Anything else (a non-character token ends the run): flush the pending table
+  # character tokens, switch back to the original insertion mode, and reprocess.
+  defp process(:in_table_text, token, state) do
+    data = state.pending_table_chars |> Enum.reverse() |> IO.iodata_to_binary()
+    state = %{state | pending_table_chars: [], mode: state.original_mode}
+
+    state =
+      cond do
+        data == "" ->
+          state
+
+        # All whitespace: insert normally (in the table section).
+        whitespace?(data) ->
+          insert_characters(data, state)
+
+        # Non-whitespace present: parse error — foster-parent the whole run via
+        # the "in table" anything-else path.
+        :else ->
+          anything_else_in_table(%Token.Character{data: data}, state)
+      end
+
+    reprocess(state.mode, token, state)
+  end
+
+  # ==========================================================================
+  # §13.2.6.4.11  The "in caption" insertion mode
+  # ==========================================================================
+
+  # An end tag "caption" / a start tag for a table-child / an end tag "table":
+  # if no caption is in table scope, parse error, ignore. Otherwise generate
+  # implied end tags, pop through the caption, clear formatting to last marker
+  # (tier 4 — no-op), switch to "in table"; the table-child/table cases reprocess.
+  defp process(:in_caption, %Token.EndTag{name: "caption"}, state) do
+    close_caption(state)
+  end
+
+  defp process(:in_caption, %Token.StartTag{name: name} = token, state)
+       when name in ~w(caption col colgroup tbody td tfoot th thead tr) do
+    close_caption_and_reprocess(token, state)
+  end
+
+  defp process(:in_caption, %Token.EndTag{name: "table"} = token, state) do
+    close_caption_and_reprocess(token, state)
+  end
+
+  # An end tag "body"/"col"/…/"tr": parse error, ignore.
+  defp process(:in_caption, %Token.EndTag{name: name}, state)
+       when name in ~w(body col colgroup html tbody td tfoot th thead tr) do
+    state
+  end
+
+  # Anything else: process using "in body".
+  defp process(:in_caption, token, state), do: process(:in_body, token, state)
+
+  # ==========================================================================
+  # §13.2.6.4.12  The "in column group" insertion mode
+  # ==========================================================================
+
+  defp process(:in_column_group, %Token.Comment{} = token, state) do
+    insert_comment(token, state)
+    state
+  end
+
+  defp process(:in_column_group, %Token.Doctype{}, state), do: state
+
+  # A start tag "html": process using "in body".
+  defp process(:in_column_group, %Token.StartTag{name: "html"} = token, state) do
+    process(:in_body, token, state)
+  end
+
+  # A start tag "col": insert an HTML element, immediately pop it (void),
+  # acknowledge self-closing.
+  defp process(:in_column_group, %Token.StartTag{name: "col"} = token, state) do
+    {_el, state} = insert_html_element(token, state)
+    pop(state)
+  end
+
+  # An end tag "colgroup": if the current node is not a colgroup, parse error,
+  # ignore; otherwise pop it, switch to "in table".
+  defp process(:in_column_group, %Token.EndTag{name: "colgroup"}, state) do
+    if Node.node_name(current_node(state)) == "colgroup" do
+      %{pop(state) | mode: :in_table}
+    else
+      state
+    end
+  end
+
+  # An end tag "col": parse error, ignore.
+  defp process(:in_column_group, %Token.EndTag{name: "col"}, state), do: state
+
+  # template start/end tags: process using "in head".
+  defp process(:in_column_group, %Token.StartTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:in_column_group, %Token.EndTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  # Anything else: if the current node is not a colgroup, parse error, ignore;
+  # otherwise pop it, switch to "in table", reprocess.
+  defp process(:in_column_group, token, state) do
+    if Node.node_name(current_node(state)) == "colgroup" do
+      reprocess(:in_table, token, %{pop(state) | mode: :in_table})
+    else
+      state
+    end
+  end
+
+  # ==========================================================================
+  # §13.2.6.4.13  The "in table body" insertion mode
+  # ==========================================================================
+
+  # A start tag "tr": clear the stack back to a table body context, insert,
+  # switch to "in row".
+  defp process(:in_table_body, %Token.StartTag{name: "tr"} = token, state) do
+    state = clear_to_table_body_context(state)
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_row}
+  end
+
+  # A start tag "th"/"td": parse error. Act as if a "tr" start tag had been seen,
+  # then reprocess in "in row".
+  defp process(:in_table_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(th td) do
+    state = clear_to_table_body_context(state)
+    {_el, state} = insert_html_element(%Token.StartTag{name: "tr"}, state)
+    reprocess(:in_row, token, %{state | mode: :in_row})
+  end
+
+  # An end tag "tbody"/"tfoot"/"thead": if not in table scope, parse error,
+  # ignore; otherwise clear to a table body context, pop it, switch to "in table".
+  defp process(:in_table_body, %Token.EndTag{name: name}, state)
+       when name in ~w(tbody tfoot thead) do
+    if has_in_scope?(state, name, @table_scope_markers) do
+      %{pop(clear_to_table_body_context(state)) | mode: :in_table}
+    else
+      state
+    end
+  end
+
+  # A start tag for a table-section sibling / an end tag "table": if no tbody/
+  # thead/tfoot is in table scope, parse error, ignore. Otherwise clear to a
+  # table body context, pop it, switch to "in table", reprocess.
+  defp process(:in_table_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(caption col colgroup tbody tfoot thead) do
+    table_body_to_table(token, state)
+  end
+
+  defp process(:in_table_body, %Token.EndTag{name: "table"} = token, state) do
+    table_body_to_table(token, state)
+  end
+
+  # An end tag "body"/"caption"/…/"tr": parse error, ignore.
+  defp process(:in_table_body, %Token.EndTag{name: name}, state)
+       when name in ~w(body caption col colgroup html td th tr) do
+    state
+  end
+
+  # Anything else: process using "in table".
+  defp process(:in_table_body, token, state), do: process(:in_table, token, state)
+
+  # ==========================================================================
+  # §13.2.6.4.14  The "in row" insertion mode
+  # ==========================================================================
+
+  # A start tag "th"/"td": clear the stack back to a table row context, insert,
+  # switch to "in cell", insert a marker (tier 4 — no-op).
+  defp process(:in_row, %Token.StartTag{name: name} = token, state)
+       when name in ~w(th td) do
+    state = clear_to_table_row_context(state)
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_cell}
+  end
+
+  # An end tag "tr": if no tr is in table scope, parse error, ignore. Otherwise
+  # clear to a table row context, pop the tr, switch to "in table body".
+  defp process(:in_row, %Token.EndTag{name: "tr"}, state) do
+    if has_in_scope?(state, "tr", @table_scope_markers) do
+      %{pop(clear_to_table_row_context(state)) | mode: :in_table_body}
+    else
+      state
+    end
+  end
+
+  # A start tag for a table-child / an end tag "table": if no tr is in table
+  # scope, ignore; otherwise pop the tr, switch to "in table body", reprocess.
+  defp process(:in_row, %Token.StartTag{name: name} = token, state)
+       when name in ~w(caption col colgroup tbody tfoot thead tr) do
+    row_to_table_body(token, state)
+  end
+
+  defp process(:in_row, %Token.EndTag{name: "table"} = token, state) do
+    row_to_table_body(token, state)
+  end
+
+  # An end tag "tbody"/"tfoot"/"thead": if that section is not in table scope,
+  # ignore; else if no tr in table scope, ignore; otherwise pop the tr, switch to
+  # "in table body", reprocess.
+  defp process(:in_row, %Token.EndTag{name: name} = token, state)
+       when name in ~w(tbody tfoot thead) do
+    if has_in_scope?(state, name, @table_scope_markers) do
+      row_to_table_body(token, state)
+    else
+      state
+    end
+  end
+
+  # An end tag "body"/"caption"/"col"/"colgroup"/"html"/"td"/"th": parse error,
+  # ignore.
+  defp process(:in_row, %Token.EndTag{name: name}, state)
+       when name in ~w(body caption col colgroup html td th) do
+    state
+  end
+
+  # Anything else: process using "in table".
+  defp process(:in_row, token, state), do: process(:in_table, token, state)
+
+  # ==========================================================================
+  # §13.2.6.4.15  The "in cell" insertion mode
+  # ==========================================================================
+
+  # An end tag "td"/"th": if that element is not in table scope, parse error,
+  # ignore. Otherwise generate implied end tags, pop through it, clear formatting
+  # to last marker (tier 4 — no-op), switch to "in row".
+  defp process(:in_cell, %Token.EndTag{name: name}, state) when name in ~w(td th) do
+    if has_in_scope?(state, name, @table_scope_markers) do
+      state
+      |> generate_implied_end_tags()
+      |> pop_through(name)
+      |> Map.put(:mode, :in_row)
+    else
+      state
+    end
+  end
+
+  # A start tag for a table-child: close the cell and reprocess.
+  defp process(:in_cell, %Token.StartTag{name: name} = token, state)
+       when name in ~w(caption col colgroup tbody td tfoot th thead tr) do
+    close_cell_and_reprocess(token, state)
+  end
+
+  # An end tag "table"/"tbody"/"tfoot"/"thead"/"tr": if in table scope, close the
+  # cell and reprocess; else parse error, ignore.
+  defp process(:in_cell, %Token.EndTag{name: name} = token, state)
+       when name in ~w(table tbody tfoot thead tr) do
+    if has_in_scope?(state, name, @table_scope_markers) do
+      close_cell_and_reprocess(token, state)
+    else
+      state
+    end
+  end
+
+  # An end tag "body"/"caption"/"col"/"colgroup"/"html": parse error, ignore.
+  defp process(:in_cell, %Token.EndTag{name: name}, state)
+       when name in ~w(body caption col colgroup html) do
+    state
+  end
+
+  # Anything else: process using "in body".
+  defp process(:in_cell, token, state), do: process(:in_body, token, state)
+
+  # ==========================================================================
   # §13.2.6.4.19  The "after body" insertion mode (partial — tier 1)
   # ==========================================================================
 
@@ -583,35 +988,121 @@ defmodule DOM.HTML.TreeBuilder do
     reprocess(:in_body, token, %{state | mode: :in_body})
   end
 
+  # §13.2.6.4.9 "in table": if the current node is a table section, start
+  # collecting into the pending table character tokens list (save the original
+  # mode, switch to "in table text", reprocess). Otherwise foster-parent via the
+  # "anything else" path (process using "in body").
+  defp process_characters(:in_table, token, state) do
+    if Node.node_name(current_node(state)) in ~w(table tbody template tfoot thead tr) do
+      state = %{state | pending_table_chars: [], original_mode: :in_table, mode: :in_table_text}
+      reprocess(:in_table_text, token, state)
+    else
+      anything_else_in_table(token, state)
+    end
+  end
+
+  # §13.2.6.4.10 "in table text": append the (non-null) characters to the pending
+  # list. (Null characters are a parse error and dropped by the tokenizer's
+  # replacement; here we accumulate the run as-is.)
+  defp process_characters(:in_table_text, %Token.Character{data: data}, state) do
+    %{state | pending_table_chars: [data | state.pending_table_chars]}
+  end
+
+  # §13.2.6.4.12 "in column group": whitespace is inserted; the non-whitespace
+  # remainder runs the mode's "anything else" (process/3).
+  defp process_characters(:in_column_group, %Token.Character{data: data} = token, state) do
+    {ws, rest} = split_leading_whitespace(data)
+    state = if ws != "", do: insert_characters(ws, state), else: state
+    if rest == "", do: state, else: process(:in_column_group, %{token | data: rest}, state)
+  end
+
+  # "in table body"/"in row": character tokens are handled by "in table".
+  defp process_characters(mode, token, state) when mode in [:in_table_body, :in_row] do
+    process_characters(:in_table, token, state)
+  end
+
+  # "in caption"/"in cell": character tokens are handled by "in body".
+  defp process_characters(mode, %Token.Character{data: data}, state)
+       when mode in [:in_caption, :in_cell] do
+    insert_characters(data, state)
+  end
+
   defp process_characters(_mode, _token, state), do: state
 
   # ==========================================================================
   # Tree-construction algorithms (spec-named)
   # ==========================================================================
 
-  # "Insert an HTML element for the token": create it, append at the appropriate
-  # place (the current node), push onto the stack. Returns {element, state}.
+  # "Insert an HTML element for the token": create it, insert at the appropriate
+  # place (foster-parenting aware), push onto the stack. Returns {element, state}.
   defp insert_html_element(token, state) do
     element = create_element_for(token, state)
-    append(current_node(state), element)
+    insert_at(appropriate_insertion_location(state), element)
     {element, %{state | open_elements: [element | state.open_elements]}}
   end
 
-  # "Insert a comment": as the last child of the current node.
-  defp insert_comment(token, state), do: append(current_node(state), comment(token, state))
+  # "Insert a comment": at the appropriate insertion location.
+  defp insert_comment(token, state) do
+    insert_at(appropriate_insertion_location(state), comment(token, state))
+  end
 
-  # "Insert a character": into the current node, coalescing with a trailing Text
-  # node so a contiguous run is one Text node.
+  # "Insert a character": at the appropriate insertion location, coalescing with a
+  # trailing Text node so a contiguous run is one Text node. (When foster
+  # parenting the coalescing target is the node immediately before the reference.)
   defp insert_characters(data, state) do
-    parent = current_node(state)
+    {parent, reference} = appropriate_insertion_location(state)
 
-    case parent |> Node.child_nodes() |> List.last() do
+    case preceding_text(parent, reference) do
       %Node{type: :text} = text -> Node.set_text_content(text, Node.value(text) <> data)
-      _ -> append(parent, DOM.create_text_node(state.document, data))
+      _ -> insert_at({parent, reference}, DOM.create_text_node(state.document, data))
     end
 
     state
   end
+
+  # The text node a character run would coalesce with: the child immediately
+  # before `reference` (or the last child when appending).
+  defp preceding_text(parent, nil), do: parent |> Node.child_nodes() |> List.last()
+
+  defp preceding_text(parent, reference) do
+    parent |> Node.child_nodes() |> Enum.take_while(&(&1 != reference)) |> List.last()
+  end
+
+  # "Appropriate place for inserting a node" (§13.2.6.1): normally the current
+  # node (append). With foster parenting enabled and the current node a table
+  # section, redirect the insertion before the last table (or into its parent).
+  # Returns {parent, reference} where reference nil means append.
+  defp appropriate_insertion_location(state) do
+    target = current_node(state)
+
+    if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
+      foster_location(state)
+    else
+      {target, nil}
+    end
+  end
+
+  # Foster-parenting location: before the last open table if it has a parent,
+  # else inside the element above it on the stack (templates deferred to tier 6).
+  defp foster_location(state) do
+    last_table = Enum.find(state.open_elements, &(Node.node_name(&1) == "table"))
+
+    cond do
+      is_nil(last_table) -> {List.last(state.open_elements) || state.document, nil}
+      parent = Node.parent_node(last_table) -> {parent, last_table}
+      :else -> {element_above(state.open_elements, last_table), nil}
+    end
+  end
+
+  # The element immediately above `node` (deeper/more recent) in the stack — i.e.
+  # the entry pushed just before it. The stack is head = most recent.
+  defp element_above([above, node | _], node), do: above
+  defp element_above([_ | rest], node), do: element_above(rest, node)
+
+  # Insert `child` at {parent, reference}: append when reference is nil, else
+  # insert immediately before reference.
+  defp insert_at({parent, nil}, child), do: Node.append_child(parent, child)
+  defp insert_at({parent, reference}, child), do: Node.insert_before(parent, child, reference)
 
   # "Create an element for the token": element + its attributes.
   defp create_element_for(token, state) do
@@ -784,14 +1275,147 @@ defmodule DOM.HTML.TreeBuilder do
   defp special?(name), do: name in @special
 
   # ==========================================================================
+  # §13.2.6.4.9-.15  Table insertion-mode algorithms
+  # ==========================================================================
+
+  # "Clear the stack back to a table context": pop until the current node is a
+  # table, template, or html element.
+  defp clear_to_table_context(state), do: clear_stack_to(state, ~w(table template html))
+
+  # "Clear the stack back to a table body context": pop until tbody/tfoot/thead/
+  # template/html.
+  defp clear_to_table_body_context(state) do
+    clear_stack_to(state, ~w(tbody tfoot thead template html))
+  end
+
+  # "Clear the stack back to a table row context": pop until tr/template/html.
+  defp clear_to_table_row_context(state), do: clear_stack_to(state, ~w(tr template html))
+
+  defp clear_stack_to(state, names) do
+    if Node.node_name(current_node(state)) in names,
+      do: state,
+      else: clear_stack_to(pop(state), names)
+  end
+
+  # "in table" anything-else: enable foster parenting, process using "in body",
+  # then disable foster parenting.
+  defp anything_else_in_table(token, state) do
+    state = reprocess(:in_body, token, %{state | foster_parenting: true})
+    %{state | foster_parenting: false}
+  end
+
+  # An "input" start tag counts as hidden when its type attribute is an ASCII
+  # case-insensitive match for "hidden".
+  defp hidden_input?(token) do
+    Enum.any?(token.attributes, fn {name, value} ->
+      String.downcase(name) == "type" and String.downcase(value) == "hidden"
+    end)
+  end
+
+  # "in caption" </caption>: if a caption is in table scope, generate implied end
+  # tags, pop through the caption, switch to "in table" (else parse error,
+  # ignore). (Clear formatting to last marker is tier 4 — no-op.)
+  defp close_caption(state) do
+    if has_in_scope?(state, "caption", @table_scope_markers) do
+      state
+      |> generate_implied_end_tags()
+      |> pop_through("caption")
+      |> Map.put(:mode, :in_table)
+    else
+      state
+    end
+  end
+
+  defp close_caption_and_reprocess(token, state) do
+    if has_in_scope?(state, "caption", @table_scope_markers),
+      do: reprocess(:in_table, token, close_caption(state)),
+      else: state
+  end
+
+  # "in cell" close-the-cell: generate implied end tags, pop through the td/th,
+  # switch to "in row" (clear formatting to last marker is tier 4 — no-op), then
+  # reprocess the token.
+  defp close_cell_and_reprocess(token, state) do
+    name = if has_in_scope?(state, "td", @table_scope_markers), do: "td", else: "th"
+
+    state =
+      state
+      |> generate_implied_end_tags()
+      |> pop_through(name)
+      |> Map.put(:mode, :in_row)
+
+    reprocess(:in_row, token, state)
+  end
+
+  # "in table body" -> "in table": if a tbody/thead/tfoot is in table scope, clear
+  # to a table body context, pop it, switch to "in table", reprocess.
+  defp table_body_to_table(token, state) do
+    if any_in_scope?(state, ~w(tbody thead tfoot), @table_scope_markers) do
+      state = %{pop(clear_to_table_body_context(state)) | mode: :in_table}
+      reprocess(:in_table, token, state)
+    else
+      state
+    end
+  end
+
+  # "in row" -> "in table body": if a tr is in table scope, clear to a table row
+  # context, pop the tr, switch to "in table body", reprocess.
+  defp row_to_table_body(token, state) do
+    if has_in_scope?(state, "tr", @table_scope_markers) do
+      state = %{pop(clear_to_table_row_context(state)) | mode: :in_table_body}
+      reprocess(:in_table_body, token, state)
+    else
+      state
+    end
+  end
+
+  # "Have any of `names` in the given scope."
+  defp any_in_scope?(state, names, markers) do
+    Enum.any?(names, &has_in_scope?(state, &1, markers))
+  end
+
+  # "Reset the insertion mode appropriately" (§13.2.6.3 — table subset): scan the
+  # stack top-down and switch to the matching mode. (Fragment/select/template
+  # cases are later tiers; the common document case falls through to "in body".)
+  defp reset_insertion_mode(state) do
+    mode = Enum.find_value(state.open_elements, :in_body, &mode_for_node/1)
+    %{state | mode: mode}
+  end
+
+  # The insertion mode a given open element selects when resetting (§13.2.6.3 —
+  # table subset). nil = keep scanning further up the stack.
+  @reset_modes %{
+    "td" => :in_cell,
+    "th" => :in_cell,
+    "tr" => :in_row,
+    "tbody" => :in_table_body,
+    "thead" => :in_table_body,
+    "tfoot" => :in_table_body,
+    "caption" => :in_caption,
+    "colgroup" => :in_column_group,
+    "table" => :in_table,
+    "body" => :in_body,
+    "html" => :before_head
+  }
+
+  defp mode_for_node(node), do: Map.get(@reset_modes, Node.node_name(node))
+
+  # ==========================================================================
   # Whitespace helpers
   # ==========================================================================
 
-  defp strip_leading_whitespace(data), do: String.trim_leading(data, "\t\n\f\r ")
+  # HTML whitespace = tab, LF, FF, CR, space. (String.trim_leading/2 trims a
+  # whole string, not a character set, so a regex expresses the set here.)
+  @leading_whitespace ~r/\A[\t\n\f\r ]+/
+
+  defp strip_leading_whitespace(data), do: String.replace(data, @leading_whitespace, "")
 
   defp split_leading_whitespace(data) do
     rest = strip_leading_whitespace(data)
     ws_len = byte_size(data) - byte_size(rest)
     {binary_part(data, 0, ws_len), rest}
   end
+
+  # Whether `data` is entirely HTML whitespace (tab/LF/FF/CR/space).
+  defp whitespace?(data), do: strip_leading_whitespace(data) == ""
 end

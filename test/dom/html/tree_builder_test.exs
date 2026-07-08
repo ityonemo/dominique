@@ -153,4 +153,254 @@ defmodule DOM.HTML.TreeBuilderTest do
                doc(["|     <b>", "|       \"a\"", "|     \"b\""])
     end
   end
+
+  describe "in body — §13.2.6.4.7 the table start tag" do
+    # spec §13.2.6.4.7: "A start tag whose tag name is table" — close a p in
+    # button scope, insert, switch to "in table".
+    test "a table start tag closes an open p and switches to in table" do
+      assert tree("<p>a<table>") ==
+               doc(["|     <p>", "|       \"a\"", "|     <table>"])
+    end
+  end
+
+  describe "in table — §13.2.6.4.9" do
+    # spec §13.2.6.4.9: "A start tag whose tag name is caption" — clear to a
+    # table context, insert, switch to "in caption".
+    test "a caption start tag is inserted into the table" do
+      assert tree("<table><caption>x") ==
+               doc(["|     <table>", "|       <caption>", "|         \"x\""])
+    end
+
+    # spec §13.2.6.4.9: "A start tag whose tag name is colgroup" — clear to a
+    # table context, insert, switch to "in column group".
+    test "a colgroup start tag is inserted into the table" do
+      assert tree("<table><colgroup>") ==
+               doc(["|     <table>", "|       <colgroup>"])
+    end
+
+    # spec §13.2.6.4.9: "A start tag whose tag name is col" — insert an implied
+    # colgroup, then reprocess col in "in column group".
+    test "a bare col implies a colgroup" do
+      assert tree("<table><col>") ==
+               doc(["|     <table>", "|       <colgroup>", "|         <col>"])
+    end
+
+    # spec §13.2.6.4.9: "A start tag whose tag name is one of tbody/tfoot/thead"
+    # — clear to a table context, insert, switch to "in table body".
+    test "a tbody start tag is inserted into the table" do
+      assert tree("<table><tbody>") ==
+               doc(["|     <table>", "|       <tbody>"])
+    end
+
+    # spec §13.2.6.4.9: "A start tag whose tag name is one of td/th/tr" — insert
+    # an implied tbody, then reprocess in "in table body".
+    test "a bare tr implies a tbody" do
+      assert tree("<table><tr>") ==
+               doc(["|     <table>", "|       <tbody>", "|         <tr>"])
+    end
+
+    # spec §13.2.6.4.9: "A start tag whose tag name is table" — pop through the
+    # open table and reprocess (so a nested table start closes the outer table).
+    test "a nested table start tag closes the outer table" do
+      assert tree("<table><table>") ==
+               doc(["|     <table>", "|     <table>"])
+    end
+
+    # spec §13.2.6.4.9: "An end tag whose tag name is table" — pop through the
+    # table and reset the insertion mode.
+    test "an end tag table closes the table" do
+      assert tree("<table></table>a") ==
+               doc(["|     <table>", "|     \"a\""])
+    end
+
+    # spec §13.2.6.4.9 (anything else): foster parenting — misnested content in a
+    # table is inserted before the table.
+    test "misnested content is foster-parented before the table" do
+      assert tree("<table><b>x</table>") ==
+               doc(["|     <b>", "|       \"x\"", "|     <table>"])
+    end
+  end
+
+  describe "in table text — §13.2.6.4.10" do
+    # spec §13.2.6.4.10: whitespace-only pending characters are inserted (into the
+    # table), not foster-parented.
+    test "whitespace between table and row stays inside the table" do
+      assert tree("<table> <tbody>") ==
+               doc(["|     <table>", "|       \" \"", "|       <tbody>"])
+    end
+
+    # spec §13.2.6.4.10: pending characters containing non-whitespace are a parse
+    # error and foster-parented before the table.
+    test "non-whitespace table text is foster-parented before the table" do
+      assert tree("<table>x<tbody>") ==
+               doc(["|     \"x\"", "|     <table>", "|       <tbody>"])
+    end
+  end
+
+  describe "in caption — §13.2.6.4.11" do
+    # spec §13.2.6.4.11: "An end tag whose tag name is caption" — pop through the
+    # caption and switch back to "in table".
+    test "an end caption returns to in table" do
+      assert tree("<table><caption>x</caption><tbody>") ==
+               doc([
+                 "|     <table>",
+                 "|       <caption>",
+                 "|         \"x\"",
+                 "|       <tbody>"
+               ])
+    end
+
+    # spec §13.2.6.4.11: a table-child start tag closes the caption and is
+    # reprocessed in "in table".
+    test "a tbody start tag inside a caption closes the caption" do
+      assert tree("<table><caption>x<tbody>") ==
+               doc([
+                 "|     <table>",
+                 "|       <caption>",
+                 "|         \"x\"",
+                 "|       <tbody>"
+               ])
+    end
+  end
+
+  describe "in column group — §13.2.6.4.12" do
+    # spec §13.2.6.4.12: "A start tag whose tag name is col" — insert, immediately
+    # pop (void).
+    test "a col inside a colgroup is a void child" do
+      assert tree("<table><colgroup><col>") ==
+               doc(["|     <table>", "|       <colgroup>", "|         <col>"])
+    end
+
+    # spec §13.2.6.4.12: "An end tag whose tag name is colgroup" — pop the
+    # colgroup, switch to "in table".
+    test "an end colgroup returns to in table" do
+      assert tree("<table><colgroup></colgroup><tbody>") ==
+               doc(["|     <table>", "|       <colgroup>", "|       <tbody>"])
+    end
+
+    # spec §13.2.6.4.12 (anything else): a non-col token pops the colgroup and is
+    # reprocessed in "in table".
+    test "a tbody after a colgroup pops the colgroup" do
+      assert tree("<table><colgroup><tbody>") ==
+               doc(["|     <table>", "|       <colgroup>", "|       <tbody>"])
+    end
+  end
+
+  describe "in table body — §13.2.6.4.13" do
+    # spec §13.2.6.4.13: "A start tag whose tag name is tr" — clear to a table
+    # body context, insert, switch to "in row".
+    test "a tr start tag is inserted into the tbody" do
+      assert tree("<table><tbody><tr>") ==
+               doc(["|     <table>", "|       <tbody>", "|         <tr>"])
+    end
+
+    # spec §13.2.6.4.13: "A start tag whose tag name is one of th/td" — insert an
+    # implied tr, then reprocess in "in row".
+    test "a bare td inside a tbody implies a tr" do
+      assert tree("<table><tbody><td>x") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             \"x\""
+               ])
+    end
+
+    # spec §13.2.6.4.13: "An end tag whose tag name is one of tbody/tfoot/thead" —
+    # pop the section, switch to "in table".
+    test "an end tbody returns to in table" do
+      assert tree("<table><tbody></tbody><tfoot>") ==
+               doc(["|     <table>", "|       <tbody>", "|       <tfoot>"])
+    end
+  end
+
+  describe "in row — §13.2.6.4.14" do
+    # spec §13.2.6.4.14: "A start tag whose tag name is one of th/td" — clear to a
+    # table row context, insert, switch to "in cell".
+    test "a td start tag is inserted into the tr" do
+      assert tree("<table><tr><td>x") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             \"x\""
+               ])
+    end
+
+    # spec §13.2.6.4.14: "An end tag whose tag name is tr" — pop the tr, switch to
+    # "in table body".
+    test "an end tr returns to in table body" do
+      assert tree("<table><tr></tr><tr>") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|         <tr>"
+               ])
+    end
+
+    # spec §13.2.6.4.14: a new tr closes the current one (via the table-child
+    # reprocess path).
+    test "a second tr closes the first" do
+      assert tree("<table><tr><td>a<tr><td>b") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             \"a\"",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             \"b\""
+               ])
+    end
+  end
+
+  describe "in cell — §13.2.6.4.15" do
+    # spec §13.2.6.4.15: "An end tag whose tag name is one of td/th" — generate
+    # implied end tags, pop through the cell, switch to "in row".
+    test "an end td returns to in row" do
+      assert tree("<table><tr><td>a</td><td>b") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             \"a\"",
+                 "|           <td>",
+                 "|             \"b\""
+               ])
+    end
+
+    # spec §13.2.6.4.15: a new cell start tag closes the open cell (close-the-cell
+    # then reprocess).
+    test "a second td closes the first" do
+      assert tree("<table><tr><td>a<td>b") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             \"a\"",
+                 "|           <td>",
+                 "|             \"b\""
+               ])
+    end
+
+    # spec §13.2.6.4.15 (anything else): ordinary content inside a cell is
+    # processed as "in body".
+    test "ordinary content inside a cell is inserted normally" do
+      assert tree("<table><tr><td><p>x") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             <p>",
+                 "|               \"x\""
+               ])
+    end
+  end
 end
