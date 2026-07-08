@@ -657,6 +657,13 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert fragment("</frameset><frame>", "frameset") == "| <frame>"
     end
 
+    # spec §13.2.6.4.22: an "after after body" comment attaches to the Document —
+    # but in a fragment parse the synthetic html root is the serialization anchor,
+    # so the comment must land there (not on the discarded fragment Document).
+    test "an after-body comment in an html fragment attaches to the root" do
+      assert fragment("</html><!--abc-->", "html") == "| <head>\n| <body>\n| <!-- abc -->"
+    end
+
     # An html-context fragment DOES imply head + body at EOF (unlike head context).
     test "an empty html-context fragment implies head and body" do
       assert fragment("", "html") == "| <head>\n| <body>"

@@ -1665,9 +1665,12 @@ defmodule DOM.HTML.TreeBuilder do
   # §13.2.6.4.22  The "after after body" insertion mode (partial — tier 1)
   # ==========================================================================
 
-  # A comment token: insert as the last child of the Document.
+  # A comment token: insert as the last child of the Document — or, in a fragment
+  # parse, of the synthetic html root (the fragment's serialization anchor), since
+  # the fragment's real Document is not what is returned.
   defp process(:after_after_body, %Token.Comment{} = token, state) do
-    append(state.document, comment(token, state))
+    target = if state.context, do: List.last(state.open_elements), else: state.document
+    append(target, comment(token, state))
     state
   end
 
