@@ -1749,6 +1749,10 @@ defmodule DOM.HTML.TreeBuilder do
   # "Insert a character": at the appropriate insertion location, coalescing with a
   # trailing Text node so a contiguous run is one Text node. (When foster
   # parenting the coalescing target is the node immediately before the reference.)
+  # An empty run inserts nothing (a raw-text element with no interior — e.g. an
+  # empty <script> — must not gain a Text child).
+  defp insert_characters("", state), do: state
+
   defp insert_characters(data, state) do
     {parent, reference} = appropriate_insertion_location(state)
 
