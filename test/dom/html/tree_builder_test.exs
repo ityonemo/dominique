@@ -69,6 +69,39 @@ defmodule DOM.HTML.TreeBuilderTest do
     end
   end
 
+  describe "in body — §13.2.6.4.7 leading-newline skip (pre/listing/textarea)" do
+    # spec §13.2.6.4.7: after a <pre>/<listing>/<textarea> start tag, if the very
+    # next token is a U+000A LINE FEED, drop it.
+    test "a leading newline in <listing> is dropped" do
+      assert tree("<listing>\nX</listing>") == doc(["|     <listing>", "|       \"X\""])
+    end
+
+    test "a leading newline in <pre> is dropped" do
+      assert tree("<pre>\nX</pre>") == doc(["|     <pre>", "|       \"X\""])
+    end
+
+    test "a leading newline in <textarea> is dropped" do
+      assert tree("<textarea>\nX</textarea>") == doc(["|     <textarea>", "|       \"X\""])
+    end
+
+    # Only ONE leading newline is dropped; a second is kept.
+    test "only the first leading newline is dropped" do
+      assert tree("<pre>\n\nX</pre>") == doc(["|     <pre>", "|       \"\nX\""])
+    end
+
+    # A non-newline first character is untouched (no spurious drop).
+    test "a non-newline first character is preserved" do
+      assert tree("<pre>X\n</pre>") == doc(["|     <pre>", "|       \"X\n\""])
+    end
+
+    # The newline must be IMMEDIATELY after the start tag: a newline inside a
+    # nested element is not dropped.
+    test "a newline after a nested start tag is not dropped" do
+      assert tree("<pre><span>\nX</span></pre>") ==
+               doc(["|     <pre>", "|       <span>", "|         \"\nX\""])
+    end
+  end
+
   describe "in body — §13.2.6.4.7 li/dd/dt auto-closing" do
     # spec §13.2.6.4.7: "A start tag whose tag name is li" — loop up the stack;
     # an open li is closed before the new one is inserted (siblings).
