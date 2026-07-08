@@ -390,6 +390,12 @@ defmodule DOM.HTML.TreeBuilder do
     %{state | frameset_ok: false, mode: :in_body}
   end
 
+  # A start tag "frameset": insert an HTML element, switch to "in frameset".
+  defp process(:after_head, %Token.StartTag{name: "frameset"} = token, state) do
+    {_el, state} = insert_html_element(token, state)
+    %{state | mode: :in_frameset}
+  end
+
   # An end tag other than body/html/br: parse error, ignore.
   defp process(:after_head, %Token.EndTag{name: name}, state)
        when name not in ~w(body html br),
@@ -422,6 +428,29 @@ defmodule DOM.HTML.TreeBuilder do
   # fragment case, there is no body to merge into); ignore the token. (Attribute
   # merging onto the existing body is deferred.)
   defp process(:in_body, %Token.StartTag{name: "body"}, state), do: state
+
+  # A start tag "frameset": parse error. If the stack has only one node, or the
+  # second element is not a body, or frameset-ok is "not ok", ignore. Otherwise
+  # remove the body, pop back to the html root, insert the frameset, and switch
+  # to "in frameset".
+  defp process(:in_body, %Token.StartTag{name: "frameset"} = token, state) do
+    if frameset_replaceable?(state) do
+      body = second_element(state)
+      if parent = Node.parent_node(body), do: Node.remove_child(parent, body)
+      state = pop_to_html_root(state)
+      {_el, state} = insert_html_element(token, state)
+      %{state | mode: :in_frameset}
+    else
+      state
+    end
+  end
+
+  # A start tag "xmp"/"iframe"/"textarea": these use the raw-text/RCDATA parsing
+  # algorithm (via "in head") but additionally set frameset-ok to "not ok".
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(xmp iframe textarea) do
+    process(:in_head, token, %{state | frameset_ok: false})
+  end
 
   # A start tag whose tag name is one of the "in head" tags (base/link/meta/…/
   # title/style/script/…): process using the "in head" rules.
@@ -465,10 +494,12 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # A start tag for a void element: insert an HTML element, immediately pop it,
-  # acknowledge the self-closing flag.
+  # acknowledge the self-closing flag. area/br/embed/img/keygen/wbr and a
+  # non-hidden input additionally set frameset-ok to "not ok".
   defp process(:in_body, %Token.StartTag{name: name} = token, state) when name in @void do
     {_el, state} = insert_html_element(token, state)
-    pop(state)
+    state = pop(state)
+    if void_clears_frameset?(name, token), do: %{state | frameset_ok: false}, else: state
   end
 
   # A start tag for "address, article, aside, …, div, dl, …, p, section, …"
@@ -492,20 +523,20 @@ defmodule DOM.HTML.TreeBuilder do
     state
   end
 
-  # A start tag "li": frameset-ok not ok (deferred); walk the stack popping
+  # A start tag "li": set frameset-ok "not ok"; walk the stack popping
   # generate-implied-end-tags-style from any open "li", closing it; then close a
   # p element in button scope and insert.
   defp process(:in_body, %Token.StartTag{name: "li"} = token, state) do
-    state = close_list_item(state, ["li"])
+    state = close_list_item(%{state | frameset_ok: false}, ["li"])
     state = close_p_if_button_scope(state)
     {_el, state} = insert_html_element(token, state)
     state
   end
 
-  # A start tag "dd"/"dt": as "li" but keyed on dd/dt.
+  # A start tag "dd"/"dt": as "li" but keyed on dd/dt (also sets frameset-ok).
   defp process(:in_body, %Token.StartTag{name: name} = token, state)
        when name in ~w(dd dt) do
-    state = close_list_item(state, ~w(dd dt))
+    state = close_list_item(%{state | frameset_ok: false}, ~w(dd dt))
     state = close_p_if_button_scope(state)
     {_el, state} = insert_html_element(token, state)
     state
@@ -523,7 +554,7 @@ defmodule DOM.HTML.TreeBuilder do
       end
 
     {_el, state} = insert_html_element(token, state)
-    state
+    %{state | frameset_ok: false}
   end
 
   # A start tag "table": (not quirks-mode — quirks detection deferred) if a p is
@@ -607,6 +638,14 @@ defmodule DOM.HTML.TreeBuilder do
     insert_foreign_start(:svg, adjust_svg_attributes(token), state)
   end
 
+  # A start tag "applet"/"marquee"/"object": reconstruct, insert, insert a marker
+  # on the active formatting list, set frameset-ok "not ok".
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in ~w(applet marquee object) do
+    {_el, state} = insert_html_element(token, reconstruct_formatting(state))
+    %{insert_marker(state) | frameset_ok: false}
+  end
+
   # Any other start tag: reconstruct active formatting elements, then insert an
   # HTML element for the token.
   defp process(:in_body, %Token.StartTag{} = token, state) do
@@ -629,6 +668,17 @@ defmodule DOM.HTML.TreeBuilder do
                        hgroup listing main menu nav ol pre section summary ul) do
     if has_in_scope?(state, name, @scope_markers) do
       state |> generate_implied_end_tags() |> pop_through(name)
+    else
+      state
+    end
+  end
+
+  # An end tag "applet"/"marquee"/"object": if in scope, generate implied end
+  # tags, pop through it, and clear the active formatting list to the last marker.
+  defp process(:in_body, %Token.EndTag{name: name}, state)
+       when name in ~w(applet marquee object) do
+    if has_in_scope?(state, name, @scope_markers) do
+      state |> generate_implied_end_tags() |> pop_through(name) |> clear_formatting_to_marker()
     else
       state
     end
@@ -1204,6 +1254,104 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_select_in_table, token, state), do: process(:in_select, token, state)
 
   # ==========================================================================
+  # §13.2.6.4.18  The "in frameset" insertion mode
+  # ==========================================================================
+
+  defp process(:in_frameset, %Token.Comment{} = token, state) do
+    insert_comment(token, state)
+    state
+  end
+
+  defp process(:in_frameset, %Token.Doctype{}, state), do: state
+
+  defp process(:in_frameset, %Token.StartTag{name: "html"} = token, state) do
+    process(:in_body, token, state)
+  end
+
+  # A start tag "frameset": insert an HTML element.
+  defp process(:in_frameset, %Token.StartTag{name: "frameset"} = token, state) do
+    {_el, state} = insert_html_element(token, state)
+    state
+  end
+
+  # An end tag "frameset": if the current node is the html root, ignore (fragment
+  # case); otherwise pop it, and (non-fragment) if the new current node is not a
+  # frameset, switch to "after frameset".
+  defp process(:in_frameset, %Token.EndTag{name: "frameset"}, state) do
+    if Node.node_name(current_node(state)) == "html" do
+      state
+    else
+      state = pop(state)
+
+      if is_nil(state.context) and Node.node_name(current_node(state)) != "frameset",
+        do: %{state | mode: :after_frameset},
+        else: state
+    end
+  end
+
+  # A start tag "frame": insert an HTML element, immediately pop (void).
+  defp process(:in_frameset, %Token.StartTag{name: "frame"} = token, state) do
+    {_el, state} = insert_html_element(token, state)
+    pop(state)
+  end
+
+  # A start tag "noframes": process using "in head".
+  defp process(:in_frameset, %Token.StartTag{name: "noframes"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  # Anything else: parse error, ignore.
+  defp process(:in_frameset, _token, state), do: state
+
+  # ==========================================================================
+  # §13.2.6.4.19  The "after frameset" insertion mode
+  # ==========================================================================
+
+  defp process(:after_frameset, %Token.Comment{} = token, state) do
+    insert_comment(token, state)
+    state
+  end
+
+  defp process(:after_frameset, %Token.Doctype{}, state), do: state
+
+  defp process(:after_frameset, %Token.StartTag{name: "html"} = token, state) do
+    process(:in_body, token, state)
+  end
+
+  # An end tag "html": switch to "after after frameset".
+  defp process(:after_frameset, %Token.EndTag{name: "html"}, state) do
+    %{state | mode: :after_after_frameset}
+  end
+
+  defp process(:after_frameset, %Token.StartTag{name: "noframes"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:after_frameset, _token, state), do: state
+
+  # ==========================================================================
+  # §13.2.6.4.21  The "after after frameset" insertion mode
+  # ==========================================================================
+
+  # A comment token: insert as the last child of the Document.
+  defp process(:after_after_frameset, %Token.Comment{} = token, state) do
+    append(state.document, comment(token, state))
+    state
+  end
+
+  defp process(:after_after_frameset, %Token.Doctype{}, state), do: state
+
+  defp process(:after_after_frameset, %Token.StartTag{name: "html"} = token, state) do
+    process(:in_body, token, state)
+  end
+
+  defp process(:after_after_frameset, %Token.StartTag{name: "noframes"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:after_after_frameset, _token, state), do: state
+
+  # ==========================================================================
   # §13.2.6.4.19  The "after body" insertion mode (partial — tier 1)
   # ==========================================================================
 
@@ -1271,7 +1419,9 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # "in body": reconstruct the active formatting elements, then insert the run.
+  # Any non-whitespace character sets frameset-ok to "not ok".
   defp process_characters(:in_body, %Token.Character{data: data}, state) do
+    state = if whitespace?(data), do: state, else: %{state | frameset_ok: false}
     insert_characters(data, reconstruct_formatting(state))
   end
 
@@ -1329,6 +1479,14 @@ defmodule DOM.HTML.TreeBuilder do
   defp process_characters(mode, %Token.Character{data: data}, state)
        when mode in [:in_select, :in_select_in_table] do
     insert_characters(String.replace(data, "\0", ""), state)
+  end
+
+  # "in frameset"/"after frameset"/"after after frameset": only whitespace
+  # characters are inserted; any non-whitespace is a parse error and dropped.
+  defp process_characters(mode, %Token.Character{data: data}, state)
+       when mode in [:in_frameset, :after_frameset, :after_after_frameset] do
+    ws = for <<c::utf8 <- data>>, c in [?\t, ?\n, ?\f, ?\r, ?\s], into: "", do: <<c::utf8>>
+    if ws != "", do: insert_characters(ws, state), else: state
   end
 
   defp process_characters(_mode, _token, state), do: state
@@ -1463,6 +1621,34 @@ defmodule DOM.HTML.TreeBuilder do
   # Pop the current node if it is named `name`.
   defp pop_if_current(state, name) do
     if Node.node_name(current_node(state)) == name, do: pop(state), else: state
+  end
+
+  # The void elements whose start tag sets frameset-ok to "not ok" (§13.2.6.4.7).
+  # input does so only when its type is not "hidden".
+  defp void_clears_frameset?(name, _token) when name in ~w(area br embed img keygen wbr), do: true
+  defp void_clears_frameset?("input", token), do: not hidden_input?(token)
+  defp void_clears_frameset?(_name, _token), do: false
+
+  # Whether an in-body <frameset> may replace the body: the stack has more than
+  # one node, the second element (from the bottom) is a body, and frameset-ok is
+  # still set.
+  defp frameset_replaceable?(state) do
+    body = second_element(state)
+    not is_nil(body) and Node.node_name(body) == "body" and state.frameset_ok
+  end
+
+  # The second element from the bottom of the stack (the stack head is the top),
+  # i.e. the second-to-last list entry, or nil if the stack has one node.
+  defp second_element(state) do
+    case Enum.reverse(state.open_elements) do
+      [_html, second | _] -> second
+      _ -> nil
+    end
+  end
+
+  # Pop the stack down to (but not including) the bottom html root element.
+  defp pop_to_html_root(%__MODULE__{open_elements: [_ | _] = stack} = state) do
+    %{state | open_elements: [List.last(stack)]}
   end
 
   # "Have a select in select scope" (§13.2.4.2): walk the stack while nodes are

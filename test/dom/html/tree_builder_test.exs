@@ -596,4 +596,80 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert fragment("<body><span>", "body") == "| <span>"
     end
   end
+
+  describe "in select — §13.2.6.4.16" do
+    # spec §13.2.6.4.16: option/optgroup are inserted; consecutive options do not
+    # nest (a second option pops the first).
+    test "options do not nest inside a select" do
+      assert tree("<select><option>a<option>b") ==
+               doc([
+                 "|     <select>",
+                 "|       <option>",
+                 "|         \"a\"",
+                 "|       <option>",
+                 "|         \"b\""
+               ])
+    end
+
+    # spec §13.2.6.4.16 (<hr> start tag): an hr pops a current option/optgroup and
+    # is inserted as a void child of the select.
+    test "an hr in a select is a void child" do
+      assert tree("<select><option>a<hr>") ==
+               doc([
+                 "|     <select>",
+                 "|       <option>",
+                 "|         \"a\"",
+                 "|       <hr>"
+               ])
+    end
+
+    # spec §13.2.6.4.16 (</select> end tag): closes the select and returns to the
+    # enclosing mode.
+    test "an end select closes the select" do
+      assert tree("<select><option>a</select>b") ==
+               doc([
+                 "|     <select>",
+                 "|       <option>",
+                 "|         \"a\"",
+                 "|     \"b\""
+               ])
+    end
+
+    # spec §13.2.6.4.16 (<select> start tag): a nested select start tag closes the
+    # open select (acts like </select>).
+    test "a nested select start tag closes the open select" do
+      assert tree("<select><select>a") ==
+               doc(["|     <select>", "|     \"a\""])
+    end
+  end
+
+  describe "in frameset — §13.2.6.4.18" do
+    # spec §13.2.6.4.18: a frameset holds frame (void) children.
+    test "a frameset holds frame children" do
+      assert tree("<frameset><frame></frameset>") ==
+               "| <html>\n|   <head>\n|   <frameset>\n|     <frame>"
+    end
+
+    # spec §13.2.6.4.7 (<frameset> in body): a frameset immediately after an empty
+    # body replaces it (frameset-ok still set).
+    test "a frameset replaces an empty body" do
+      assert tree("<frameset><frame>") ==
+               "| <html>\n|   <head>\n|   <frameset>\n|     <frame>"
+    end
+
+    # spec §13.2.6.4.7: once non-whitespace content sets frameset-ok to not ok, a
+    # later frameset is ignored.
+    test "a frameset after body content is ignored" do
+      assert tree("<body>x<frameset><frame>") ==
+               "| <html>\n|   <head>\n|   <body>\n|     \"x\""
+    end
+
+    # spec §13.2.6.4.19 (after frameset </html>): the trailing html end tag
+    # switches to "after after frameset"; a following comment lands on the
+    # document.
+    test "a comment after </html> in a frameset document lands on the document" do
+      assert tree("<frameset></frameset></html><!--x-->") ==
+               "| <html>\n|   <head>\n|   <frameset>\n| <!-- x -->"
+    end
+  end
 end
