@@ -187,6 +187,15 @@ defmodule DOM.HTML.TreeBuilder do
   # End-of-file: the pre-body insertion modes imply the missing elements (so an
   # empty or head-only document still yields <html><head><body>). Each mode's EOF
   # rule follows its "anything else" path; we chain the implied elements.
+  #
+  # In the FRAGMENT case there is no implied html/head/body scaffolding — the
+  # synthetic root is fixed and EOF only needs the in-template unwinding. So a
+  # fragment parse skips the pre-body chain entirely (except in_template below).
+  defp eof(%__MODULE__{context: context, mode: mode} = state)
+       when not is_nil(context) and
+              mode in [:initial, :before_html, :before_head, :in_head, :after_head],
+       do: state
+
   defp eof(%__MODULE__{mode: :initial} = state), do: eof(%{state | mode: :before_html})
 
   defp eof(%__MODULE__{mode: :before_html} = state) do
@@ -820,7 +829,10 @@ defmodule DOM.HTML.TreeBuilder do
     node = state.form
     state = %{state | form: nil}
 
-    if node && has_in_scope?(state, "form", @scope_markers) do
+    # The spec checks THIS element (the form pointer) in scope — not "a form by
+    # name". A fostered form may have been removed from the stack (table foster
+    # parenting), leaving the pointer dangling; then the token is ignored.
+    if node && on_stack?(state, node) && element_in_scope?(state, node) do
       state
       |> generate_implied_end_tags()
       |> then(&%{&1 | open_elements: drop_including(&1.open_elements, node)})

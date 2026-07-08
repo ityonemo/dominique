@@ -167,6 +167,18 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert tree("<p>a<table>") ==
                doc(["|     <p>", "|       \"a\"", "|     <table>"])
     end
+
+    # spec §13.2.6.4.7 (</form> end tag): the form pointer is checked against the
+    # stack. A form fostered out of the stack by a table leaves a dangling
+    # pointer, and </form> must ignore it (not crash). Regression guard.
+    test "a form fostered by a table does not crash on </form>" do
+      assert tree("<form><table></form>x</table>") ==
+               doc([
+                 "|     <form>",
+                 "|       \"x\"",
+                 "|       <table>"
+               ])
+    end
   end
 
   describe "in table — §13.2.6.4.9" do
@@ -562,6 +574,12 @@ defmodule DOM.HTML.TreeBuilderTest do
     test "a div-context fragment has no html/body wrapper" do
       assert fragment("<span>x</span>", "div") ==
                "| <span>\n|   \"x\""
+    end
+
+    # A head-context fragment does not imply html/head/body at EOF (the synthetic
+    # root is fixed) — regression guard for a HierarchyRequestError crash.
+    test "a head-context fragment does not imply a body at EOF" do
+      assert fragment("<title>x</title>", "head") == ~s(| <title>\n|   "x")
     end
 
     # spec §13.4 (tokenizer state for RCDATA context): a textarea context treats
