@@ -15,6 +15,12 @@ defmodule DOM.HTML.TreeBuilderTest do
   # Parse `html` and render its document tree as the .dat #document outline.
   defp tree(html), do: html |> DOM.HTML.parse() |> DatOutline.serialize()
 
+  # Parse `html` as the contents of a `context` element (fragment parsing) and
+  # render the fragment outline (the synthetic root's children).
+  defp fragment(html, context) do
+    html |> DOM.HTML.parse_fragment(context) |> DatOutline.serialize_fragment()
+  end
+
   # A well-formed <html><head></head><body>…</body></html> outline whose body
   # contains `body_lines` (already "| "-prefixed and indented to body depth).
   defp doc(body_lines) do
@@ -547,6 +553,47 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|     <p>",
                  "|       \"x\""
                ])
+    end
+  end
+
+  describe "fragment parsing — §13.4" do
+    # spec §13.4: fragment children are returned without the html/head/body
+    # wrapper — a div context yields the content directly.
+    test "a div-context fragment has no html/body wrapper" do
+      assert fragment("<span>x</span>", "div") ==
+               "| <span>\n|   \"x\""
+    end
+
+    # spec §13.4 (tokenizer state for RCDATA context): a textarea context treats
+    # its input as raw text — markup is not parsed.
+    test "a textarea context treats markup as raw text" do
+      assert fragment("a<b>c", "textarea") == "| \"a<b>c\""
+    end
+
+    # spec §13.2.6.3 (reset the insertion mode, fragment case): a tr context
+    # starts in the "in row" mode, so a bare <td> is inserted directly.
+    test "a tr context places a bare td directly" do
+      assert fragment("<td>x", "tr") ==
+               "| <td>\n|   \"x\""
+    end
+
+    # spec §13.2.6.3 (reset, fragment case): a table context starts "in table",
+    # so a bare <tr> implies a tbody.
+    test "a table context implies a tbody around a bare tr" do
+      assert fragment("<tr><td>x", "table") ==
+               "| <tbody>\n|   <tr>\n|     <td>\n|       \"x\""
+    end
+
+    # spec §13.4 (foreign context): an SVG context parses its children in the SVG
+    # namespace.
+    test "an svg context parses children in the SVG namespace" do
+      assert fragment("<circle>", "svg path") == "| <svg circle>"
+    end
+
+    # spec §13.2.6.4.7 (<body> start tag): a body start tag in a body-context
+    # fragment is ignored (no element created).
+    test "a body start tag is ignored in a body-context fragment" do
+      assert fragment("<body><span>", "body") == "| <span>"
     end
   end
 end

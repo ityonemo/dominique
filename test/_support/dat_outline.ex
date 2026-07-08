@@ -21,6 +21,17 @@ defmodule DatOutline do
     |> Enum.join("\n")
   end
 
+  @doc """
+  Renders a fragment (the synthetic `html` root's children) as the `#document`
+  outline — the form the html5lib fragment cases expect (no `<html>` wrapper).
+  """
+  def serialize_fragment(%Node{type: :element} = root) do
+    root
+    |> Node.child_nodes()
+    |> Enum.flat_map(&lines(&1, 0))
+    |> Enum.join("\n")
+  end
+
   # Returns the outline lines for a node and its subtree at `depth`. A foreign
   # (SVG/MathML) element gets a `svg `/`math ` namespace prefix before its name.
   defp lines(%Node{type: :element} = element, depth) do

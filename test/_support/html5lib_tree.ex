@@ -10,8 +10,8 @@ defmodule HTML5libTree do
   fragment parsing), optional `#script-off`/`#script-on`, and `#document` (the
   expected tree as a `| `-indented outline). Tests are separated by a blank line.
 
-  `cases/1` returns the applicable cases as maps; `applicable?/2` gates the
-  categories not yet supported by the current tier (fragment, foreign content).
+  `cases/1` returns the cases as maps `%{input, document, fragment_context,
+  script, index}`; a non-nil `fragment_context` marks a fragment case.
   """
 
   @dir "test/_html5lib/tree-construction"
@@ -25,14 +25,6 @@ defmodule HTML5libTree do
     |> Enum.map(&parse_test/1)
     |> Enum.with_index()
     |> Enum.map(fn {test, index} -> Map.put(test, :index, index) end)
-  end
-
-  @doc """
-  Whether a case is runnable at the given tier. Whole-document parsing skips only
-  fragment cases (`#document-fragment`); foreign content (svg/math) is supported.
-  """
-  def applicable?(test, :whole_document) do
-    is_nil(test.fragment_context)
   end
 
   # A test block ends at "\n\n#data" (the blank line before the next test). We

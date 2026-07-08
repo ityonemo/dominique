@@ -23,6 +23,7 @@ defmodule DOM.HTML.TreeBuilder do
     :original_mode,
     :head,
     :form,
+    :context,
     open_elements: [],
     active_formatting: [],
     frameset_ok: true,
@@ -30,6 +31,10 @@ defmodule DOM.HTML.TreeBuilder do
     pending_table_chars: [],
     namespaces: %{}
   ]
+
+  # `context` is the fragment-parsing context element (a `%DOM.Node{}` handle) or
+  # nil for a whole-document parse. It drives the fragment-case branches of
+  # "reset the insertion mode appropriately" and "adjusted current node".
 
   # `namespaces` maps a foreign element handle to its namespace atom (:svg |
   # :mathml). HTML elements are not stored — the default is :html. Populated when
@@ -76,6 +81,42 @@ defmodule DOM.HTML.TreeBuilder do
     state = %__MODULE__{document: DOM.new(), mode: :initial}
     tokens |> Enum.reduce(state, &step/2) |> eof() |> Map.fetch!(:document)
   end
+
+  @doc """
+  The HTML fragment parsing algorithm (§13.4): parse `tokens` as the contents of
+  a `context` element (`%{name, namespace}`). Returns the synthetic `html` root
+  element whose children are the fragment nodes (serialize its children to get
+  the fragment outline). Does NOT wire into `inner_html` — that is a later step.
+  """
+  @spec build_fragment([struct()], %{name: String.t(), namespace: atom()}) :: Node.t()
+  def build_fragment(tokens, context) do
+    document = DOM.new()
+    root = DOM.create_element(document, "html")
+    Node.append_child(document, root)
+
+    context_el = DOM._create_element_ns(document, context.name, context.namespace, [])
+
+    state =
+      %__MODULE__{
+        document: document,
+        open_elements: [root],
+        context: context_el,
+        namespaces: fragment_namespaces(context, context_el),
+        form: nil
+      }
+      |> reset_insertion_mode()
+
+    tokens
+    |> Enum.reduce(state, &step/2)
+    |> eof()
+
+    root
+  end
+
+  # Record the context element's namespace so the dispatcher treats it correctly
+  # while its children are being parsed (foreign context → foreign content).
+  defp fragment_namespaces(%{namespace: :html}, _context_el), do: %{}
+  defp fragment_namespaces(%{namespace: ns}, context_el), do: %{context_el => ns}
 
   # The "tree construction dispatcher" (§13.2.6): route each token to HTML-content
   # processing or foreign-content processing based on the adjusted current node's
@@ -296,11 +337,12 @@ defmodule DOM.HTML.TreeBuilder do
 
   # title (RCDATA) / noframes/style/noscript (rawtext) / script: follow the
   # generic rawtext/RCDATA element parsing algorithm — insert the element and
-  # switch to "text" mode, saving the current mode.
+  # switch to "text" mode, saving the CURRENT insertion mode (which may be
+  # "in body" when this clause is reached via the in-body delegation).
   defp process(:in_head, %Token.StartTag{name: name} = token, state)
        when name in @rawtext do
     {_el, state} = insert_html_element(token, state)
-    %{state | original_mode: :in_head, mode: :text}
+    %{state | original_mode: state.mode, mode: :text}
   end
 
   # An end tag whose tag name is "head": pop the head element, switch to "after
@@ -371,6 +413,11 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A start tag whose tag name is "html": (tier 1) parse error, ignore.
   defp process(:in_body, %Token.StartTag{name: "html"}, state), do: state
+
+  # A start tag "body": (tier 1) parse error — the body already exists (or, in the
+  # fragment case, there is no body to merge into); ignore the token. (Attribute
+  # merging onto the existing body is deferred.)
+  defp process(:in_body, %Token.StartTag{name: "body"}, state), do: state
 
   # A start tag whose tag name is one of the "in head" tags (base/link/meta/…/
   # title/style/script/…): process using the "in head" rules.
@@ -991,10 +1038,15 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # A start tag for a table-child: close the cell and reprocess.
+  # A start tag for a table-child: if a td/th is in table scope, close the cell
+  # and reprocess; otherwise (the fragment case — no cell to close) ignore.
   defp process(:in_cell, %Token.StartTag{name: name} = token, state)
        when name in ~w(caption col colgroup tbody td tfoot th thead tr) do
-    close_cell_and_reprocess(token, state)
+    if any_in_scope?(state, ~w(td th), @table_scope_markers) do
+      close_cell_and_reprocess(token, state)
+    else
+      state
+    end
   end
 
   # An end tag "table"/"tbody"/"tfoot"/"thead"/"tr": if in table scope, close the
@@ -1515,13 +1567,24 @@ defmodule DOM.HTML.TreeBuilder do
     Enum.any?(names, &has_in_scope?(state, &1, markers))
   end
 
-  # "Reset the insertion mode appropriately" (§13.2.6.3 — table subset): scan the
-  # stack top-down and switch to the matching mode. (Fragment/select/template
-  # cases are later tiers; the common document case falls through to "in body".)
+  # "Reset the insertion mode appropriately" (§13.2.6.3): scan the stack top-down
+  # and switch to the matching mode. In the fragment case, the last (root) node is
+  # treated as the context element. Falls through to "in body".
   defp reset_insertion_mode(state) do
-    mode = Enum.find_value(state.open_elements, :in_body, &mode_for_node/1)
-    %{state | mode: mode}
+    %{state | mode: reset_mode_for(state, state.open_elements)}
   end
+
+  # The last node on the stack, in the fragment case, is the context element.
+  defp reset_mode_for(state, [last]) do
+    node = if state.context, do: state.context, else: last
+    mode_for_node(node) || :in_body
+  end
+
+  defp reset_mode_for(state, [node | rest]) do
+    mode_for_node(node) || reset_mode_for(state, rest)
+  end
+
+  defp reset_mode_for(_state, []), do: :in_body
 
   # The insertion mode a given open element selects when resetting (§13.2.6.3 —
   # table subset). nil = keep scanning further up the stack.
@@ -1987,9 +2050,12 @@ defmodule DOM.HTML.TreeBuilder do
 
   defp svg_tag_name(name), do: Map.get(@svg_tags, name, name)
 
-  # The adjusted current node. (In the fragment case this is the context element
-  # when the stack has one entry — fragment parsing is tier 6, so it is just the
-  # current node here.)
+  # The adjusted current node: in the fragment case, when the stack holds only the
+  # synthetic root, it is the context element; otherwise the current node.
+  defp adjusted_current_node(%__MODULE__{context: context, open_elements: [_root]})
+       when not is_nil(context),
+       do: context
+
   defp adjusted_current_node(state), do: current_node(state)
 
   # The namespace of an element handle: :svg / :mathml if recorded, else :html.

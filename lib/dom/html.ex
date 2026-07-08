@@ -39,6 +39,38 @@ after
     |> DOM.HTML.TreeBuilder.build()
   end
 
+  # RCDATA (title/textarea) and RAWTEXT (style/script/…) fragment contexts: the
+  # tokenizer starts in a text state, so the whole input is one character run.
+  @fragment_rcdata ~w(title textarea)
+  @fragment_rawtext ~w(style xmp iframe noembed noframes noscript script plaintext)
+
+  @doc """
+  The HTML fragment parsing algorithm (§13.4). Parses `html` as the contents of a
+  `context` element and returns the synthetic `html` root whose children are the
+  fragment nodes. `context` is the html5lib context string (e.g. `"div"`,
+  `"svg path"`). Not yet wired into `inner_html`.
+  """
+  def parse_fragment(html, context) do
+    parsed = parse_context(context)
+    tokens = fragment_tokens(html, parsed.name)
+    DOM.HTML.TreeBuilder.build_fragment(tokens, parsed)
+  end
+
+  # A raw-text/RCDATA context makes the whole input one text token; otherwise the
+  # normal tokenization + reference decoding applies.
+  defp fragment_tokens(html, name) when name in @fragment_rcdata or name in @fragment_rawtext do
+    [%DOM.HTML.Token.Character{data: html}]
+  end
+
+  defp fragment_tokens(html, _name) do
+    html |> tokenize() |> Enum.map(&DOM.HTML.Token.decode/1)
+  end
+
+  # The context string is "name" (HTML) or "svg name" / "math name" (foreign).
+  defp parse_context("svg " <> name), do: %{name: name, namespace: :svg}
+  defp parse_context("math " <> name), do: %{name: name, namespace: :mathml}
+  defp parse_context(name), do: %{name: name, namespace: :html}
+
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input link meta source track wbr)
 
