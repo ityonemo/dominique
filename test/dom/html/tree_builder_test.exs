@@ -1016,6 +1016,12 @@ defmodule DOM.HTML.TreeBuilderTest do
     test "a duplicate body start tag merges new attributes" do
       assert tree("<body t1=1><body t2=2>") =~ ~s(|   <body>\n|     t1="1"\n|     t2="2")
     end
+
+    # spec §13.2.6.4.7: a duplicate <body> start tag also sets frameset-ok to "not
+    # ok", so a later <frameset> is ignored (it would otherwise replace the body).
+    test "a duplicate body start tag makes frameset-ok not ok" do
+      assert tree("<div><body><frameset>") == doc(["|     <div>"])
+    end
   end
 
   # The <title> element is RCDATA in the HTML namespace but an ORDINARY element in

@@ -610,11 +610,17 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # A start tag "body": parse error. If a body exists (second element on the
-  # stack) and there is no template, merge any attribute not already present.
+  # stack) and there is no template, merge any attribute not already present, and
+  # set frameset-ok to "not ok" (§13.2.6.4.7) so a later <frameset> is ignored.
   defp process(:in_body, %Token.StartTag{name: "body"} = token, state) do
     body = second_element(state)
-    if body && not template_on_stack?(state), do: merge_attributes(body, token.attributes)
-    state
+
+    if body && not template_on_stack?(state) do
+      merge_attributes(body, token.attributes)
+      %{state | frameset_ok: false}
+    else
+      state
+    end
   end
 
   # A start tag "frameset": parse error. If the stack has only one node, or the
