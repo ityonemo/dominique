@@ -191,15 +191,24 @@ malformed_tag <- '</>' / '<>' / '</'
 # --- tags -------------------------------------------------------------------
 
 start_tag <- '<' tag_name attributes ws self_closing? '>'
-end_tag <- '</' tag_name ws '>'
+end_tag <- '</' tag_name attributes ws '>'
 
+# A trailing `/` right before `>` is the self-closing flag; any OTHER `/` inside
+# the tag is just an attribute separator (WHATWG before-attribute-name: a `/` not
+# forming `/>` is reconsumed as whitespace).
 self_closing <- '/'
 
 tag_name <- [a-zA-Z] [^ \t\r\n\f/>]*
 
 # --- attributes -------------------------------------------------------------
 
-attributes <- (ws attribute)*
+# Attributes are separated by a run of whitespace and/or a stray `/` that is not
+# the self-closing marker (a `/` is self-closing only when it immediately
+# precedes `>`). The separator is one-or-more whitespace/stray-slash tokens.
+attributes <- (attr_sep attribute)*
+attr_sep <- (ws1 / stray_slash)+
+ws1 <- [ \t\r\n\f]+
+stray_slash <- !('/' ws '>') '/'
 
 attribute <- attr_name (ws '=' ws attr_value)?
 

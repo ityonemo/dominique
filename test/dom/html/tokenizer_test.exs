@@ -21,6 +21,18 @@ defmodule DOM.HTML.TokenizerTest do
     test "a self-closing start tag" do
       assert [%Token.StartTag{name: "br", self_closing: true}] = tokenize("<br/>")
     end
+
+    # WHATWG before-attribute-name: a `/` that does not form `/>` is an attribute
+    # separator, not the self-closing marker.
+    test "a stray / inside a tag separates attributes" do
+      assert [%Token.StartTag{name: "p", attributes: [{"x", ""}, {"y", ""}], self_closing: false}] =
+               tokenize("<p/x/y>")
+    end
+
+    # An end tag may carry attributes (which are dropped).
+    test "an end tag with attributes drops them" do
+      assert [%Token.EndTag{name: "b"}] = tokenize("</b test>")
+    end
   end
 
   describe "attributes" do
