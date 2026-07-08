@@ -672,4 +672,73 @@ defmodule DOM.HTML.TreeBuilderTest do
                "| <html>\n|   <head>\n|   <frameset>\n| <!-- x -->"
     end
   end
+
+  describe "in template — §13.2.6.4.16" do
+    # spec §13.2.6.4.16: template contents go into the template's content
+    # DocumentFragment, rendered as a `content` pseudo-node.
+    test "template contents live in a content fragment" do
+      assert tree("<body><template>Hello</template>") ==
+               doc([
+                 "|     <template>",
+                 "|       content",
+                 "|         \"Hello\""
+               ])
+    end
+
+    # spec §13.2.6.4.16 (table-content start tags): a <tr> inside a template
+    # switches the template mode to "in table body" and inserts the row directly.
+    # (A body is implied at EOF since the document had no body.)
+    test "a tr in a template is placed in its content" do
+      assert tree("<template><tr><td>x") ==
+               Enum.join(
+                 [
+                   "| <html>",
+                   "|   <head>",
+                   "|     <template>",
+                   "|       content",
+                   "|         <tr>",
+                   "|           <td>",
+                   "|             \"x\"",
+                   "|   <body>"
+                 ],
+                 "\n"
+               )
+    end
+
+    # spec §13.2.6.4.16 (any other start tag): a plain element in a template goes
+    # into its content via "in body".
+    test "a plain element in a template goes into its content" do
+      assert tree("<body><template><div>x</div></template>") ==
+               doc([
+                 "|     <template>",
+                 "|       content",
+                 "|         <div>",
+                 "|           \"x\""
+               ])
+    end
+
+    # spec §13.2.6.4.16 (</template> end tag): closing a template returns to the
+    # enclosing insertion mode, so following content is a sibling of the template.
+    test "content after a closed template is a sibling" do
+      assert tree("<body><template>a</template>b") ==
+               doc([
+                 "|     <template>",
+                 "|       content",
+                 "|         \"a\"",
+                 "|     \"b\""
+               ])
+    end
+
+    # spec §13.2.6.4.16: nested templates each get their own content fragment.
+    test "nested templates nest their content fragments" do
+      assert tree("<body><template><template>x</template></template>") ==
+               doc([
+                 "|     <template>",
+                 "|       content",
+                 "|         <template>",
+                 "|           content",
+                 "|             \"x\""
+               ])
+    end
+  end
 end

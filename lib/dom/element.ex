@@ -38,6 +38,11 @@ defmodule DOM.Element do
 
   def namespace(%Node{}), do: nil
 
+  @doc "A template element's content DocumentFragment, or `nil` for others."
+  @spec content(Node.t()) :: Node.t() | nil
+  def content(%Node{type: :element} = element), do: DOM._element_content(element)
+  def content(%Node{}), do: nil
+
   @doc "The value of an attribute, or `nil` when absent."
   @spec get_attribute(Node.t(), String.t()) :: String.t() | nil
   def get_attribute(%Node{type: :element} = element, name) do

@@ -111,6 +111,19 @@ defmodule DOM do
     })
   end
 
+  @doc false
+  # Internal: create a template element together with its "template contents"
+  # DocumentFragment, link them, and return {template_handle, content_handle}.
+  def _create_template(document, attributes) do
+    GenServer.call(document.server, {:create_template, attributes})
+  end
+
+  @doc false
+  # Internal: the DocumentFragment holding a template element's contents.
+  def _element_content(%Node{server: server, id: id}) do
+    GenServer.call(server, {:element_content, id})
+  end
+
   def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
 
   def create_comment(document, value), do: create(document, %NodeData.Comment{value: value})
@@ -156,6 +169,29 @@ defmodule DOM do
     node_id = make_ref()
     :ets.insert(state.nodes, {node_id, node_data})
     {:reply, node_handle(state.nodes, node_id), state}
+  end
+
+  # Create a template element linked to a fresh content DocumentFragment.
+  defp create_template_impl(attributes, _from, state) do
+    content_id = make_ref()
+    template_id = make_ref()
+    :ets.insert(state.nodes, {content_id, %NodeData.DocumentFragment{}})
+
+    :ets.insert(
+      state.nodes,
+      {template_id,
+       %NodeData.Element{local_name: "template", attributes: attributes, content: content_id}}
+    )
+
+    reply = {node_handle(state.nodes, template_id), node_handle(state.nodes, content_id)}
+    {:reply, reply, state}
+  end
+
+  # The content DocumentFragment handle of a template element (nil if unset).
+  defp element_content_impl(id, _from, state) do
+    [{^id, %NodeData.Element{content: content_id}}] = :ets.lookup(state.nodes, id)
+    reply = if content_id, do: node_handle(state.nodes, content_id), else: nil
+    {:reply, reply, state}
   end
 
   # Generic ETS primitives. A caller module (DOM.Node/DOM.Element) builds a match
@@ -985,6 +1021,16 @@ defmodule DOM do
   @impl true
   def handle_call({:create, node_data}, from, state) do
     create_impl(node_data, from, state)
+  end
+
+  @impl true
+  def handle_call({:create_template, attributes}, from, state) do
+    create_template_impl(attributes, from, state)
+  end
+
+  @impl true
+  def handle_call({:element_content, id}, from, state) do
+    element_content_impl(id, from, state)
   end
 
   @impl true

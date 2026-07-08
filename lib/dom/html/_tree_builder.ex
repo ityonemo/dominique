@@ -26,11 +26,18 @@ defmodule DOM.HTML.TreeBuilder do
     :context,
     open_elements: [],
     active_formatting: [],
+    template_modes: [],
+    contents: %{},
     frameset_ok: true,
     foster_parenting: false,
     pending_table_chars: [],
     namespaces: %{}
   ]
+
+  # `template_modes` is the stack of template insertion modes (§13.2.4.4); its
+  # head is the "current template insertion mode". `contents` maps a template
+  # element handle to its content DocumentFragment handle (so insertions into a
+  # template are redirected into its content).
 
   # `context` is the fragment-parsing context element (a `%DOM.Node{}` handle) or
   # nil for a whole-document parse. It drives the fragment-case branches of
@@ -203,7 +210,31 @@ defmodule DOM.HTML.TreeBuilder do
   # merely stops).
   defp eof(%__MODULE__{mode: :in_table_text} = state), do: eof(flush_table_text(state))
 
+  # "in template" at EOF: if a template is still open, pop through it, clear the
+  # formatting list and template mode, reset the insertion mode, and continue
+  # (an unclosed template implies its closure). Otherwise stop.
+  defp eof(%__MODULE__{mode: :in_template} = state), do: eof_in_template(state)
+
+  # Any mode with a non-empty stack of template insertion modes at EOF uses the
+  # "in template" EOF rule (§13.2.6.4.7 — the in-body EOF delegates when a
+  # template is open).
+  defp eof(%__MODULE__{template_modes: [_ | _]} = state), do: eof_in_template(state)
+
   defp eof(state), do: state
+
+  defp eof_in_template(state) do
+    if Enum.any?(state.open_elements, &(Node.node_name(&1) == "template")) do
+      state
+      |> generate_all_implied_end_tags()
+      |> pop_through("template")
+      |> clear_formatting_to_marker()
+      |> pop_template_mode()
+      |> reset_insertion_mode()
+      |> eof()
+    else
+      state
+    end
+  end
 
   # Reprocess a token in `mode` after a mode switch — dispatches by token type so
   # character tokens go through process_characters (the spec's "reprocess the
@@ -349,6 +380,37 @@ defmodule DOM.HTML.TreeBuilder do
     %{state | original_mode: state.mode, mode: :text}
   end
 
+  # A start tag "template": insert a template element (its children go into the
+  # content fragment), insert a marker, frameset-ok not ok, push "in template"
+  # onto the template insertion modes, switch to "in template".
+  defp process(:in_head, %Token.StartTag{name: "template"} = token, state) do
+    {_el, state} = insert_template_element(token, state)
+
+    %{
+      insert_marker(state)
+      | frameset_ok: false,
+        template_modes: [:in_template | state.template_modes],
+        mode: :in_template
+    }
+  end
+
+  # An end tag "template": if there is no template on the stack, ignore. Otherwise
+  # generate all implied end tags, pop through the template, clear the active
+  # formatting list to the last marker, pop the template insertion modes, and
+  # reset the insertion mode.
+  defp process(:in_head, %Token.EndTag{name: "template"}, state) do
+    if Enum.any?(state.open_elements, &(Node.node_name(&1) == "template")) do
+      state
+      |> generate_all_implied_end_tags()
+      |> pop_through("template")
+      |> clear_formatting_to_marker()
+      |> pop_template_mode()
+      |> reset_insertion_mode()
+    else
+      state
+    end
+  end
+
   # An end tag whose tag name is "head": pop the head element, switch to "after
   # head".
   defp process(:in_head, %Token.EndTag{name: "head"}, state) do
@@ -416,6 +478,15 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_body, %Token.Comment{} = token, state) do
     insert_comment(token, state)
     state
+  end
+
+  # A start/end tag "template": process using the "in head" rules.
+  defp process(:in_body, %Token.StartTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:in_body, %Token.EndTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
   end
 
   # A DOCTYPE token: parse error, ignore.
@@ -1254,6 +1325,52 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_select_in_table, token, state), do: process(:in_select, token, state)
 
   # ==========================================================================
+  # The "in template" insertion mode (§13.2.6.4.16)
+  # ==========================================================================
+
+  # A comment or DOCTYPE token: process using "in body".
+  defp process(:in_template, %Token.Comment{} = token, state), do: process(:in_body, token, state)
+  defp process(:in_template, %Token.Doctype{} = token, state), do: process(:in_body, token, state)
+
+  # base/basefont/bgsound/link/meta/noframes/script/style/template/title start
+  # tags + template end tag: process using "in head".
+  defp process(:in_template, %Token.StartTag{name: name} = token, state)
+       when name in ~w(base basefont bgsound link meta noframes script style template title) do
+    process(:in_head, token, state)
+  end
+
+  defp process(:in_template, %Token.EndTag{name: "template"} = token, state) do
+    process(:in_head, token, state)
+  end
+
+  # Table-content start tags switch the current template insertion mode + the
+  # insertion mode and reprocess (§13.2.6.4.16).
+  defp process(:in_template, %Token.StartTag{name: name} = token, state)
+       when name in ~w(caption colgroup tbody tfoot thead) do
+    switch_template_mode(token, state, :in_table)
+  end
+
+  defp process(:in_template, %Token.StartTag{name: "col"} = token, state) do
+    switch_template_mode(token, state, :in_column_group)
+  end
+
+  defp process(:in_template, %Token.StartTag{name: "tr"} = token, state) do
+    switch_template_mode(token, state, :in_table_body)
+  end
+
+  defp process(:in_template, %Token.StartTag{name: name} = token, state) when name in ~w(td th) do
+    switch_template_mode(token, state, :in_row)
+  end
+
+  # Any other start tag: switch to "in body" and reprocess.
+  defp process(:in_template, %Token.StartTag{} = token, state) do
+    switch_template_mode(token, state, :in_body)
+  end
+
+  # Any other end tag: parse error, ignore.
+  defp process(:in_template, %Token.EndTag{}, state), do: state
+
+  # ==========================================================================
   # §13.2.6.4.18  The "in frameset" insertion mode
   # ==========================================================================
 
@@ -1481,6 +1598,11 @@ defmodule DOM.HTML.TreeBuilder do
     insert_characters(String.replace(data, "\0", ""), state)
   end
 
+  # "in template": character tokens are processed using "in body".
+  defp process_characters(:in_template, %Token.Character{data: data}, state) do
+    insert_characters(data, reconstruct_formatting(state))
+  end
+
   # "in frameset"/"after frameset"/"after after frameset": only whitespace
   # characters are inserted; any non-whitespace is a parse error and dropped.
   defp process_characters(mode, %Token.Character{data: data}, state)
@@ -1501,6 +1623,39 @@ defmodule DOM.HTML.TreeBuilder do
     element = create_element_for(token, state)
     insert_at(appropriate_insertion_location(state), element)
     {element, %{state | open_elements: [element | state.open_elements]}}
+  end
+
+  # Insert a template element: create the element + its content DocumentFragment,
+  # insert the element at the appropriate place, record the content mapping, and
+  # push the element onto the stack. Returns {element, state}.
+  defp insert_template_element(token, state) do
+    {element, content} = DOM._create_template(state.document, token.attributes)
+    insert_at(appropriate_insertion_location(state), element)
+
+    {element,
+     %{
+       state
+       | open_elements: [element | state.open_elements],
+         contents: Map.put(state.contents, element, content)
+     }}
+  end
+
+  # Pop the current template insertion mode off the stack.
+  defp pop_template_mode(%__MODULE__{template_modes: [_ | rest]} = state),
+    do: %{state | template_modes: rest}
+
+  defp pop_template_mode(%__MODULE__{template_modes: []} = state), do: state
+
+  # "in template": replace the current template insertion mode with `mode`, switch
+  # the insertion mode to it, and reprocess the token there.
+  defp switch_template_mode(token, state, mode) do
+    modes =
+      case state.template_modes do
+        [_ | rest] -> [mode | rest]
+        [] -> [mode]
+      end
+
+    reprocess(mode, token, %{state | template_modes: modes, mode: mode})
   end
 
   # "Insert a comment": at the appropriate insertion location.
@@ -1533,14 +1688,27 @@ defmodule DOM.HTML.TreeBuilder do
   # "Appropriate place for inserting a node" (§13.2.6.1): normally the current
   # node (append). With foster parenting enabled and the current node a table
   # section, redirect the insertion before the last table (or into its parent).
-  # Returns {parent, reference} where reference nil means append.
+  # If the resulting parent is a template element, redirect into its content
+  # DocumentFragment. Returns {parent, reference} where reference nil means append.
   defp appropriate_insertion_location(state) do
     target = current_node(state)
 
-    if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
-      foster_location(state)
-    else
-      {target, nil}
+    location =
+      if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
+        foster_location(state)
+      else
+        {target, nil}
+      end
+
+    template_content_location(state, location)
+  end
+
+  # If the location's parent is a template element, the real location is inside
+  # its content fragment, after the last child.
+  defp template_content_location(state, {parent, _reference} = location) do
+    case Map.get(state.contents, parent) do
+      nil -> location
+      content -> {content, nil}
     end
   end
 
@@ -1695,6 +1863,17 @@ defmodule DOM.HTML.TreeBuilder do
     else
       state
     end
+  end
+
+  # "Generate implied end tags thoroughly" (§13.2.6.3): also pops caption/colgroup
+  # and the table-section/row/cell elements — used when closing a template.
+  @thorough_implied_end_tags @implied_end_tags ++
+                               ~w(caption colgroup tbody td tfoot th thead tr)
+
+  defp generate_all_implied_end_tags(state) do
+    if Node.node_name(current_node(state)) in @thorough_implied_end_tags,
+      do: generate_all_implied_end_tags(pop(state)),
+      else: state
   end
 
   # "Close a p element" (§13.2.6.4.7): generate implied end tags except p, then
@@ -1937,14 +2116,20 @@ defmodule DOM.HTML.TreeBuilder do
   # The last node on the stack, in the fragment case, is the context element.
   defp reset_mode_for(state, [last]) do
     node = if state.context, do: state.context, else: last
-    select_mode(node, []) || mode_for_node(node) || :in_body
+    template_mode(state, node) || select_mode(node, []) || mode_for_node(node) || :in_body
   end
 
   defp reset_mode_for(state, [node | rest]) do
-    select_mode(node, rest) || mode_for_node(node) || reset_mode_for(state, rest)
+    template_mode(state, node) || select_mode(node, rest) || mode_for_node(node) ||
+      reset_mode_for(state, rest)
   end
 
   defp reset_mode_for(_state, []), do: :in_body
+
+  # A template element resets to the current template insertion mode.
+  defp template_mode(state, node) do
+    if Node.node_name(node) == "template", do: List.first(state.template_modes)
+  end
 
   # A "select" open element resets to "in select in table" if a table is below it
   # on the stack (before a template), else "in select" (§13.2.6.3).
@@ -1971,6 +2156,7 @@ defmodule DOM.HTML.TreeBuilder do
     "caption" => :in_caption,
     "colgroup" => :in_column_group,
     "table" => :in_table,
+    "head" => :in_head,
     "body" => :in_body,
     "html" => :before_head
   }

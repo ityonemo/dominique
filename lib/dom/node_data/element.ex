@@ -2,7 +2,7 @@ defmodule DOM.NodeData.Element do
   @moduledoc "ETS record for an element node."
 
   @enforce_keys [:local_name]
-  defstruct [:local_name, namespace: :html, parent: nil, children: [], attributes: []]
+  defstruct [:local_name, :content, namespace: :html, parent: nil, children: [], attributes: []]
 
   use DOM.NodeData
   use DOM.HTML
@@ -12,6 +12,7 @@ defmodule DOM.NodeData.Element do
   @type t :: %__MODULE__{
           local_name: String.t(),
           namespace: namespace(),
+          content: reference() | nil,
           parent: reference() | nil,
           children: [reference()],
           attributes: [{String.t(), String.t()}]

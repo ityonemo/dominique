@@ -34,10 +34,12 @@ defmodule DatOutline do
 
   # Returns the outline lines for a node and its subtree at `depth`. A foreign
   # (SVG/MathML) element gets a `svg `/`math ` namespace prefix before its name.
+  # A template element renders a `content` pseudo-node holding its content
+  # fragment's children.
   defp lines(%Node{type: :element} = element, depth) do
     tag = ["| ", indent(depth), "<", namespace_prefix(element), Node.node_name(element), ">"]
     attrs = attribute_lines(element, depth + 1)
-    children = element |> Node.child_nodes() |> Enum.flat_map(&lines(&1, depth + 1))
+    children = child_lines(element, depth + 1)
     [line(tag) | attrs ++ children]
   end
 
@@ -61,6 +63,17 @@ defmodule DatOutline do
     |> Enum.map(fn name ->
       line(["| ", indent(depth), name, "=", ?", Element.get_attribute(element, name), ?"])
     end)
+  end
+
+  # A template element's children live in its content DocumentFragment, rendered
+  # under a `content` pseudo-node; all other elements render their child_nodes.
+  defp child_lines(element, depth) do
+    if content = Element.content(element) do
+      inner = content |> Node.child_nodes() |> Enum.flat_map(&lines(&1, depth + 1))
+      [line(["| ", indent(depth), "content"]) | inner]
+    else
+      element |> Node.child_nodes() |> Enum.flat_map(&lines(&1, depth))
+    end
   end
 
   defp namespace_prefix(element) do
