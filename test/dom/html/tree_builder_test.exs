@@ -179,6 +179,14 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert tree("<head></head><title>X</title>") ==
                "| <html>\n|   <head>\n|     <title>\n|       \"X\"\n|   <body>"
     end
+
+    # spec §13.2.6.3 (reset): the html element resets to "after head" once the
+    # head pointer is set, so a <template> after </head> does not imply a second
+    # <head> when the template closes.
+    test "a template after </head> does not imply a second head" do
+      assert tree("<head></head><template>Foo</template>") ==
+               "| <html>\n|   <head>\n|     <template>\n|       content\n|         \"Foo\"\n|   <body>"
+    end
   end
 
   describe "in head noscript — §13.2.6.4.5 (scripting disabled)" do

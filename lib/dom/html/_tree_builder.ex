@@ -2291,12 +2291,14 @@ defmodule DOM.HTML.TreeBuilder do
   # The last node on the stack, in the fragment case, is the context element.
   defp reset_mode_for(state, [last]) do
     node = if state.context, do: state.context, else: last
-    template_mode(state, node) || select_mode(node, []) || mode_for_node(node) || :in_body
+
+    template_mode(state, node) || select_mode(node, []) || html_mode(state, node) ||
+      mode_for_node(node) || :in_body
   end
 
   defp reset_mode_for(state, [node | rest]) do
-    template_mode(state, node) || select_mode(node, rest) || mode_for_node(node) ||
-      reset_mode_for(state, rest)
+    template_mode(state, node) || select_mode(node, rest) || html_mode(state, node) ||
+      mode_for_node(node) || reset_mode_for(state, rest)
   end
 
   defp reset_mode_for(_state, []), do: :in_body
@@ -2304,6 +2306,12 @@ defmodule DOM.HTML.TreeBuilder do
   # A template element resets to the current template insertion mode.
   defp template_mode(state, node) do
     if Node.node_name(node) == "template", do: List.first(state.template_modes)
+  end
+
+  # The html element resets to "after head" once the head pointer is set (the head
+  # has been seen), else "before head" (§13.2.6.3).
+  defp html_mode(state, node) do
+    if Node.node_name(node) == "html" and state.head, do: :after_head
   end
 
   # A "select" open element resets to "in select in table" if a table is below it
