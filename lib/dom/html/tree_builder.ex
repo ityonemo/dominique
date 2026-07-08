@@ -1463,10 +1463,11 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # A start tag "input"/"keygen"/"textarea": if a select is in select scope, pop
-  # through it, reset, and reprocess the token (else ignore).
-  defp process(:in_select, %Token.StartTag{name: name} = token, state)
-       when name in ~w(input keygen textarea) do
+  # A start tag "input": if a select is in select scope, pop through it, reset, and
+  # reprocess (so the input lands OUTSIDE the select); else ignore. (keygen and
+  # textarea are NOT special-cased under customizable select — they fall through
+  # to the "in body" path and nest inside the select.)
+  defp process(:in_select, %Token.StartTag{name: "input"} = token, state) do
     if select_in_scope?(state) do
       state = state |> pop_through("select") |> reset_insertion_mode()
       reprocess(state.mode, token, state)

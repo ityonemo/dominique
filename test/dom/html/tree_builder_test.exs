@@ -765,6 +765,13 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
 
+    # Customizable select: <keygen> (a void element) nests inside the select via
+    # the "in body" fallback rather than breaking out of it.
+    test "a keygen nests inside the select as a void child" do
+      assert tree("<select><keygen>") ==
+               doc(["|     <select>", "|       <keygen>"])
+    end
+
     # spec §13.2.6.4.16 (<hr> start tag): an hr pops a current option/optgroup and
     # is inserted as a void child of the select.
     test "an hr in a select is a void child" do
