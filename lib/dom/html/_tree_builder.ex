@@ -527,14 +527,17 @@ defmodule DOM.HTML.TreeBuilder do
   # A start tag "html": parse error. If there is no template on the stack, merge
   # any attribute not already present onto the top (html) element.
   defp process(:in_body, %Token.StartTag{name: "html"} = token, state) do
-    merge_attributes(List.last(state.open_elements), token.attributes)
+    if not template_on_stack?(state),
+      do: merge_attributes(List.last(state.open_elements), token.attributes)
+
     state
   end
 
   # A start tag "body": parse error. If a body exists (second element on the
-  # stack), merge any attribute not already present onto it.
+  # stack) and there is no template, merge any attribute not already present.
   defp process(:in_body, %Token.StartTag{name: "body"} = token, state) do
-    if body = second_element(state), do: merge_attributes(body, token.attributes)
+    body = second_element(state)
+    if body && not template_on_stack?(state), do: merge_attributes(body, token.attributes)
     state
   end
 
@@ -1922,6 +1925,11 @@ defmodule DOM.HTML.TreeBuilder do
       [_html, second | _] -> second
       _ -> nil
     end
+  end
+
+  # Whether a template element is anywhere on the stack of open elements.
+  defp template_on_stack?(state) do
+    Enum.any?(state.open_elements, &(Node.node_name(&1) == "template"))
   end
 
   # Pop the stack down to (but not including) the bottom html root element.
