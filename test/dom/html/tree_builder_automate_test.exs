@@ -15,8 +15,11 @@ defmodule DOM.HTML.TreeBuilderAutomateTest do
             tests6.dat tests7.dat tests_innerHTML_1.dat tests16.dat tests19.dat
             template.dat)
 
+  # We model a non-browser parser (scripting DISABLED), so `#script-on` cases —
+  # which require scripting-enabled behavior (e.g. <noscript> as rawtext) — are
+  # skipped. `#script-off` and unmarked (`:both`) cases run.
   for file <- @files do
-    for c <- HTML5libTree.cases(file) do
+    for c <- HTML5libTree.cases(file), c.script != :on do
       @input c.input
       @expected c.document
       @description "#{file}[#{c.index}]: #{c.input |> String.split("\n") |> hd() |> String.slice(0, 60)}"
