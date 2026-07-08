@@ -24,10 +24,16 @@ defmodule DOM.HTML.TreeBuilder do
     :head,
     :form,
     open_elements: [],
+    active_formatting: [],
     frameset_ok: true,
     foster_parenting: false,
     pending_table_chars: []
   ]
+
+  # The list of active formatting elements (§13.2.4.3). Entries are either the
+  # atom :marker or a {element_handle, token} tuple (the token is retained to
+  # recreate the element during reconstruction and to compare attributes for the
+  # Noah's Ark clause). Most-recent entry is the list head.
 
   # Elements parsed with the "generic raw text" (rawtext) or "generic RCDATA"
   # element parsing algorithms — both switch to the "text" insertion mode.
@@ -52,6 +58,11 @@ defmodule DOM.HTML.TreeBuilder do
   # "have an element in table scope" (§13.2.4.2): terminates only on html, table,
   # template — used by the table insertion modes.
   @table_scope_markers ~w(html table template)
+
+  # The formatting elements handled by the active-formatting-list / adoption
+  # agency machinery (§13.2.6.4.7). "a" and "nobr" have their own start-tag rules;
+  # this group shares one.
+  @formatting ~w(b big code em font i s small strike strong tt u)
 
   @doc "Builds a document tree from a decoded token list (§13.2.6.4)."
   @spec build([struct()]) :: Node.t()
@@ -89,6 +100,11 @@ defmodule DOM.HTML.TreeBuilder do
     {_body, state} = insert_html_element(%Token.StartTag{name: "body"}, state)
     %{state | mode: :in_body}
   end
+
+  # "in table text" at EOF: flush the pending characters, then finish in the
+  # original mode (the table modes' EOF rule is "process using in body", which
+  # merely stops).
+  defp eof(%__MODULE__{mode: :in_table_text} = state), do: eof(flush_table_text(state))
 
   defp eof(state), do: state
 
@@ -421,10 +437,49 @@ defmodule DOM.HTML.TreeBuilder do
     state
   end
 
-  # Any other start tag: reconstruct active formatting elements (tier 4 — no-op
-  # here), then insert an HTML element for the token.
+  # A start tag "a": if an "a" is in the active formatting list after the last
+  # marker, run the adoption agency for it and remove it from both lists (parse
+  # error). Then reconstruct, insert, and push onto the formatting list.
+  defp process(:in_body, %Token.StartTag{name: "a"} = token, state) do
+    state =
+      if existing = formatting_after_marker(state, "a") do
+        state
+        |> adoption_agency(%Token.EndTag{name: "a"})
+        |> remove_from_formatting(existing)
+        |> remove_from_stack(existing)
+      else
+        state
+      end
+
+    insert_formatting(token, state)
+  end
+
+  # A start tag for a formatting element (b/big/code/…/u): reconstruct, insert,
+  # and push onto the active formatting list.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in @formatting do
+    insert_formatting(token, state)
+  end
+
+  # A start tag "nobr": reconstruct; if a nobr is in scope, run the adoption
+  # agency for it then reconstruct again (parse error). Insert and push.
+  defp process(:in_body, %Token.StartTag{name: "nobr"} = token, state) do
+    state = reconstruct_formatting(state)
+
+    state =
+      if has_in_scope?(state, "nobr", @scope_markers) do
+        state |> adoption_agency(%Token.EndTag{name: "nobr"}) |> reconstruct_formatting()
+      else
+        state
+      end
+
+    insert_and_push(state, token)
+  end
+
+  # Any other start tag: reconstruct active formatting elements, then insert an
+  # HTML element for the token.
   defp process(:in_body, %Token.StartTag{} = token, state) do
-    {_el, state} = insert_html_element(token, state)
+    {_el, state} = insert_html_element(token, reconstruct_formatting(state))
     state
   end
 
@@ -508,10 +563,16 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
+  # An end tag for a formatting element (a/b/big/…/nobr/…/u): run the adoption
+  # agency algorithm for the token.
+  defp process(:in_body, %Token.EndTag{name: name} = token, state)
+       when name == "a" or name == "nobr" or name in @formatting do
+    adoption_agency(state, token)
+  end
+
   # Any other end tag: walk the stack from the current node; on a node whose name
   # matches, generate implied end tags (except that name) and pop through it; on
-  # a "special" element, stop (parse error, ignore). (Non-special elements not
-  # matching are the adoption-agency's job — tier 4; here we walk past them.)
+  # a "special" element, stop (parse error, ignore).
   defp process(:in_body, %Token.EndTag{name: name}, state) do
     any_other_end_tag(state, name, state.open_elements)
   end
@@ -537,9 +598,10 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_table, %Token.Doctype{}, state), do: state
 
   # A start tag "caption": clear the stack back to a table context, insert a
-  # marker (tier 4 — no-op), insert an HTML element, switch to "in caption".
+  # marker on the active formatting list, insert an HTML element, switch to "in
+  # caption".
   defp process(:in_table, %Token.StartTag{name: "caption"} = token, state) do
-    state = clear_to_table_context(state)
+    state = state |> clear_to_table_context() |> insert_marker()
     {_el, state} = insert_html_element(token, state)
     %{state | mode: :in_caption}
   end
@@ -649,24 +711,7 @@ defmodule DOM.HTML.TreeBuilder do
   # Anything else (a non-character token ends the run): flush the pending table
   # character tokens, switch back to the original insertion mode, and reprocess.
   defp process(:in_table_text, token, state) do
-    data = state.pending_table_chars |> Enum.reverse() |> IO.iodata_to_binary()
-    state = %{state | pending_table_chars: [], mode: state.original_mode}
-
-    state =
-      cond do
-        data == "" ->
-          state
-
-        # All whitespace: insert normally (in the table section).
-        whitespace?(data) ->
-          insert_characters(data, state)
-
-        # Non-whitespace present: parse error — foster-parent the whole run via
-        # the "in table" anything-else path.
-        :else ->
-          anything_else_in_table(%Token.Character{data: data}, state)
-      end
-
+    state = flush_table_text(state)
     reprocess(state.mode, token, state)
   end
 
@@ -813,12 +858,12 @@ defmodule DOM.HTML.TreeBuilder do
   # ==========================================================================
 
   # A start tag "th"/"td": clear the stack back to a table row context, insert,
-  # switch to "in cell", insert a marker (tier 4 — no-op).
+  # switch to "in cell", insert a marker on the active formatting list.
   defp process(:in_row, %Token.StartTag{name: name} = token, state)
        when name in ~w(th td) do
     state = clear_to_table_row_context(state)
     {_el, state} = insert_html_element(token, state)
-    %{state | mode: :in_cell}
+    %{insert_marker(state) | mode: :in_cell}
   end
 
   # An end tag "tr": if no tr is in table scope, parse error, ignore. Otherwise
@@ -869,13 +914,14 @@ defmodule DOM.HTML.TreeBuilder do
   # ==========================================================================
 
   # An end tag "td"/"th": if that element is not in table scope, parse error,
-  # ignore. Otherwise generate implied end tags, pop through it, clear formatting
-  # to last marker (tier 4 — no-op), switch to "in row".
+  # ignore. Otherwise generate implied end tags, pop through it, clear the active
+  # formatting list up to the last marker, switch to "in row".
   defp process(:in_cell, %Token.EndTag{name: name}, state) when name in ~w(td th) do
     if has_in_scope?(state, name, @table_scope_markers) do
       state
       |> generate_implied_end_tags()
       |> pop_through(name)
+      |> clear_formatting_to_marker()
       |> Map.put(:mode, :in_row)
     else
       state
@@ -975,10 +1021,13 @@ defmodule DOM.HTML.TreeBuilder do
     if rest == "", do: state, else: process(mode, %{token | data: rest}, state)
   end
 
-  # "in body"/"text": insert the character run as-is. (in_body reconstructs active
-  # formatting first — tier 4.)
-  defp process_characters(mode, %Token.Character{data: data}, state)
-       when mode in [:in_body, :text] do
+  # "in body": reconstruct the active formatting elements, then insert the run.
+  defp process_characters(:in_body, %Token.Character{data: data}, state) do
+    insert_characters(data, reconstruct_formatting(state))
+  end
+
+  # "text": insert the character run as-is (no formatting reconstruction).
+  defp process_characters(:text, %Token.Character{data: data}, state) do
     insert_characters(data, state)
   end
 
@@ -1094,9 +1143,10 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # The element immediately above `node` (deeper/more recent) in the stack — i.e.
-  # the entry pushed just before it. The stack is head = most recent.
-  defp element_above([above, node | _], node), do: above
+  # The element immediately above `node` in the stack of open elements — i.e.
+  # nearer the root (the entry pushed just *before* node). The stack list has
+  # head = most recent (deepest), so "above" is the list-successor of node.
+  defp element_above([node, above | _], node), do: above
   defp element_above([_ | rest], node), do: element_above(rest, node)
 
   # Insert `child` at {parent, reference}: append when reference is nil, else
@@ -1297,6 +1347,20 @@ defmodule DOM.HTML.TreeBuilder do
       else: clear_stack_to(pop(state), names)
   end
 
+  # Flush the pending table character tokens and switch back to the original
+  # insertion mode. Whitespace-only runs are inserted in the table section;
+  # a run with non-whitespace is a parse error and foster-parented.
+  defp flush_table_text(state) do
+    data = state.pending_table_chars |> Enum.reverse() |> IO.iodata_to_binary()
+    state = %{state | pending_table_chars: [], mode: state.original_mode}
+
+    cond do
+      data == "" -> state
+      whitespace?(data) -> insert_characters(data, state)
+      :else -> anything_else_in_table(%Token.Character{data: data}, state)
+    end
+  end
+
   # "in table" anything-else: enable foster parenting, process using "in body",
   # then disable foster parenting.
   defp anything_else_in_table(token, state) do
@@ -1313,13 +1377,14 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # "in caption" </caption>: if a caption is in table scope, generate implied end
-  # tags, pop through the caption, switch to "in table" (else parse error,
-  # ignore). (Clear formatting to last marker is tier 4 — no-op.)
+  # tags, pop through the caption, clear the active formatting list up to the last
+  # marker, switch to "in table" (else parse error, ignore).
   defp close_caption(state) do
     if has_in_scope?(state, "caption", @table_scope_markers) do
       state
       |> generate_implied_end_tags()
       |> pop_through("caption")
+      |> clear_formatting_to_marker()
       |> Map.put(:mode, :in_table)
     else
       state
@@ -1333,8 +1398,8 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # "in cell" close-the-cell: generate implied end tags, pop through the td/th,
-  # switch to "in row" (clear formatting to last marker is tier 4 — no-op), then
-  # reprocess the token.
+  # clear the active formatting list up to the last marker, switch to "in row",
+  # then reprocess the token.
   defp close_cell_and_reprocess(token, state) do
     name = if has_in_scope?(state, "td", @table_scope_markers), do: "td", else: "th"
 
@@ -1342,6 +1407,7 @@ defmodule DOM.HTML.TreeBuilder do
       state
       |> generate_implied_end_tags()
       |> pop_through(name)
+      |> clear_formatting_to_marker()
       |> Map.put(:mode, :in_row)
 
     reprocess(:in_row, token, state)
@@ -1399,6 +1465,327 @@ defmodule DOM.HTML.TreeBuilder do
   }
 
   defp mode_for_node(node), do: Map.get(@reset_modes, Node.node_name(node))
+
+  # ==========================================================================
+  # §13.2.4.3 / §13.2.6.4.7  Active formatting list + adoption agency
+  # ==========================================================================
+
+  # Insert a formatting element: reconstruct, insert, push onto the AFE list.
+  defp insert_formatting(token, state) do
+    state |> reconstruct_formatting() |> insert_and_push(token)
+  end
+
+  # Insert an HTML element for `token`, then push it onto the AFE list.
+  defp insert_and_push(state, token) do
+    {element, state} = insert_html_element(token, state)
+    push_formatting(state, element, token)
+  end
+
+  # "Insert a marker at the end of the list of active formatting elements."
+  defp insert_marker(state), do: %{state | active_formatting: [:marker | state.active_formatting]}
+
+  # "Push onto the list of active formatting elements" with the Noah's Ark clause
+  # (§13.2.4.3): before adding, if three entries after the last marker already
+  # share the token's tag name + attributes, remove the earliest such entry.
+  defp push_formatting(state, element, token) do
+    recent = Enum.take_while(state.active_formatting, &(&1 != :marker))
+    matches = Enum.filter(recent, fn {_el, t} -> same_formatting?(t, token) end)
+
+    afe =
+      if length(matches) >= 3 do
+        earliest = List.last(matches)
+        List.delete(state.active_formatting, earliest)
+      else
+        state.active_formatting
+      end
+
+    %{state | active_formatting: [{element, token} | afe]}
+  end
+
+  # Two formatting tokens match (Noah's Ark) when tag name + attribute set are
+  # equal (attribute order does not matter).
+  defp same_formatting?(a, b) do
+    a.name == b.name and Enum.sort(a.attributes) == Enum.sort(b.attributes)
+  end
+
+  # The AFE entry for the most recent `name` element after the last marker, or nil.
+  defp formatting_after_marker(state, name) do
+    state.active_formatting
+    |> Enum.take_while(&(&1 != :marker))
+    |> Enum.find(fn {el, _t} -> Node.node_name(el) == name end)
+  end
+
+  # "Clear the list of active formatting elements up to the last marker": drop
+  # entries (including the marker) from the head.
+  defp clear_formatting_to_marker(state) do
+    %{state | active_formatting: drop_to_marker(state.active_formatting)}
+  end
+
+  defp drop_to_marker([:marker | rest]), do: rest
+  defp drop_to_marker([_ | rest]), do: drop_to_marker(rest)
+  defp drop_to_marker([]), do: []
+
+  # "Reconstruct the active formatting elements" (§13.2.4.3): re-open any entry
+  # after the last marker that is no longer on the stack of open elements.
+  defp reconstruct_formatting(%__MODULE__{active_formatting: []} = state), do: state
+
+  defp reconstruct_formatting(state) do
+    case state.active_formatting do
+      [:marker | _] -> state
+      [{el, _} | _] -> if on_stack?(state, el), do: state, else: do_reconstruct(state)
+    end
+  end
+
+  # Rebuild every stale entry from the earliest stale one forward. Entries are
+  # head = most recent, so reverse to walk oldest-first; recreate each stale
+  # entry's element (insert it, push onto the stack) and update the AFE entry.
+  defp do_reconstruct(state) do
+    {before_marker, marker_and_rest} = split_at_marker(state.active_formatting)
+
+    rebuilt =
+      before_marker
+      |> Enum.reverse()
+      |> Enum.reduce({[], state}, fn {el, token}, {acc, st} ->
+        if on_stack?(st, el) do
+          {[{el, token} | acc], st}
+        else
+          {new_el, st} = insert_html_element(token, st)
+          {[{new_el, token} | acc], st}
+        end
+      end)
+
+    {entries, state} = rebuilt
+    %{state | active_formatting: entries ++ marker_and_rest}
+  end
+
+  # Split the AFE list into {entries before the last marker, [marker | rest]};
+  # when there is no marker the second element is [].
+  defp split_at_marker(afe) do
+    before = Enum.take_while(afe, &(&1 != :marker))
+    {before, Enum.drop(afe, length(before))}
+  end
+
+  defp on_stack?(state, element), do: element in state.open_elements
+
+  defp remove_from_stack(state, element) do
+    %{state | open_elements: List.delete(state.open_elements, element)}
+  end
+
+  defp remove_from_formatting(state, element) do
+    afe = Enum.reject(state.active_formatting, &match?({^element, _}, &1))
+    %{state | active_formatting: afe}
+  end
+
+  # Whether `element` currently has an AFE entry.
+  defp in_formatting?(state, element) do
+    Enum.any?(state.active_formatting, &match?({^element, _}, &1))
+  end
+
+  defp elem_of({element, _token}), do: element
+
+  # Whether a formatting entry's element is on the stack of open elements.
+  defp on_stack_entry?(state, entry), do: on_stack?(state, elem_of(entry))
+
+  defp remove_from_formatting_entry(state, entry),
+    do: remove_from_formatting(state, elem_of(entry))
+
+  defp element_in_scope?(state, element) do
+    has_in_scope?(state, Node.node_name(element), @scope_markers)
+  end
+
+  # The 0-based position of `element`'s AFE entry (head = 0).
+  defp formatting_index(state, element) do
+    Enum.find_index(state.active_formatting, &match?({^element, _}, &1))
+  end
+
+  # Insert an AFE entry at index `i` (bookmark position).
+  defp insert_formatting_at(state, i, entry) do
+    %{state | active_formatting: List.insert_at(state.active_formatting, i, entry)}
+  end
+
+  # "furthestBlock": the topmost node in the stack lower than `fmt_el` (i.e. more
+  # recent — earlier in the list) that is in the special category, or nil.
+  defp furthest_block(state, fmt_el) do
+    state.open_elements
+    |> Enum.take_while(&(&1 != fmt_el))
+    |> Enum.reverse()
+    |> Enum.find(&special?(Node.node_name(&1)))
+  end
+
+  # Pop the stack up to and including `element`.
+  defp pop_including(state, element) do
+    %{state | open_elements: drop_including(state.open_elements, element)}
+  end
+
+  # Insert `new_el` into the stack immediately below `furthest` (one position more
+  # recent — nearer the head — than furthest).
+  defp insert_below_furthest(state, furthest, new_el) do
+    i = Enum.find_index(state.open_elements, &(&1 == furthest))
+    %{state | open_elements: List.insert_at(state.open_elements, i, new_el)}
+  end
+
+  # Create a fresh element for `old`'s formatting token; replace `old` in both the
+  # AFE list and the stack with the new element. Returns {new_element, state}.
+  defp recreate_formatting(state, old) do
+    {^old, token} = Enum.find(state.active_formatting, &match?({^old, _}, &1))
+    new = create_element_for(token, state)
+
+    afe = Enum.map(state.active_formatting, &replace_entry(&1, old, {new, token}))
+    stack = Enum.map(state.open_elements, &if(&1 == old, do: new, else: &1))
+    {new, %{state | active_formatting: afe, open_elements: stack}}
+  end
+
+  defp replace_entry({old, _}, old, new_entry), do: new_entry
+  defp replace_entry(entry, _old, _new), do: entry
+
+  # The appropriate insertion location with `target` as the override target
+  # (foster parenting honored). Returns {parent, reference}.
+  defp appropriate_insertion_location_for(state, target) do
+    if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
+      foster_location(state)
+    else
+      {target, nil}
+    end
+  end
+
+  # "The adoption agency algorithm" (§13.2.6.4.7). `token` is the end tag whose
+  # tag name is `subject`.
+  defp adoption_agency(state, %{name: subject} = token) do
+    current = current_node(state)
+
+    # If the current node is an HTML element named subject and is NOT in the AFE
+    # list, just pop it and return.
+    if Node.node_name(current) == subject and not in_formatting?(state, current) do
+      remove_from_stack(state, current)
+    else
+      adoption_outer_loop(state, subject, token, 0)
+    end
+  end
+
+  # The outer loop (at most 8 iterations).
+  defp adoption_outer_loop(state, _subject, _token, 8), do: state
+
+  defp adoption_outer_loop(state, subject, token, counter) do
+    formatting = formatting_after_marker(state, subject)
+
+    cond do
+      # No such formatting element: act as "any other end tag" and return.
+      is_nil(formatting) ->
+        any_other_end_tag(state, subject, state.open_elements)
+
+      # In the AFE list but not on the stack: parse error, remove from AFE, return.
+      not on_stack_entry?(state, formatting) ->
+        remove_from_formatting_entry(state, formatting)
+
+      # On the stack but not in scope: parse error, return unchanged.
+      not element_in_scope?(state, elem_of(formatting)) ->
+        state
+
+      :else ->
+        adoption_reparent(state, subject, token, counter, formatting)
+    end
+  end
+
+  # Steps 8-19: locate the furthest block, run the inner loop, reparent.
+  defp adoption_reparent(state, subject, token, counter, {fmt_el, _fmt_token} = formatting) do
+    furthest = furthest_block(state, fmt_el)
+
+    if is_nil(furthest) do
+      # No furthest block: pop the stack up to and including the formatting
+      # element, remove it from the AFE list, and return.
+      state
+      |> pop_including(fmt_el)
+      |> remove_from_formatting(fmt_el)
+    else
+      state
+      |> run_adoption(formatting, furthest)
+      |> adoption_outer_loop(subject, token, counter + 1)
+    end
+  end
+
+  # Steps 8-19: the inner loop plus the final reparent/replace. `common_ancestor`
+  # is the element immediately above the formatting element on the stack.
+  #
+  # The stack (state.open_elements) is head = most recent (bottom of the DOM).
+  # "lower in the stack" = closer to the head. We work with the reversed stack as
+  # a positional list so "the element immediately above node" is the predecessor
+  # index — this makes the "before it was removed" clause (step 14.2) trivial.
+  defp run_adoption(state, {fmt_el, fmt_token}, furthest) do
+    common_ancestor = element_above(state.open_elements, fmt_el)
+    bookmark = formatting_index(state, fmt_el)
+
+    {state, last_node, bookmark} =
+      adoption_inner_loop({fmt_el, furthest}, state, furthest, furthest, 0, bookmark)
+
+    # Step 15: insert last_node into common_ancestor at the appropriate place.
+    insert_at(appropriate_insertion_location_for(state, common_ancestor), last_node)
+
+    # Steps 16-18: new element for the formatting token; move furthest's children
+    # into it; append it to furthest.
+    new_el = create_element_for(fmt_token, state)
+    Enum.each(Node.child_nodes(furthest), &Node.append_child(new_el, &1))
+    Node.append_child(furthest, new_el)
+
+    state
+    # Step 19: replace fmt_el in the AFE list with the new element at the bookmark.
+    |> remove_from_formatting(fmt_el)
+    |> insert_formatting_at(bookmark, {new_el, fmt_token})
+    # Step 20: remove fmt_el from the stack; insert new_el just below furthest.
+    |> remove_from_stack(fmt_el)
+    |> insert_below_furthest(furthest, new_el)
+  end
+
+  # The inner loop (step 14): walk upward from furthest toward fmt_el. `node` and
+  # `last_node` start as furthest. `ctx` is the loop-invariant {fmt_el, furthest}.
+  # Returns {state, last_node, bookmark}.
+  defp adoption_inner_loop({fmt_el, _furthest} = ctx, state, node, last_node, inner, bookmark) do
+    above = element_above(state.open_elements, node)
+
+    if above == fmt_el do
+      # Step 14.3: reached the formatting element — stop.
+      {state, last_node, bookmark}
+    else
+      inner = inner + 1
+      # Step 14.4: after three iterations, drop `above` from the AFE list.
+      state = if inner > 3, do: remove_from_formatting(state, above), else: state
+
+      inner_step(
+        in_formatting?(state, above),
+        ctx,
+        state,
+        node,
+        last_node,
+        inner,
+        bookmark,
+        above
+      )
+    end
+  end
+
+  # Step 14.6-14.9: `above` is still a formatting entry — recreate it, thread
+  # last_node into the new element, and advance the walk to the new element.
+  defp inner_step(
+         true,
+         {_fmt_el, furthest} = ctx,
+         state,
+         _node,
+         last_node,
+         inner,
+         bookmark,
+         above
+       ) do
+    {new, state} = recreate_formatting(state, above)
+    bookmark = if last_node == furthest, do: formatting_index(state, new), else: bookmark
+    Node.append_child(new, last_node)
+    adoption_inner_loop(ctx, state, new, new, inner, bookmark)
+  end
+
+  # Step 14.5: `above` is not in the AFE list — remove it from the stack and
+  # continue with `node` unchanged (the next iteration re-reads "the element above
+  # node", which is now what was above `above`).
+  defp inner_step(false, ctx, state, node, last_node, inner, bookmark, above) do
+    adoption_inner_loop(ctx, remove_from_stack(state, above), node, last_node, inner, bookmark)
+  end
 
   # ==========================================================================
   # Whitespace helpers

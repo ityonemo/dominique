@@ -403,4 +403,77 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
   end
+
+  describe "in body — §13.2.4.3 active formatting list (reconstruction)" do
+    # spec §13.2.4.3: reconstruct the active formatting elements — the </b>
+    # adoption splits <b> out of the <p>; the "2" inside the <p> is wrapped by a
+    # reconstructed <b>, and "3" (after </b>) stays bare in the <p>.
+    test "a formatting element is reconstructed inside an adopted block" do
+      assert tree("<b>1<p>2</b>3</p>") ==
+               doc([
+                 "|     <b>",
+                 "|       \"1\"",
+                 "|     <p>",
+                 "|       <b>",
+                 "|         \"2\"",
+                 "|       \"3\""
+               ])
+    end
+
+    # spec §13.2.4.3 (Noah's Ark): four identical <b> nest fully inside the first
+    # <p>, but after the second <p> reconstruction rebuilds only three of them
+    # (the earliest equal entry was dropped when the fourth was pushed).
+    test "Noah's Ark caps reconstruction at three equal formatting entries" do
+      assert tree("<p><b><b><b><b><p>x") ==
+               doc([
+                 "|     <p>",
+                 "|       <b>",
+                 "|         <b>",
+                 "|           <b>",
+                 "|             <b>",
+                 "|     <p>",
+                 "|       <b>",
+                 "|         <b>",
+                 "|           <b>",
+                 "|             \"x\""
+               ])
+    end
+  end
+
+  describe "in body — §13.2.6.4.7 adoption agency" do
+    # spec §13.2.6.4.7: "An end tag whose tag name is one of: a, b, …" runs the
+    # adoption agency — misnested <b>/<i> split so the <i> continues after </b>.
+    test "misnested b/i are repaired by the adoption agency" do
+      assert tree("<b>1<i>2</b>3</i>") ==
+               doc([
+                 "|     <b>",
+                 "|       \"1\"",
+                 "|       <i>",
+                 "|         \"2\"",
+                 "|     <i>",
+                 "|       \"3\""
+               ])
+    end
+
+    # spec §13.2.6.4.7 (<a> start tag): an <a> while an <a> is open runs the
+    # adoption agency on the open one first, so the two <a>s are siblings.
+    test "a nested a start tag closes the open a via the adoption agency" do
+      assert tree("<a>1<a>2") ==
+               doc(["|     <a>", "|       \"1\"", "|     <a>", "|       \"2\""])
+    end
+
+    # spec §13.2.6.4.7: the adoption agency moves the furthest block's contents —
+    # a formatting element wrapping a block is repaired around it.
+    test "a formatting element around a block is repaired" do
+      assert tree("<b>1<p>2</b>3") ==
+               doc([
+                 "|     <b>",
+                 "|       \"1\"",
+                 "|     <p>",
+                 "|       <b>",
+                 "|         \"2\"",
+                 "|       \"3\""
+               ])
+    end
+  end
 end
