@@ -2140,9 +2140,14 @@ defmodule DOM.HTML.TreeBuilder do
     name = Node.node_name(node)
 
     cond do
-      name in names -> state |> generate_implied_end_tags(name) |> pop_through(name)
-      special?(name) and name not in ~w(address div p) -> state
-      :else -> close_list_item(state, names, rest)
+      name in names ->
+        state |> generate_implied_end_tags(name) |> pop_through(name)
+
+      special_element?(state, node) and name not in ~w(address div p) ->
+        state
+
+      :else ->
+        close_list_item(state, names, rest)
     end
   end
 
@@ -2204,7 +2209,7 @@ defmodule DOM.HTML.TreeBuilder do
         |> generate_implied_end_tags(name)
         |> then(&%{&1 | open_elements: drop_including(&1.open_elements, el)})
 
-      special?(node_name) ->
+      special_element?(state, el) ->
         state
 
       :else ->
@@ -2232,6 +2237,18 @@ defmodule DOM.HTML.TreeBuilder do
               wbr xmp)
 
   defp special?(name), do: name in @special
+
+  # The "special category" is namespace-sensitive: the @special names in the HTML
+  # namespace, plus the MathML text integration points / annotation-xml and the
+  # SVG foreignObject/desc/title in their own namespaces. A generic foreign
+  # element (e.g. an <svg tr>) is NOT special — so it never counts as a furthest
+  # block or a scope-terminating "special" node during the adoption agency.
+  defp special_element?(state, el) do
+    case namespace_of(state, el) do
+      :html -> special?(Node.node_name(el))
+      _ -> mathml_text_point?(state, el) or html_integration_point?(state, el)
+    end
+  end
 
   # ==========================================================================
   # §13.2.6.4.9-.15  Table insertion-mode algorithms
@@ -2558,7 +2575,7 @@ defmodule DOM.HTML.TreeBuilder do
     state.open_elements
     |> Enum.take_while(&(&1 != fmt_el))
     |> Enum.reverse()
-    |> Enum.find(&special?(Node.node_name(&1)))
+    |> Enum.find(&special_element?(state, &1))
   end
 
   # Pop the stack up to and including `element`.
@@ -3034,15 +3051,22 @@ defmodule DOM.HTML.TreeBuilder do
   defp adjust_foreign_attribute({name, value}),
     do: {Map.get(@foreign_attributes, name, name), value}
 
-  # Any-other-end-tag loop (§13.2.6.5): from the current node down, a name match
-  # pops to it; an HTML-namespace node hands off to HTML content.
+  # Any-other-end-tag loop (§13.2.6.5). Walk from the current node down: a FOREIGN
+  # node whose lowercased name matches the token pops to it; reaching an HTML
+  # element ends the foreign walk and the token is (re)processed by the current
+  # insertion mode — the name match is NOT applied to HTML elements. (So e.g.
+  # `</div>` inside `<svg><foreignObject><math>` is handed to "in body", where the
+  # foreignObject scope boundary makes it a no-op, rather than popping the whole
+  # foreign subtree; and `</a>` runs the adoption agency, which — with a
+  # namespace-aware "special" test — finds no HTML furthest block and simply
+  # closes the <a>.)
   defp foreign_end_tag(state, name, [node | rest]) do
     cond do
-      String.downcase(Node.node_name(node)) == name ->
-        %{state | open_elements: drop_including(state.open_elements, node)}
-
       namespace_of(state, node) == :html ->
         process(state.mode, %Token.EndTag{name: name}, state)
+
+      String.downcase(Node.node_name(node)) == name ->
+        %{state | open_elements: drop_including(state.open_elements, node)}
 
       :else ->
         foreign_end_tag(state, name, rest)

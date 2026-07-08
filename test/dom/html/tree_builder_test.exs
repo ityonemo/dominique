@@ -686,6 +686,36 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert tree("<svg>a</svg><frameset>") ==
                doc(["|     <svg svg>", "|       \"a\""])
     end
+
+    # spec §13.2.6.5 (any other end tag): the walk stops at the first HTML-namespace
+    # element and hands the token to the current insertion mode — the name match is
+    # NOT applied to HTML elements. `</div>` is passed to "in body", where the
+    # foreignObject scope boundary makes it a no-op; the <div> stays open and
+    # following text nests inside the innermost foreign node.
+    test "an HTML end tag inside foreign content does not pop the foreign subtree" do
+      assert tree("<div><svg><path><foreignObject><math></div>a") ==
+               doc([
+                 "|     <div>",
+                 "|       <svg svg>",
+                 "|         <svg path>",
+                 "|           <svg foreignObject>",
+                 "|             <math math>",
+                 "|               \"a\""
+               ])
+    end
+
+    # spec §13.2.4.2 (special category is namespace-sensitive): a foreign element
+    # (e.g. <svg tr>) is NOT "special", so the </a> adoption agency finds no HTML
+    # furthest block and simply closes the <a>, leaving its foreign subtree nested.
+    test "a foreign element is not a special adoption-agency furthest block" do
+      assert tree("<a><svg><tr><input></a>") ==
+               doc([
+                 "|     <a>",
+                 "|       <svg svg>",
+                 "|         <svg tr>",
+                 "|           <svg input>"
+               ])
+    end
   end
 
   describe "fragment parsing — §13.4" do
