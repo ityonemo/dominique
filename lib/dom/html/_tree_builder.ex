@@ -2359,6 +2359,7 @@ defmodule DOM.HTML.TreeBuilder do
     "table" => :in_table,
     "head" => :in_head,
     "body" => :in_body,
+    "frameset" => :in_frameset,
     "html" => :before_head
   }
 

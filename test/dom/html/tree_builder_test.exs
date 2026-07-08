@@ -649,6 +649,14 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert fragment("<title>x</title>", "head") == ~s(| <title>\n|   "x")
     end
 
+    # spec §13.4 "reset the insertion mode appropriately": a frameset-context
+    # fragment starts in the "in frameset" mode, so <frame> is inserted (a stray
+    # </frameset> is ignored in the fragment case).
+    test "a frameset-context fragment inserts frames" do
+      assert fragment("<frame>", "frameset") == "| <frame>"
+      assert fragment("</frameset><frame>", "frameset") == "| <frame>"
+    end
+
     # An html-context fragment DOES imply head + body at EOF (unlike head context).
     test "an empty html-context fragment implies head and body" do
       assert fragment("", "html") == "| <head>\n| <body>"
