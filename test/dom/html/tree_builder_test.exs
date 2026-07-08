@@ -639,6 +639,11 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert fragment("<title>x</title>", "head") == ~s(| <title>\n|   "x")
     end
 
+    # An html-context fragment DOES imply head + body at EOF (unlike head context).
+    test "an empty html-context fragment implies head and body" do
+      assert fragment("", "html") == "| <head>\n| <body>"
+    end
+
     # spec §13.4 (tokenizer state for RCDATA context): a textarea context treats
     # its input as raw text — markup is not parsed.
     test "a textarea context treats markup as raw text" do

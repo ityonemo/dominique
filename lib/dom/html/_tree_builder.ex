@@ -189,13 +189,14 @@ defmodule DOM.HTML.TreeBuilder do
   # empty or head-only document still yields <html><head><body>). Each mode's EOF
   # rule follows its "anything else" path; we chain the implied elements.
   #
-  # In the FRAGMENT case there is no implied html/head/body scaffolding — the
-  # synthetic root is fixed and EOF only needs the in-template unwinding. So a
-  # fragment parse skips the pre-body chain entirely (except in_template below).
+  # In the FRAGMENT case with a HEAD context, EOF must not imply a <body> (the
+  # context represents being inside the head; the synthetic root is fixed). Other
+  # contexts (html, td, …) continue the normal chain — e.g. an empty
+  # `html`-context fragment still implies head+body.
   defp eof(%__MODULE__{context: context, mode: mode} = state)
-       when not is_nil(context) and
-              mode in [:initial, :before_html, :before_head, :in_head, :after_head],
-       do: state
+       when not is_nil(context) and mode in [:in_head, :after_head] do
+    if Node.node_name(context) == "head", do: state, else: eof_pre_body(state)
+  end
 
   defp eof(%__MODULE__{mode: :initial} = state), do: eof(%{state | mode: :before_html})
 
@@ -241,6 +242,17 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   defp eof(state), do: state
+
+  # Continue the pre-body implied-element chain from :in_head/:after_head for a
+  # non-head fragment context (pop the head if still open, then imply a body).
+  defp eof_pre_body(%__MODULE__{mode: :in_head} = state) do
+    eof_pre_body(%{pop(state) | mode: :after_head})
+  end
+
+  defp eof_pre_body(%__MODULE__{mode: :after_head} = state) do
+    {_body, state} = insert_html_element(%Token.StartTag{name: "body"}, state)
+    %{state | mode: :in_body}
+  end
 
   defp eof_in_template(state) do
     if Enum.any?(state.open_elements, &(Node.node_name(&1) == "template")) do
