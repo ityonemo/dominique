@@ -938,10 +938,13 @@ defmodule DOM.HTML.TreeBuilder do
     # The spec checks THIS element (the form pointer) in scope — not "a form by
     # name". A fostered form may have been removed from the stack (table foster
     # parenting), leaving the pointer dangling; then the token is ignored.
+    # The spec removes ONLY the form node from the stack (not the elements above
+    # it), so an intervening open element (e.g. a <div>) stays open — later content
+    # nests inside it.
     if node && on_stack?(state, node) && element_in_scope?(state, node) do
       state
       |> generate_implied_end_tags()
-      |> then(&%{&1 | open_elements: drop_including(&1.open_elements, node)})
+      |> then(&%{&1 | open_elements: List.delete(&1.open_elements, node)})
     else
       state
     end

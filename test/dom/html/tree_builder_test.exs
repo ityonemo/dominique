@@ -279,6 +279,18 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|       <table>"
                ])
     end
+
+    # spec §13.2.6.4.7 (</form> end tag): </form> removes ONLY the form node from
+    # the stack, so an open <div> above it stays open — later content nests inside
+    # that div, still within the (now closed) form's subtree.
+    test "a </form> keeps an open div above the form open" do
+      assert tree("<form><div></form><div>") ==
+               doc([
+                 "|     <form>",
+                 "|       <div>",
+                 "|         <div>"
+               ])
+    end
   end
 
   describe "in table — §13.2.6.4.9" do
