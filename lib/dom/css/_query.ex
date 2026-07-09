@@ -12,10 +12,14 @@ defmodule DOM.CSS.Query do
   alias DOM.NodeData
   alias DOM.NodeData.Table
 
-  @doc "Element ids in `candidates` whose local name is `name`."
+  @doc """
+  Element ids in `candidates` whose local name is `name` — read from the tag
+  index (a bounded prefix scan of the `:ordered_set`; namespace-agnostic, as CSS
+  type selectors are), then intersected with the candidate scope.
+  """
   @spec type(:ets.tid(), [reference()], String.t()) :: [reference()]
-  def type(nodes, candidates, name) do
-    nodes |> select(type_spec(name)) |> intersect(candidates)
+  def type(index, candidates, name) do
+    index |> Table.index_lookup(:tag, name) |> intersect(candidates)
   end
 
   @doc "Element ids in `candidates` (the universal selector)."
@@ -265,10 +269,6 @@ defmodule DOM.CSS.Query do
   # Match specs use MAP patterns keyed on `__struct__`, which do subset matching:
   # only the mentioned keys are constrained, so per-type NodeData.* structs are
   # matched without pinning their other fields to defaults.
-  defmatchspecp type_spec(name) do
-    {id, %{__struct__: NodeData.Element, local_name: ^name}} -> id
-  end
-
   defmatchspecp element_type_spec(node_id) do
     {^node_id, %{__struct__: NodeData.Element, local_name: name, namespace: namespace}} ->
       {name, namespace}

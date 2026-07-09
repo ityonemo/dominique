@@ -17,8 +17,8 @@ defmodule DOM.CSS.Type do
   # (`:any`/`nil`) match any namespace.
   def match(%{namespace: :none}, _context, _candidate_ids), do: []
 
-  def match(%{name: name}, %{nodes: nodes}, candidate_ids) do
-    Query.type(nodes, candidate_ids, name)
+  def match(%{name: name}, %{index: index}, candidate_ids) do
+    Query.type(index, candidate_ids, name)
   end
 
   defimpl String.Chars do
