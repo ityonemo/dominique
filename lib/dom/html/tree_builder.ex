@@ -1771,7 +1771,11 @@ defmodule DOM.HTML.TreeBuilder do
   # "anything else" path (process using "in body").
   defp process_characters(:in_table, token, state) do
     if Node.node_name(current_node(state)) in ~w(table tbody template tfoot thead tr) do
-      state = %{state | pending_table_chars: [], original_mode: :in_table, mode: :in_table_text}
+      # Save the ACTUAL current mode (may be :in_table, :in_row, or
+      # :in_table_body when reached via those modes' character delegation) so the
+      # "in table text" flush returns to it — e.g. a whitespace run in a row must
+      # return to :in_row so a following </tr> pops the row correctly.
+      state = %{state | pending_table_chars: [], original_mode: state.mode, mode: :in_table_text}
       reprocess(:in_table_text, token, state)
     else
       anything_else_in_table(token, state)

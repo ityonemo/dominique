@@ -372,6 +372,21 @@ defmodule DOM.HTML.TreeBuilderTest do
       assert tree("<table>x<tbody>") ==
                doc(["|     \"x\"", "|     <table>", "|       <tbody>"])
     end
+
+    # spec §13.2.6.4.10 (in-table-text "anything else"): the flush must return to
+    # the mode that was current when the text run began — a whitespace run inside a
+    # <tr> returns to "in row", so a following </tr> pops the row and later
+    # whitespace lands in the <tbody> (not the closed <tr>).
+    test "table text preserves the row mode so </tr> still pops the row" do
+      assert tree("<table><tr> B</tr> </table>") ==
+               doc([
+                 "|     \"B\"",
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|         \" \""
+               ])
+    end
   end
 
   describe "in caption — §13.2.6.4.11" do
