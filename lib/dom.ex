@@ -105,6 +105,8 @@ defmodule DOM do
   @spec _export_subtree(GenServer.server(), reference()) :: [{reference(), NodeData.t()}]
   @spec _remove_subtree(GenServer.server(), reference()) :: :ok
   @spec _element_inner_html(GenServer.server(), reference()) :: String.t()
+  @spec _element_set_inner_html(GenServer.server(), reference(), String.t()) :: :ok
+  @spec _element_set_outer_html(GenServer.server(), reference(), String.t()) :: :ok
   @spec _element_outer_html(GenServer.server(), reference()) :: String.t()
   @spec _node_text_content(GenServer.server(), reference()) :: String.t()
   @spec _node_set_text_content(GenServer.server(), reference(), String.t()) :: :ok
@@ -785,6 +787,63 @@ defmodule DOM do
     {:reply, IO.iodata_to_binary(iodata), state}
   end
 
+  @doc false
+  def _element_set_inner_html(server, node_id, html) do
+    GenServer.call(server, {:set_inner_html, node_id, html})
+  end
+
+  # innerHTML setter (§): fragment-parse `html` with this element as the context,
+  # then replace the element's children with the parsed fragment's children. All
+  # in-process on this server's table via DOM.NodeData.Table.
+  defp set_inner_html_impl(node_id, html, _from, state) do
+    element = Table.fetch!(state.nodes, node_id)
+    context = %{name: element.local_name, namespace: element.namespace}
+    root = fragment_root_for(html, context, state)
+
+    Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
+    Enum.each(Table.children(state.nodes, root), &Table.append_child(state.nodes, node_id, &1))
+
+    {:reply, :ok, state}
+  end
+
+  @doc false
+  def _element_set_outer_html(server, node_id, html) do
+    case GenServer.call(server, {:set_outer_html, node_id, html}) do
+      :ok -> :ok
+      {:error, :no_modification} -> raise DOM.NoModificationAllowedError
+    end
+  end
+
+  # outerHTML setter (§): fragment-parse `html` in the element's PARENT context,
+  # then replace the element itself (in the parent) with the parsed nodes. An
+  # element with no element parent cannot be replaced.
+  defp set_outer_html_impl(node_id, html, _from, state) do
+    parent_id = Table.parent(state.nodes, node_id)
+
+    if is_nil(parent_id) or Table.type(state.nodes, parent_id) != :element do
+      {:reply, {:error, :no_modification}, state}
+    else
+      parent = Table.fetch!(state.nodes, parent_id)
+      context = %{name: parent.local_name, namespace: parent.namespace}
+      root = fragment_root_for(html, context, state)
+
+      Enum.each(
+        Table.children(state.nodes, root),
+        &Table.insert_before(state.nodes, parent_id, &1, node_id)
+      )
+
+      Table.remove_child(state.nodes, parent_id, node_id)
+      {:reply, :ok, state}
+    end
+  end
+
+  # Fragment-parse `html` in `context` into this document's table; return the
+  # synthetic fragment-root id (whose children are the parsed nodes).
+  defp fragment_root_for(html, context, state) do
+    tokens = DOM.HTML.fragment_tokens(html, context.name)
+    TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
+  end
+
   def _element_outer_html(server, node_id) do
     GenServer.call(server, {:outer_html, node_id})
   end
@@ -1087,6 +1146,14 @@ defmodule DOM do
   @impl true
   def handle_call({:inner_html, node_id}, from, state) do
     inner_html_impl(node_id, from, state)
+  end
+
+  def handle_call({:set_inner_html, node_id, html}, from, state) do
+    set_inner_html_impl(node_id, html, from, state)
+  end
+
+  def handle_call({:set_outer_html, node_id, html}, from, state) do
+    set_outer_html_impl(node_id, html, from, state)
   end
 
   @impl true

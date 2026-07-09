@@ -102,9 +102,28 @@ defmodule DOM.Element do
     DOM._element_inner_html(element.server, element.id)
   end
 
+  @doc """
+  Set the element's `innerHTML`: fragment-parse `html` using the element as the
+  parsing context, then replace the element's children with the result.
+  """
+  @spec set_inner_html(Node.t(), String.t()) :: :ok
+  def set_inner_html(%Node{type: :element} = element, html) do
+    DOM._element_set_inner_html(element.server, element.id, html)
+  end
+
   @doc "The element and its subtree serialized (its `outerHTML`)."
   @spec outer_html(Node.t()) :: String.t()
   def outer_html(%Node{type: :element} = element) do
     DOM._element_outer_html(element.server, element.id)
+  end
+
+  @doc """
+  Set the element's `outerHTML`: fragment-parse `html` using the element's PARENT
+  as the parsing context, then replace the element itself with the result. Raises
+  `DOM.NoModificationAllowedError` when the element has no parent.
+  """
+  @spec set_outer_html(Node.t(), String.t()) :: :ok
+  def set_outer_html(%Node{type: :element} = element, html) do
+    DOM._element_set_outer_html(element.server, element.id, html)
   end
 end

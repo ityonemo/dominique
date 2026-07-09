@@ -59,18 +59,21 @@ after
     %DOM.Node{server: server, id: root_id, type: :element}
   end
 
-  # A raw-text/RCDATA context makes the whole input one text token. RCDATA
-  # (title/textarea) still decodes character references; RAWTEXT/script data does
-  # not (decode?: false). Other contexts use normal tokenization + decoding.
-  defp fragment_tokens(html, name) when name in @fragment_rcdata do
+  @doc """
+  Tokenize `html` for a fragment context element named `name`. A raw-text/RCDATA
+  context makes the whole input one text token: RCDATA (title/textarea) decodes
+  character references, RAWTEXT/script data does not; any other context uses
+  normal tokenization + decoding. Used by the inner_html setter.
+  """
+  def fragment_tokens(html, name) when name in @fragment_rcdata do
     [DOM.HTML.Token.decode(%DOM.HTML.Token.Character{data: html})]
   end
 
-  defp fragment_tokens(html, name) when name in @fragment_rawtext do
+  def fragment_tokens(html, name) when name in @fragment_rawtext do
     [%DOM.HTML.Token.Character{data: html, decode?: false}]
   end
 
-  defp fragment_tokens(html, _name) do
+  def fragment_tokens(html, _name) do
     html |> tokenize() |> Enum.map(&DOM.HTML.Token.decode/1)
   end
 

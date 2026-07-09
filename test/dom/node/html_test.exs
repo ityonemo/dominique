@@ -89,4 +89,85 @@ defmodule DOM.Node.HTMLTest do
       assert Element.inner_html(div) == ""
     end
   end
+
+  describe "set_inner_html/2" do
+    test "parses the HTML and replaces the element's children" do
+      document = DOM.new()
+      div = DOM.create_element(document, "div")
+      Element.set_inner_html(div, "<span>hi</span><b>x</b>")
+
+      assert Element.inner_html(div) == "<span>hi</span><b>x</b>"
+    end
+
+    test "discards the element's previous children" do
+      document = DOM.new()
+      div = DOM.create_element(document, "div")
+      Node.append_child(div, DOM.create_text_node(document, "old"))
+      Element.set_inner_html(div, "<p>new</p>")
+
+      assert Element.inner_html(div) == "<p>new</p>"
+    end
+
+    test "setting empty string clears the children" do
+      document = DOM.new()
+      div = DOM.create_element(document, "div")
+      Node.append_child(div, DOM.create_element(document, "span"))
+      Element.set_inner_html(div, "")
+
+      assert Element.inner_html(div) == ""
+    end
+
+    test "parses in the element's own context (table repairs)" do
+      document = DOM.new()
+      table = DOM.create_element(document, "table")
+      # A bare <tr> in a table context is wrapped in an implied <tbody>.
+      Element.set_inner_html(table, "<tr><td>c</td></tr>")
+
+      assert Element.inner_html(table) == "<tbody><tr><td>c</td></tr></tbody>"
+    end
+
+    test "the parsed children belong to the element's document" do
+      document = DOM.new()
+      div = DOM.create_element(document, "div")
+      Node.append_child(document, div)
+      Element.set_inner_html(div, "<a id=x>link</a>")
+
+      assert DOM.query_selector(document, "#x") != nil
+    end
+  end
+
+  describe "set_outer_html/2" do
+    test "replaces the element itself with the parsed nodes" do
+      document = DOM.new()
+      root = DOM.create_element(document, "div")
+      target = DOM.create_element(document, "span")
+      Node.append_child(root, DOM.create_text_node(document, "a"))
+      Node.append_child(root, target)
+      Node.append_child(root, DOM.create_text_node(document, "b"))
+
+      Element.set_outer_html(target, "<p>x</p><em>y</em>")
+
+      assert Element.inner_html(root) == "a<p>x</p><em>y</em>b"
+    end
+
+    test "parses in the parent's context (a <tr> parent keeps table repairs sane)" do
+      document = DOM.new()
+      root = DOM.create_element(document, "div")
+      target = DOM.create_element(document, "span")
+      Node.append_child(root, target)
+
+      Element.set_outer_html(target, "<b>z</b>")
+
+      assert Element.inner_html(root) == "<b>z</b>"
+    end
+
+    test "raises when the element has no parent" do
+      document = DOM.new()
+      orphan = DOM.create_element(document, "div")
+
+      assert_raise DOM.NoModificationAllowedError, fn ->
+        Element.set_outer_html(orphan, "<p>x</p>")
+      end
+    end
+  end
 end
