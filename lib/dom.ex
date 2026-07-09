@@ -44,10 +44,15 @@ defmodule DOM do
   # Lifecycle
   # ==========================================================================
 
-  # Options: `:document_id` (required); optional `:parse` (a decoded token list) or
-  # `:fragment` ({tokens, context}) — the build then runs in a handle_continue on
-  # this server's own ETS table, before it serves any request.
-  defp start_link(opts) do
+  @doc """
+  Start a document server. This is the primary entry point.
+
+  Options: `:document_id` (required — the Document node's id); optional `:parse`
+  (a decoded token list) or `:fragment` (`{tokens, context}`). When a build option
+  is given, the tree is built into this server's own ETS table in a
+  `handle_continue`, in-process, before the server serves any request.
+  """
+  def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
 
@@ -91,7 +96,7 @@ defmodule DOM do
   # API
   # ==========================================================================
 
-  @spec new() :: t()
+  @spec new(String.t() | nil) :: t()
   @spec create_element(t(), String.t()) :: Node.t()
   @spec create_text_node(t(), String.t()) :: Node.t()
   @spec create_comment(t(), String.t()) :: Node.t()
@@ -124,29 +129,23 @@ defmodule DOM do
   # Implementations
   # ==========================================================================
 
-  def new do
-    document_id = make_ref()
-    {:ok, server} = start_link(document_id: document_id)
-    %Node{server: server, id: document_id, type: :document}
-  end
+  @doc """
+  Convenience over `start_link/1`: create a document and return its handle. With
+  no argument the document is empty; given an HTML string it is parsed (WHATWG
+  tree construction) into the document's table before it is returned. Prefer
+  `start_link/1` directly (e.g. under a supervisor); this wraps it and mints the
+  `%DOM.Node{type: :document}` handle.
+  """
+  def new(html \\ nil)
 
-  @doc false
-  # Start a document server that parses `tokens` into its table (via the
-  # handle_continue build), returning the document handle. Used by DOM.HTML.parse.
-  def _parse_document(tokens) do
-    document_id = make_ref()
-    {:ok, server} = start_link(document_id: document_id, parse: tokens)
-    %Node{server: server, id: document_id, type: :document}
-  end
+  def new(nil), do: new_document(document_id: make_ref())
 
-  @doc false
-  # Start a document server that parses `tokens` as a fragment in `context`,
-  # returning the synthetic html root ELEMENT handle. Used by DOM.HTML.parse_fragment.
-  def _fragment_document(tokens, context) do
-    document_id = make_ref()
-    {:ok, server} = start_link(document_id: document_id, fragment: {tokens, context})
-    root_id = GenServer.call(server, :fragment_root)
-    %Node{server: server, id: root_id, type: :element}
+  def new(html) when is_binary(html),
+    do: new_document(document_id: make_ref(), parse: DOM.HTML.tokens(html))
+
+  defp new_document(opts) do
+    {:ok, server} = start_link(opts)
+    %Node{server: server, id: Keyword.fetch!(opts, :document_id), type: :document}
   end
 
   def create_element(document, local_name) do

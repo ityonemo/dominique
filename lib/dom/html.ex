@@ -27,17 +27,17 @@ after
   """
   defdelegate tokenize(html), to: DOM.HTML.Token
 
-  @doc """
-  Parses an HTML string into a `%DOM.Node{type: :document}` tree (the WHATWG
-  tree-construction algorithm). Tokenizes, decodes references, then runs the
-  insertion-mode state machine in `DOM.HTML.TreeBuilder`.
-  """
-  def parse(html) do
-    html
-    |> tokenize()
-    |> Enum.map(&DOM.HTML.Token.decode/1)
-    |> DOM._parse_document()
+  @doc "Tokenize `html` and decode character references — the decoded token list."
+  def tokens(html) do
+    html |> tokenize() |> Enum.map(&DOM.HTML.Token.decode/1)
   end
+
+  @doc """
+  Convenience: parse an HTML string into a `%DOM.Node{type: :document}` tree.
+  Equivalent to `DOM.new(html)` — the tree is built (WHATWG tree construction)
+  into the new document's table before it is returned.
+  """
+  def parse(html), do: DOM.new(html)
 
   # RCDATA (title/textarea) and RAWTEXT (style/script/…) fragment contexts: the
   # tokenizer starts in a text state, so the whole input is one character run.
@@ -53,7 +53,10 @@ after
   def parse_fragment(html, context) do
     parsed = parse_context(context)
     tokens = fragment_tokens(html, parsed.name)
-    DOM._fragment_document(tokens, parsed)
+    document_id = make_ref()
+    {:ok, server} = DOM.start_link(document_id: document_id, fragment: {tokens, parsed})
+    root_id = GenServer.call(server, :fragment_root)
+    %DOM.Node{server: server, id: root_id, type: :element}
   end
 
   # A raw-text/RCDATA context makes the whole input one text token. RCDATA
