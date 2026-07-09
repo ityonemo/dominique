@@ -629,6 +629,20 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|         \"x\""
                ])
     end
+
+    # spec §13.2.4.2 (default scope includes select): an open <select> is a scope
+    # boundary, so a </font> whose <font> sits below the select is NOT in scope —
+    # the adoption agency is a no-op and the <select> stays nested in the <font>
+    # (rather than being reparented out of it). Both Chromium and Firefox agree.
+    test "select is a scope boundary so </font> below it is a no-op" do
+      assert tree("<font><select><option>a</option></font></select>") ==
+               doc([
+                 "|     <font>",
+                 "|       <select>",
+                 "|         <option>",
+                 "|           \"a\""
+               ])
+    end
   end
 
   describe "foreign content — §13.2.6.4.7 / §13.2.6.5 (SVG / MathML)" do

@@ -71,7 +71,11 @@ defmodule DOM.HTML.TreeBuilder do
   # "have an element in scope" default scope set (§13.2.4.2): elements that
   # terminate the upward scope search. (Foreign-content members deferred to
   # tier 5; all HTML-namespace here since we have no namespace model yet.)
-  @scope_markers ~w(applet caption html table td th marquee object template)
+  # The default "particular scope" boundary set (§13.2.4.2). `select` is included
+  # (per the customizable-select spec) — an open <select> stops scope walks, so
+  # formatting/blocks below it are not "in scope". Foreign integration points are
+  # added separately by foreign_scope_marker?/2.
+  @scope_markers ~w(applet caption html table td th marquee object select template)
 
   # "in button scope" adds "button"; "in list item scope" adds "ol"/"ul".
   @button_scope_markers ["button" | @scope_markers]
