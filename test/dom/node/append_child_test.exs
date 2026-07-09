@@ -1,10 +1,10 @@
 defmodule DOM.Node.AppendChildTest do
-  use ExUnit.Case, async: true
+  use DOM.Case, async: true
 
   alias DOM.Node
 
   test "returns the child and updates both sides of the relationship" do
-    document = DOM.new()
+    document = new_document()
     parent = DOM.create_element(document, "parent")
     child = DOM.create_element(document, "child")
 
@@ -14,7 +14,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "moving a child removes every stale relationship" do
-    document = DOM.new()
+    document = new_document()
     old_parent = DOM.create_element(document, "old-parent")
     new_parent = DOM.create_element(document, "new-parent")
     first = DOM.create_element(document, "first")
@@ -30,7 +30,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a rejected mutation leaves every relationship unchanged" do
-    document = DOM.new()
+    document = new_document()
     parent = DOM.create_element(document, "parent")
     child = DOM.create_element(document, "child")
     Node.append_child(parent, child)
@@ -46,7 +46,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a leaf node cannot acquire children" do
-    document = DOM.new()
+    document = new_document()
     text = DOM.create_text_node(document, "text")
     child = DOM.create_element(document, "child")
 
@@ -60,7 +60,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a document rejects a text child without changing either node" do
-    document = DOM.new()
+    document = new_document()
     text = DOM.create_text_node(document, "text")
 
     assert_raise DOM.HierarchyRequestError, fn ->
@@ -73,7 +73,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a comment leaf cannot acquire children" do
-    document = DOM.new()
+    document = new_document()
     comment = DOM.create_comment(document, "comment")
     child = DOM.create_element(document, "child")
 
@@ -87,7 +87,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a document type leaf cannot acquire children" do
-    document = DOM.new()
+    document = new_document()
     document_type = DOM.create_document_type(document, "html", "", "")
     child = DOM.create_element(document, "child")
 
@@ -115,7 +115,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a document rejects a second document type without changing either node" do
-    document = DOM.new()
+    document = new_document()
     first = DOM.create_document_type(document, "first", "", "")
     second = DOM.create_document_type(document, "second", "", "")
     Node.append_child(document, first)
@@ -129,7 +129,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a document rejects a document type after its element" do
-    document = DOM.new()
+    document = new_document()
     element = DOM.create_element(document, "element")
     document_type = DOM.create_document_type(document, "html", "", "")
     Node.append_child(document, element)
@@ -143,8 +143,8 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "transfers a subtree and returns its destination-owned handle" do
-    source = DOM.new()
-    destination = DOM.new()
+    source = new_document()
+    destination = new_document()
     parent = DOM.create_element(destination, "parent")
     child = DOM.create_element(source, "child")
     grandchild = DOM.create_element(source, "grandchild")
@@ -162,7 +162,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "inserts a document fragment's children and empties the fragment" do
-    document = DOM.new()
+    document = new_document()
     parent = DOM.create_element(document, "parent")
     fragment = DOM.create_document_fragment(document)
     first = DOM.create_element(document, "first")
@@ -179,7 +179,7 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "a document rejects fragment contents that cannot be its children" do
-    document = DOM.new()
+    document = new_document()
     text_fragment = DOM.create_document_fragment(document)
     text = DOM.create_text_node(document, "text")
     Node.append_child(text_fragment, text)
@@ -209,8 +209,8 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "transfers and splices a document fragment across DOM servers" do
-    source = DOM.new()
-    destination = DOM.new()
+    source = new_document()
+    destination = new_document()
     parent = DOM.create_element(destination, "parent")
     fragment = DOM.create_document_fragment(source)
     first = DOM.create_element(source, "first")
@@ -233,8 +233,8 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "validates an exported fragment before transferring it to a document" do
-    source = DOM.new()
-    destination = DOM.new()
+    source = new_document()
+    destination = new_document()
     fragment = DOM.create_document_fragment(source)
     element = DOM.create_element(source, "element")
     Node.append_child(fragment, element)

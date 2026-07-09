@@ -1,11 +1,11 @@
 defmodule DOM.Node.CloneNodeTest do
-  use ExUnit.Case, async: true
+  use DOM.Case, async: true
 
   alias DOM.Element
   alias DOM.Node
 
   test "clones an element as a fresh detached handle preserving its name" do
-    document = DOM.new()
+    document = new_document()
     original = DOM.create_element(document, "widget")
 
     clone = Node.clone_node(original)
@@ -17,7 +17,7 @@ defmodule DOM.Node.CloneNodeTest do
   end
 
   test "clones character-data value" do
-    document = DOM.new()
+    document = new_document()
     text = DOM.create_text_node(document, "hello")
     comment = DOM.create_comment(document, "note")
 
@@ -26,7 +26,7 @@ defmodule DOM.Node.CloneNodeTest do
   end
 
   test "a shallow clone omits children" do
-    document = DOM.new()
+    document = new_document()
     parent = DOM.create_element(document, "parent")
     Node.append_child(parent, DOM.create_element(document, "child"))
 
@@ -36,7 +36,7 @@ defmodule DOM.Node.CloneNodeTest do
   end
 
   test "a deep clone copies the whole subtree independently" do
-    document = DOM.new()
+    document = new_document()
     parent = DOM.create_element(document, "parent")
     child = DOM.create_element(document, "child")
     Node.append_child(parent, child)
@@ -55,7 +55,7 @@ defmodule DOM.Node.CloneNodeTest do
   end
 
   test "clones a document type's identity" do
-    document = DOM.new()
+    document = new_document()
     doctype = DOM.create_document_type(document, "html", "pub", "sys")
 
     clone = Node.clone_node(doctype)

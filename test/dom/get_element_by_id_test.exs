@@ -1,11 +1,11 @@
 defmodule DOM.GetElementByIdTest do
-  use ExUnit.Case, async: true
+  use DOM.Case, async: true
 
   alias DOM.Element
   alias DOM.Node
 
   setup do
-    document = DOM.new()
+    document = new_document()
     root = DOM.create_element(document, "root")
     Node.append_child(document, root)
     %{document: document, root: root}
