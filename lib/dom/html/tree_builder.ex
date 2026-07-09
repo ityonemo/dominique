@@ -1777,8 +1777,13 @@ defmodule DOM.HTML.TreeBuilder do
     reprocess(:in_body, token, %{state | mode: :in_body})
   end
 
-  # Not-yet-implemented modes: ignore (later tiers add clauses above this).
-  defp process(_mode, _token, state), do: state
+  # Every insertion mode has explicit handling above (including per-mode "anything
+  # else → ignore" clauses). A token reaching here means an unknown/typo'd mode or
+  # a genuinely unhandled (mode, token) combination — a bug, not a recoverable
+  # parse error — so fail loudly rather than silently drop the token.
+  defp process(mode, token, _state) do
+    raise "unhandled insertion mode #{inspect(mode)} for token #{inspect(token)}"
+  end
 
   # ==========================================================================
   # Character-token handling per mode (whitespace vs. the rest)
@@ -1889,7 +1894,10 @@ defmodule DOM.HTML.TreeBuilder do
     if ws != "", do: insert_characters(ws, state), else: state
   end
 
-  defp process_characters(_mode, _token, state), do: state
+  # A character token in a mode with no character clause is a bug (see process/3).
+  defp process_characters(mode, token, _state) do
+    raise "unhandled character token in insertion mode #{inspect(mode)}: #{inspect(token)}"
+  end
 
   # ==========================================================================
   # Tree-construction algorithms (spec-named)
