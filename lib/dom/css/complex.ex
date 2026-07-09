@@ -17,24 +17,24 @@ defmodule DOM.CSS.Complex do
   # Right-to-left: the last compound is the subject; candidates that match it are
   # kept only when the leftward combinator chain is satisfiable from that node.
   @impl DOM.CSS
-  def match(%{parts: parts}, nodes, candidate_ids) do
+  def match(%{parts: parts}, context, candidate_ids) do
     [subject | leftward] = Enum.reverse(parts)
 
     subject
-    |> DOM.CSS.match(nodes, candidate_ids)
-    |> Enum.filter(&chain?(leftward, &1, nodes))
+    |> DOM.CSS.match(context, candidate_ids)
+    |> Enum.filter(&chain?(leftward, &1, context))
   end
 
   # leftward is [combinator, compound, combinator, compound, ...] read right to
   # left. For each pair, the node must have a related node (per combinator) that
   # the compound matches and from which the remaining chain also holds.
-  defp chain?([], _node_id, _nodes), do: true
+  defp chain?([], _node_id, _context), do: true
 
-  defp chain?([combinator, compound | rest], node_id, nodes) do
+  defp chain?([combinator, compound | rest], node_id, %{nodes: nodes} = context) do
     nodes
     |> related(combinator, node_id)
     |> Enum.any?(fn related_id ->
-      DOM.CSS.match(compound, nodes, [related_id]) != [] and chain?(rest, related_id, nodes)
+      DOM.CSS.match(compound, context, [related_id]) != [] and chain?(rest, related_id, context)
     end)
   end
 

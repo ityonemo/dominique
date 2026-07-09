@@ -21,7 +21,7 @@ defmodule DOM.CSS.Attribute do
         }
 
   @impl DOM.CSS
-  def match(%{name: name, op: op, value: value, flag: flag}, nodes, candidate_ids) do
+  def match(%{name: name, op: op, value: value, flag: flag}, %{nodes: nodes}, candidate_ids) do
     Query.attribute(nodes, candidate_ids, name, op, value, flag)
   end
 

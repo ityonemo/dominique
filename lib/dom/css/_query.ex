@@ -10,6 +10,7 @@ defmodule DOM.CSS.Query do
   use MatchSpec
 
   alias DOM.NodeData
+  alias DOM.NodeData.Table
 
   @doc "Element ids in `candidates` whose local name is `name`."
   @spec type(:ets.tid(), [reference()], String.t()) :: [reference()]
@@ -23,10 +24,13 @@ defmodule DOM.CSS.Query do
     nodes |> select(element_spec()) |> intersect(candidates)
   end
 
-  @doc "Element ids in `candidates` carrying an `id` attribute equal to `id`."
+  @doc """
+  Element ids in `candidates` carrying `id` — read from the id index (a bounded
+  prefix scan of the `:ordered_set`), then intersected with the candidate scope.
+  """
   @spec id(:ets.tid(), [reference()], String.t()) :: [reference()]
-  def id(nodes, candidates, id) do
-    attribute(nodes, candidates, "id", :eq, id, nil)
+  def id(index, candidates, id) do
+    index |> Table.index_lookup(:id, id) |> intersect(candidates)
   end
 
   @doc "Element ids in `candidates` whose `class` attribute contains `token`."
@@ -175,11 +179,12 @@ defmodule DOM.CSS.Query do
   @doc """
   Whether any relative complex in `list` matches with `scope_id` as `:scope`.
   Each relative complex leads with a combinator (default `:descendant`) that
-  bounds where matching may start relative to `scope_id`.
+  bounds where matching may start relative to `scope_id`. Takes the full match
+  `context` because it recurses through `DOM.CSS.match/3`.
   """
-  @spec has?([DOM.CSS.complex()], :ets.tid(), reference()) :: boolean()
-  def has?(list, nodes, scope_id) do
-    Enum.any?(list, &relative_match?(&1, nodes, scope_id))
+  @spec has?([DOM.CSS.complex()], DOM.CSS.context(), reference()) :: boolean()
+  def has?(list, context, scope_id) do
+    Enum.any?(list, &relative_match?(&1, context, scope_id))
   end
 
   # Descendant ids of `node_id` in document order (all types; matching filters
@@ -200,16 +205,20 @@ defmodule DOM.CSS.Query do
 
   # A relative complex (from :has): split off the leading combinator, compute the
   # scope set relative to scope_id, then match the remaining complex over it.
-  defp relative_match?(%DOM.CSS.Complex{parts: [combinator | rest]}, nodes, scope_id)
+  defp relative_match?(
+         %DOM.CSS.Complex{parts: [combinator | rest]},
+         %{nodes: nodes} = context,
+         scope_id
+       )
        when is_atom(combinator) do
     scope = relative_scope(nodes, combinator, scope_id)
-    remainder_matches?(rest, nodes, scope)
+    remainder_matches?(rest, context, scope)
   end
 
   # No leading combinator: an implicit descendant relative selector.
-  defp relative_match?(compound_or_complex, nodes, scope_id) do
+  defp relative_match?(compound_or_complex, %{nodes: nodes} = context, scope_id) do
     scope = relative_scope(nodes, :descendant, scope_id)
-    remainder_matches?([compound_or_complex], nodes, scope)
+    remainder_matches?([compound_or_complex], context, scope)
   end
 
   defp relative_scope(nodes, :child, scope_id), do: element_children(nodes, scope_id)
@@ -237,12 +246,12 @@ defmodule DOM.CSS.Query do
   end
 
   # `rest` is [compound (comb compound)*] to match over `scope`.
-  defp remainder_matches?([compound], nodes, scope) do
-    DOM.CSS.match(compound, nodes, scope) != []
+  defp remainder_matches?([compound], context, scope) do
+    DOM.CSS.match(compound, context, scope) != []
   end
 
-  defp remainder_matches?(parts, nodes, scope) do
-    DOM.CSS.match(%DOM.CSS.Complex{parts: parts}, nodes, scope) != []
+  defp remainder_matches?(parts, context, scope) do
+    DOM.CSS.match(%DOM.CSS.Complex{parts: parts}, context, scope) != []
   end
 
   # ==========================================================================

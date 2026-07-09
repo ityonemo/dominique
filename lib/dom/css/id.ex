@@ -12,8 +12,8 @@ defmodule DOM.CSS.Id do
   @type t :: %__MODULE__{name: String.t()}
 
   @impl DOM.CSS
-  def match(%{name: name}, nodes, candidate_ids) do
-    Query.id(nodes, candidate_ids, name)
+  def match(%{name: name}, %{index: index}, candidate_ids) do
+    Query.id(index, candidate_ids, name)
   end
 
   defimpl String.Chars do

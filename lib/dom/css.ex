@@ -40,11 +40,18 @@ defprotocol DOM.CSS do
   @type complex :: DOM.CSS.Compound.t() | DOM.CSS.Complex.t()
   @type t :: [complex()]
 
-  @doc """
-  Matches this selector against `nodes` (an ETS table of `DOM.NodeData`),
-  reducing `candidate_ids` to the ids that match. Not yet implemented.
+  @typedoc """
+  The tables a match runs against: `nodes` (the `DOM.NodeData` ETS table) and
+  `index` (the id/class `:ordered_set` index). Threaded through `match/3` so leaf
+  matchers can reach either — most only need `nodes`; `#id`/`.class` read `index`.
   """
-  def match(selector, nodes, candidate_ids)
+  @type context :: %{nodes: :ets.tid(), index: :ets.tid()}
+
+  @doc """
+  Matches this selector against `context` (see `t:context/0`), reducing
+  `candidate_ids` to the ids that match.
+  """
+  def match(selector, context, candidate_ids)
 after
   @doc """
   Parses a CSS selector string into its struct AST.

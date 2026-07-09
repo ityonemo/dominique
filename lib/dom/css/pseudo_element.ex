@@ -12,7 +12,7 @@ defmodule DOM.CSS.PseudoElement do
 
   # A pseudo-element never matches an element node.
   @impl DOM.CSS
-  def match(_selector, _nodes, _candidate_ids), do: []
+  def match(_selector, _context, _candidate_ids), do: []
 
   defimpl String.Chars do
     def to_string(%{name: name}), do: "::" <> Serialize.escape_ident(name)

@@ -954,12 +954,16 @@ defmodule DOM do
   # In a `matches` context the node itself is the scoping root for `:scope`.
   defp matches_impl(node_id, selector, _from, state) do
     scoped = DOM.CSS.bind_scope(selector, node_id)
+    context = css_context(state)
 
     matched =
-      Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, state.nodes, [node_id]) != [] end)
+      Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, [node_id]) != [] end)
 
     {:reply, matched, state}
   end
+
+  # The tables a CSS match runs against (see DOM.CSS.context/0).
+  defp css_context(state), do: %{nodes: state.nodes, index: state.index}
 
   # Descendant element ids of `root_id` matching `selector`, in tree order. Each
   # complex in the selector list contributes its matches; the union is ordered by
@@ -972,10 +976,11 @@ defmodule DOM do
   defp query_ids(root_id, selector, state) do
     scoped = DOM.CSS.bind_scope(selector, root_id)
     candidates = descendant_ids(state.nodes, root_id)
+    context = css_context(state)
 
     matched =
       scoped
-      |> Enum.flat_map(fn complex -> DOM.CSS.match(complex, state.nodes, candidates) end)
+      |> Enum.flat_map(fn complex -> DOM.CSS.match(complex, context, candidates) end)
       |> MapSet.new()
 
     Enum.filter(candidates, &MapSet.member?(matched, &1))

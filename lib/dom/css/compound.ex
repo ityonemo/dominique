@@ -8,9 +8,9 @@ defmodule DOM.CSS.Compound do
   @type t :: %__MODULE__{simples: [DOM.CSS.simple()]}
 
   @impl DOM.CSS
-  def match(%{simples: simples}, nodes, candidate_ids) do
+  def match(%{simples: simples}, context, candidate_ids) do
     Enum.reduce(simples, candidate_ids, fn simple, candidates ->
-      DOM.CSS.match(simple, nodes, candidates)
+      DOM.CSS.match(simple, context, candidates)
     end)
   end
 

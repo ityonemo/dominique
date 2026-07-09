@@ -19,6 +19,7 @@ defmodule CSSTable do
   """
 
   alias DOM.NodeData
+  alias DOM.NodeData.Table
 
   @doc """
   Describes an element node. `attributes` is a list of `{name, value}` tuples.
@@ -41,15 +42,19 @@ defmodule CSSTable do
   end
 
   @doc """
-  Materializes a described tree into a fresh ETS table.
+  Materializes a described tree into a fresh node table plus a populated id/class
+  index, the shape `DOM.CSS.match/3` expects.
 
-  Returns `{table, ids}`. `ids` maps each labelled element's label (and every
-  element's 0-based document-order index) to its node id.
+  Returns `{context, ids}` where `context` is `%{nodes: tid, index: tid}` and
+  `ids` maps each labelled element's label (and every element's 0-based
+  document-order index) to its node id.
   """
   def build(root) do
     table = :ets.new(:css_table, [:set, :public])
+    index = :ets.new(:css_index, [:ordered_set, :public])
     {_next, ids} = insert(table, root, nil, 0, %{})
-    {table, ids}
+    Table.reindex(table, index)
+    {%{nodes: table, index: index}, ids}
   end
 
   # Inserts a node under `parent_id`; returns {next_index, ids}.

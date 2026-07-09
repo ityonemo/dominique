@@ -28,74 +28,76 @@ defmodule DOM.CSS.PseudoClass do
   @type t :: %__MODULE__{name: String.t(), arg: arg()}
 
   @impl DOM.CSS
-  # Logical pseudo-classes (dispatch on arg).
-  def match(%{name: "not", arg: {:selector_list, list}}, nodes, candidates) do
-    matched = match_list(list, nodes, candidates)
+  # Logical pseudo-classes (dispatch on arg). These recurse through DOM.CSS.match,
+  # so they forward the whole `context`; the structural ones below only navigate
+  # the tree and so destructure `%{nodes: nodes}`.
+  def match(%{name: "not", arg: {:selector_list, list}}, context, candidates) do
+    matched = match_list(list, context, candidates)
     candidates -- matched
   end
 
-  def match(%{name: name, arg: {:selector_list, list}}, nodes, candidates)
+  def match(%{name: name, arg: {:selector_list, list}}, context, candidates)
       when name in ["is", "where"] do
-    match_list(list, nodes, candidates)
+    match_list(list, context, candidates)
   end
 
-  def match(%{name: "has", arg: {:selector_list, list}}, nodes, candidates) do
-    Enum.filter(candidates, &Query.has?(list, nodes, &1))
+  def match(%{name: "has", arg: {:selector_list, list}}, context, candidates) do
+    Enum.filter(candidates, &Query.has?(list, context, &1))
   end
 
   # Structural pseudo-classes (dispatch on name).
-  def match(%{name: "root"}, nodes, candidates) do
+  def match(%{name: "root"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &Query.root?(nodes, &1))
   end
 
-  def match(%{name: "empty"}, nodes, candidates) do
+  def match(%{name: "empty"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &Query.empty?(nodes, &1))
   end
 
-  def match(%{name: "first-child"}, nodes, candidates),
+  def match(%{name: "first-child"}, %{nodes: nodes}, candidates),
     do: nth(nodes, candidates, {0, 1}, :forward)
 
-  def match(%{name: "last-child"}, nodes, candidates),
+  def match(%{name: "last-child"}, %{nodes: nodes}, candidates),
     do: nth(nodes, candidates, {0, 1}, :backward)
 
-  def match(%{name: "only-child"}, nodes, candidates) do
+  def match(%{name: "only-child"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &(Query.element_siblings(nodes, &1) == [&1]))
   end
 
-  def match(%{name: "nth-child", arg: {a, b}}, nodes, candidates)
+  def match(%{name: "nth-child", arg: {a, b}}, %{nodes: nodes}, candidates)
       when is_integer(a) and is_integer(b) do
     nth(nodes, candidates, {a, b}, :forward)
   end
 
-  def match(%{name: "nth-last-child", arg: {a, b}}, nodes, candidates)
+  def match(%{name: "nth-last-child", arg: {a, b}}, %{nodes: nodes}, candidates)
       when is_integer(a) and is_integer(b) do
     nth(nodes, candidates, {a, b}, :backward)
   end
 
-  def match(%{name: name, arg: {a, b, list}}, nodes, candidates)
+  def match(%{name: name, arg: {a, b, list}}, context, candidates)
       when name in ["nth-child", "nth-last-child"] and is_integer(a) and is_integer(b) do
     direction = if name == "nth-last-child", do: :backward, else: :forward
-    nth_of(nodes, candidates, {a, b}, list, direction)
+    nth_of(context, candidates, {a, b}, list, direction)
   end
 
   # of-type pseudo-classes: like the child variants but counting only siblings of
   # the SAME element type (same local_name + namespace).
-  def match(%{name: "first-of-type"}, nodes, candidates),
+  def match(%{name: "first-of-type"}, %{nodes: nodes}, candidates),
     do: nth_type(nodes, candidates, {0, 1}, :forward)
 
-  def match(%{name: "last-of-type"}, nodes, candidates),
+  def match(%{name: "last-of-type"}, %{nodes: nodes}, candidates),
     do: nth_type(nodes, candidates, {0, 1}, :backward)
 
-  def match(%{name: "only-of-type"}, nodes, candidates) do
+  def match(%{name: "only-of-type"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &(Query.same_type_siblings(nodes, &1) == [&1]))
   end
 
-  def match(%{name: "nth-of-type", arg: {a, b}}, nodes, candidates)
+  def match(%{name: "nth-of-type", arg: {a, b}}, %{nodes: nodes}, candidates)
       when is_integer(a) and is_integer(b) do
     nth_type(nodes, candidates, {a, b}, :forward)
   end
 
-  def match(%{name: "nth-last-of-type", arg: {a, b}}, nodes, candidates)
+  def match(%{name: "nth-last-of-type", arg: {a, b}}, %{nodes: nodes}, candidates)
       when is_integer(a) and is_integer(b) do
     nth_type(nodes, candidates, {a, b}, :backward)
   end
@@ -103,14 +105,14 @@ defmodule DOM.CSS.PseudoClass do
   # :scope — the scoping root of the query. `query_ids`/`matches` bind the
   # concrete root id into the arg before matching (DOM.CSS.bind_scope/2); an
   # unbound :scope (arg nil) has no root and matches nothing.
-  def match(%{name: "scope", arg: {:scope, scope_id}}, _nodes, candidates) do
+  def match(%{name: "scope", arg: {:scope, scope_id}}, _context, candidates) do
     Enum.filter(candidates, &(&1 == scope_id))
   end
 
   # :lang(A, B, …) — the element's inherited `lang` (nearest ancestor-or-self
   # bearing one) matches one of the args by the `|=` rule: equal, or a prefix
   # followed by "-", case-insensitively (BCP-47 subtags).
-  def match(%{name: "lang", arg: {:args, langs}}, nodes, candidates) do
+  def match(%{name: "lang", arg: {:args, langs}}, %{nodes: nodes}, candidates) do
     wanted = Enum.map(langs, &String.downcase/1)
 
     nodes
@@ -126,7 +128,7 @@ defmodule DOM.CSS.PseudoClass do
   # :dir(ltr|rtl) — the element's inherited `dir` attribute equals the keyword.
   # :dir(auto) needs bidi resolution of the element's text, which NodeData does
   # not model, so it matches nothing (falls through to the catch-all).
-  def match(%{name: "dir", arg: {:args, [dir]}}, nodes, candidates)
+  def match(%{name: "dir", arg: {:args, [dir]}}, %{nodes: nodes}, candidates)
       when dir in ["ltr", "rtl"] do
     nodes
     |> Query.elements(candidates)
@@ -139,7 +141,7 @@ defmodule DOM.CSS.PseudoClass do
   # Anything else (UI/state pseudo-classes, :dir(auto), unknowns) matches
   # nothing — mirrors the browser, where e.g. :hover yields no elements in a
   # static querySelector rather than erroring.
-  def match(_selector, _nodes, _candidates), do: []
+  def match(_selector, _context, _candidates), do: []
 
   # An+B position test among element siblings, counting from the start
   # (:forward) or end (:backward).
@@ -164,10 +166,10 @@ defmodule DOM.CSS.PseudoClass do
   end
 
   # :nth-*(An+B of S) — index among siblings that also match the selector list S.
-  defp nth_of(nodes, candidates, {a, b}, list, direction) do
+  defp nth_of(%{nodes: nodes} = context, candidates, {a, b}, list, direction) do
     Enum.filter(candidates, fn id ->
       siblings = Query.element_siblings(nodes, id)
-      matching = match_list(list, nodes, siblings)
+      matching = match_list(list, context, siblings)
       matching = Enum.filter(siblings, &(&1 in matching))
       matching = if direction == :backward, do: Enum.reverse(matching), else: matching
       index = Enum.find_index(matching, &(&1 == id))
@@ -185,9 +187,9 @@ defmodule DOM.CSS.PseudoClass do
   defp anb?(position, 0, b), do: position == b
   defp anb?(position, a, b), do: rem(position - b, a) == 0 and div(position - b, a) >= 0
 
-  defp match_list(list, nodes, candidates) do
+  defp match_list(list, context, candidates) do
     list
-    |> Enum.flat_map(&DOM.CSS.match(&1, nodes, candidates))
+    |> Enum.flat_map(&DOM.CSS.match(&1, context, candidates))
     |> Enum.uniq()
   end
 
