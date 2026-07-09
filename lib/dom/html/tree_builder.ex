@@ -2193,6 +2193,12 @@ defmodule DOM.HTML.TreeBuilder do
   defp has_in_scope?(state, name, markers),
     do: in_scope?(state, state.open_elements, name, markers)
 
+  # The MathML/SVG integration points are scope terminators ONLY for the
+  # default-family scopes (default / button / list-item), NOT for "table scope"
+  # (html/table/template only) or "select scope". Detect the default family by the
+  # presence of the always-present default markers.
+  defp foreign_terminates?(markers), do: "applet" in markers
+
   defp in_scope?(state, [el | rest], name, markers) do
     html? = namespace_of(state, el) == :html
     node_name = Node.node_name(el)
@@ -2200,7 +2206,7 @@ defmodule DOM.HTML.TreeBuilder do
     cond do
       html? and node_name == name -> true
       html? and node_name in markers -> false
-      not html? and foreign_scope_marker?(state, el) -> false
+      not html? and foreign_terminates?(markers) and foreign_scope_marker?(state, el) -> false
       :else -> in_scope?(state, rest, name, markers)
     end
   end

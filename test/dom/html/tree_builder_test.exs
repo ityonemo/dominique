@@ -511,6 +511,25 @@ defmodule DOM.HTML.TreeBuilderTest do
   end
 
   describe "in cell — §13.2.6.4.15" do
+    # spec §13.2.4.2: the MathML/SVG integration points terminate the DEFAULT
+    # scope, but NOT "table scope" (html/table/template only). So inside
+    # <td><svg><desc>, a <td> is HTML content (desc is an integration point) whose
+    # in-cell handling still finds the outer <td> in table scope — the cell closes
+    # and a new one opens, rather than the <td> being swallowed by the foreign
+    # subtree. (Both Chromium and Firefox agree.)
+    test "a td inside a foreign integration point still closes the cell" do
+      assert tree("<table><tr><td><svg><desc><td>") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             <svg svg>",
+                 "|               <svg desc>",
+                 "|           <td>"
+               ])
+    end
+
     # spec §13.2.6.4.15: "An end tag whose tag name is one of td/th" — generate
     # implied end tags, pop through the cell, switch to "in row".
     test "an end td returns to in row" do
