@@ -10,7 +10,7 @@ defmodule DOM.Node.CloneNodeTest do
 
     clone = Node.clone_node(original)
 
-    refute clone.id == original.id
+    refute clone.node_id == original.node_id
     assert clone.server == original.server
     assert Element.local_name(clone) == "widget"
     refute Node.parent_node(clone)
@@ -46,7 +46,7 @@ defmodule DOM.Node.CloneNodeTest do
 
     [cloned_child] = Node.child_nodes(clone)
     assert Element.local_name(cloned_child) == "child"
-    refute cloned_child.id == child.id
+    refute cloned_child.node_id == child.node_id
     assert Node.text_content(clone) == "leaf"
 
     # mutating the clone does not touch the original
@@ -61,6 +61,6 @@ defmodule DOM.Node.CloneNodeTest do
     clone = Node.clone_node(doctype)
 
     assert Node.node_name(clone) == "html"
-    refute clone.id == doctype.id
+    refute clone.node_id == doctype.node_id
   end
 end

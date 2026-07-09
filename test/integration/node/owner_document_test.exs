@@ -28,8 +28,8 @@ defmodule Integration.Node.OwnerDocumentTest do
       text = DOM.create_text_node(document, "text")
 
       result = %{
-        "elementOwnsDocument" => Node.owner_document(element).id == document.id,
-        "textOwnsDocument" => Node.owner_document(text).id == document.id,
+        "elementOwnsDocument" => Node.owner_document(element).node_id == document.node_id,
+        "textOwnsDocument" => Node.owner_document(text).node_id == document.node_id,
         "documentOwner" => Node.owner_document(document)
       }
 

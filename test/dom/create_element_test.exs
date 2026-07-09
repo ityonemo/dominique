@@ -10,14 +10,14 @@ defmodule DOM.CreateElementTest do
 
     assert first.server == document.server
     assert second.server == document.server
-    refute first.id == document.id
-    refute first.id == second.id
+    refute first.node_id == document.node_id
+    refute first.node_id == second.node_id
     refute Node.parent_node(first)
     assert Node.child_nodes(first) == []
   end
 
   test "rejects creation from a non-document node" do
-    element = %DOM.Node{type: :element, server: self(), id: make_ref()}
+    element = %DOM.Node{type: :element, server: self(), node_id: make_ref()}
 
     assert_raise DOM.HierarchyRequestError, fn ->
       DOM.create_element(element, "child")

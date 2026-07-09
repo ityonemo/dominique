@@ -10,7 +10,7 @@ defmodule DOM.CreateDocumentTypeTest do
 
     assert first.server == document.server
     assert second.server == document.server
-    refute first.id == second.id
+    refute first.node_id == second.node_id
     refute Node.parent_node(first)
     assert Node.child_nodes(first) == []
   end

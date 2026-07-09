@@ -100,11 +100,11 @@ defmodule DOM.Node.AppendChildTest do
   end
 
   test "type-invalid insertions reject without consulting document state" do
-    document = %DOM.Node{type: :document, server: self(), id: make_ref()}
-    element = %DOM.Node{type: :element, server: self(), id: make_ref()}
-    text = %DOM.Node{type: :text, server: self(), id: make_ref()}
-    comment = %DOM.Node{type: :comment, server: self(), id: make_ref()}
-    document_type = %DOM.Node{type: :document_type, server: self(), id: make_ref()}
+    document = %DOM.Node{type: :document, server: self(), node_id: make_ref()}
+    element = %DOM.Node{type: :element, server: self(), node_id: make_ref()}
+    text = %DOM.Node{type: :text, server: self(), node_id: make_ref()}
+    comment = %DOM.Node{type: :comment, server: self(), node_id: make_ref()}
+    document_type = %DOM.Node{type: :document_type, server: self(), node_id: make_ref()}
 
     assert_raise DOM.HierarchyRequestError, fn -> Node.append_child(text, element) end
     assert_raise DOM.HierarchyRequestError, fn -> Node.append_child(comment, element) end
@@ -154,7 +154,7 @@ defmodule DOM.Node.AppendChildTest do
     [transferred_grandchild] = Node.child_nodes(transferred_child)
 
     assert transferred_child.server == destination.server
-    assert transferred_child.id == child.id
+    assert transferred_child.node_id == child.node_id
     assert transferred_grandchild.server == destination.server
     assert Node.child_nodes(parent) == [transferred_child]
     assert Node.parent_node(transferred_child) == parent
@@ -222,9 +222,14 @@ defmodule DOM.Node.AppendChildTest do
     [transferred_first, transferred_second] = Node.child_nodes(parent)
 
     assert transferred_fragment.server == destination.server
-    assert transferred_fragment.id == fragment.id
+    assert transferred_fragment.node_id == fragment.node_id
     assert Node.child_nodes(transferred_fragment) == []
-    assert Enum.map([transferred_first, transferred_second], & &1.id) == [first.id, second.id]
+
+    assert Enum.map([transferred_first, transferred_second], & &1.node_id) == [
+             first.node_id,
+             second.node_id
+           ]
+
     assert transferred_first.server == destination.server
     assert transferred_second.server == destination.server
     assert Node.parent_node(transferred_first) == parent
@@ -242,7 +247,7 @@ defmodule DOM.Node.AppendChildTest do
     transferred_fragment = Node.append_child(destination, fragment)
     [transferred_element] = Node.child_nodes(destination)
 
-    assert transferred_element.id == element.id
+    assert transferred_element.node_id == element.node_id
     assert transferred_element.server == destination.server
     assert Node.child_nodes(transferred_fragment) == []
 

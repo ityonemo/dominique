@@ -46,7 +46,7 @@ defmodule DOM.Case do
     {:ok, server} = GenServer.start(DOM, opts)
     ExUnit.Callbacks.on_exit(fn -> assert_consistent_and_stop(server) end)
 
-    %DOM.Node{server: server, id: document_id, type: :document}
+    %DOM.Node{server: server, node_id: document_id, type: :document}
   end
 
   defp assert_consistent_and_stop(server) do

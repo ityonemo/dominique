@@ -688,7 +688,7 @@ defmodule Integration.Node.AppendChildTest do
       children = Node.child_nodes(parent)
 
       result = %{
-        "returnedFragment" => appended.id == fragment.id,
+        "returnedFragment" => appended.node_id == fragment.node_id,
         "parentChildren" => Enum.map(children, &Element.local_name/1),
         "fragmentChildCount" => appended |> Node.child_nodes() |> length(),
         "childrenBelongToDestination" => Enum.map(children, &(&1.server == destination.server))
@@ -727,7 +727,7 @@ defmodule Integration.Node.AppendChildTest do
       [transferred_element] = Node.child_nodes(destination)
 
       result = %{
-        "returnedFragment" => appended.id == fragment.id,
+        "returnedFragment" => appended.node_id == fragment.node_id,
         "documentElementName" => Element.local_name(transferred_element),
         "fragmentChildCount" => appended |> Node.child_nodes() |> length(),
         "elementBelongsToDestination" => transferred_element.server == destination.server

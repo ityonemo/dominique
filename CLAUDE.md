@@ -2,7 +2,7 @@
 
 An Elixir implementation of the browser **DOM**. A DOM is a `GenServer` owning a
 private ETS table of per-type `DOM.NodeData.*` records. A node **handle** is the
-single struct `%DOM.Node{server, id, type}` — an immutable reference into that
+single struct `%DOM.Node{server, node_id, type}` — an immutable reference into that
 server (server pid, node id, and node-kind atom `:element | :text | :comment |
 :document | :document_fragment | :document_type`), not a live object.
 
@@ -12,7 +12,7 @@ the handle returned by `DOM.Node.append_child/2` after a cross-document transfer
 
 ## Two struct layers — handle vs storage
 
-- **`DOM.Node` is the ONE user-facing handle struct** (`%{server, id, type}`).
+- **`DOM.Node` is the ONE user-facing handle struct** (`%{server, node_id, type}`).
   Never a protocol; operations are `type`-guarded function clauses. Never expose
   a `NodeData` record to callers.
 - **`DOM.NodeData` is a Protoss protocol** implemented by the six per-type

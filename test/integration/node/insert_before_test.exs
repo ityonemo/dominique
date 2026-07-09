@@ -151,7 +151,7 @@ defmodule Integration.Node.InsertBeforeTest do
       [inserted_first | _] = Node.child_nodes(parent)
 
       result = %{
-        "returnedFragment" => returned.id == fragment.id,
+        "returnedFragment" => returned.node_id == fragment.node_id,
         "parentChildren" => parent |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
         "fragmentChildCount" => fragment |> Node.child_nodes() |> length(),
         "firstParent" => inserted_first |> Node.parent_node() |> Element.local_name()
@@ -367,7 +367,8 @@ defmodule Integration.Node.InsertBeforeTest do
       [inserted_doctype, inserted_element] = Node.child_nodes(document)
 
       result = %{
-        "returnedIsDoctype" => returned.id == doctype.id and inserted_doctype.id == doctype.id,
+        "returnedIsDoctype" =>
+          returned.node_id == doctype.node_id and inserted_doctype.node_id == doctype.node_id,
         "childCount" => document |> Node.child_nodes() |> length(),
         "elementLocalName" => Element.local_name(inserted_element)
       }

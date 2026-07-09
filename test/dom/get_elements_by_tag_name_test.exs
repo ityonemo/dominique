@@ -21,7 +21,7 @@ defmodule DOM.GetElementsByTagNameTest do
   test "returns matching descendants of the document in tree order", ctx do
     matches = DOM.get_elements_by_tag_name(ctx.document, "a")
 
-    assert Enum.map(matches, & &1.id) == [ctx.a1.id, ctx.a2.id]
+    assert Enum.map(matches, & &1.node_id) == [ctx.a1.node_id, ctx.a2.node_id]
   end
 
   test "'*' returns every descendant element in tree order", ctx do
@@ -37,7 +37,7 @@ defmodule DOM.GetElementsByTagNameTest do
   test "scopes the search to an element's descendants, excluding itself", ctx do
     matches = DOM.get_elements_by_tag_name(ctx.b, "a")
 
-    assert Enum.map(matches, & &1.id) == [ctx.a2.id]
+    assert Enum.map(matches, & &1.node_id) == [ctx.a2.node_id]
     assert DOM.get_elements_by_tag_name(ctx.b, "b") == []
   end
 end

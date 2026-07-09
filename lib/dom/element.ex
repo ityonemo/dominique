@@ -16,7 +16,7 @@ defmodule DOM.Element do
   @doc "The element's local name, or `nil` for a non-element node."
   @spec local_name(Node.t()) :: String.t() | nil
   def local_name(%Node{type: :element} = element) do
-    [local_name] = DOM._select(element.server, local_name_spec(element.id))
+    [local_name] = DOM._select(element.server, local_name_spec(element.node_id))
     local_name
   end
 
@@ -29,7 +29,7 @@ defmodule DOM.Element do
   @doc "The element's namespace (`:html | :svg | :mathml`), or `nil` for a non-element."
   @spec namespace(Node.t()) :: DOM.NodeData.Element.namespace() | nil
   def namespace(%Node{type: :element} = element) do
-    [namespace] = DOM._select(element.server, namespace_spec(element.id))
+    [namespace] = DOM._select(element.server, namespace_spec(element.node_id))
     namespace
   end
 
@@ -79,13 +79,13 @@ defmodule DOM.Element do
 
   # The element's raw attribute list, read straight from the record.
   defp attributes(%Node{} = element) do
-    [attributes] = DOM._select(element.server, attributes_spec(element.id))
+    [attributes] = DOM._select(element.server, attributes_spec(element.node_id))
     attributes
   end
 
   # Atomically reads the record, applies `fun` to its attribute list, and writes
   # the updated record back — a single server hop so no operation interleaves.
-  defp update_attributes(%Node{id: node_id} = element, fun) do
+  defp update_attributes(%Node{node_id: node_id} = element, fun) do
     DOM._atomic_ets_op(element.server, fn nodes, index ->
       [{^node_id, record}] = :ets.lookup(nodes, node_id)
       updated = %{record | attributes: fun.(record.attributes)}
@@ -102,7 +102,7 @@ defmodule DOM.Element do
   @doc "The element's serialized descendants (its `innerHTML`)."
   @spec inner_html(Node.t()) :: String.t()
   def inner_html(%Node{type: :element} = element) do
-    DOM._element_inner_html(element.server, element.id)
+    DOM._element_inner_html(element.server, element.node_id)
   end
 
   @doc """
@@ -111,13 +111,13 @@ defmodule DOM.Element do
   """
   @spec set_inner_html(Node.t(), String.t()) :: :ok
   def set_inner_html(%Node{type: :element} = element, html) do
-    DOM._element_set_inner_html(element.server, element.id, html)
+    DOM._element_set_inner_html(element.server, element.node_id, html)
   end
 
   @doc "The element and its subtree serialized (its `outerHTML`)."
   @spec outer_html(Node.t()) :: String.t()
   def outer_html(%Node{type: :element} = element) do
-    DOM._element_outer_html(element.server, element.id)
+    DOM._element_outer_html(element.server, element.node_id)
   end
 
   @doc """
@@ -127,6 +127,6 @@ defmodule DOM.Element do
   """
   @spec set_outer_html(Node.t(), String.t()) :: :ok
   def set_outer_html(%Node{type: :element} = element, html) do
-    DOM._element_set_outer_html(element.server, element.id, html)
+    DOM._element_set_outer_html(element.server, element.node_id, html)
   end
 end

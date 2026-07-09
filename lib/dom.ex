@@ -3,7 +3,7 @@ defmodule DOM do
   A DOM document backed by a `GenServer` that owns a private ETS table of
   per-type `DOM.NodeData.*` records.
 
-  Node handles are the single `DOM.Node` struct (`%DOM.Node{server, id, type}`),
+  Node handles are the single `DOM.Node` struct (`%DOM.Node{server, node_id, type}`),
   immutable references carrying the owning server, a node id, and the node kind;
   they are not live objects. Mutating operations run inside the server and may
   transfer whole subtrees between documents, after which a retained handle can
@@ -135,7 +135,7 @@ defmodule DOM do
 
   defp new_document(opts) do
     {:ok, server} = start_link(opts)
-    %Node{server: server, id: Keyword.fetch!(opts, :document_id), type: :document}
+    %Node{server: server, node_id: Keyword.fetch!(opts, :document_id), type: :document}
   end
 
   def create_element(document, local_name) do
@@ -156,8 +156,8 @@ defmodule DOM do
 
   @doc false
   # Internal: the DocumentFragment holding a template element's contents.
-  def _element_content(%Node{server: server, id: id}) do
-    GenServer.call(server, {:element_content, id})
+  def _element_content(%Node{server: server, node_id: node_id}) do
+    GenServer.call(server, {:element_content, node_id})
   end
 
   def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
@@ -178,27 +178,33 @@ defmodule DOM do
   defp create(%Node{}, _node_data), do: raise(DOM.HierarchyRequestError)
 
   def get_elements_by_tag_name(document, name) do
-    GenServer.call(document.server, {:get_elements_by_tag_name, document.id, name})
+    GenServer.call(document.server, {:get_elements_by_tag_name, document.node_id, name})
   end
 
   def get_element_by_id(document, id) do
-    GenServer.call(document.server, {:get_element_by_id, document.id, id})
+    GenServer.call(document.server, {:get_element_by_id, document.node_id, id})
   end
 
   def get_elements_by_class_name(document, names) do
-    GenServer.call(document.server, {:get_elements_by_class_name, document.id, names})
+    GenServer.call(document.server, {:get_elements_by_class_name, document.node_id, names})
   end
 
   def query_selector(document, selector) do
-    GenServer.call(document.server, {:query_selector, document.id, parse_selector!(selector)})
+    GenServer.call(
+      document.server,
+      {:query_selector, document.node_id, parse_selector!(selector)}
+    )
   end
 
   def query_selector_all(document, selector) do
-    GenServer.call(document.server, {:query_selector_all, document.id, parse_selector!(selector)})
+    GenServer.call(
+      document.server,
+      {:query_selector_all, document.node_id, parse_selector!(selector)}
+    )
   end
 
   def matches(node, selector) do
-    GenServer.call(node.server, {:matches, node.id, parse_selector!(selector)})
+    GenServer.call(node.server, {:matches, node.node_id, parse_selector!(selector)})
   end
 
   # Parse and validate a selector in the CALLER's process, so a malformed or
@@ -292,7 +298,7 @@ defmodule DOM do
     {:reply, Table.check_consistency!(state.nodes, state.index), state}
   end
 
-  def _node_append_child(server, parent_id, %{server: child_server, id: child_id} = child) do
+  def _node_append_child(server, parent_id, %{server: child_server, node_id: child_id} = child) do
     result =
       if child_server == server do
         GenServer.call(server, {:append_child, parent_id, child_id})
@@ -369,8 +375,8 @@ defmodule DOM do
   def _node_insert_before(
         server,
         parent_id,
-        %{server: child_server, id: child_id} = child,
-        %{id: reference_child_id}
+        %{server: child_server, node_id: child_id} = child,
+        %{node_id: reference_child_id}
       ) do
     result =
       if child_server == server do
@@ -519,7 +525,7 @@ defmodule DOM do
     Enum.each(subtree, fn {id, node_data} -> index_element(index, id, node_data) end)
   end
 
-  def _node_remove_child(server, parent_id, %{id: child_id} = child) do
+  def _node_remove_child(server, parent_id, %{node_id: child_id} = child) do
     case GenServer.call(server, {:remove_child, parent_id, child_id}) do
       :ok -> child
       {:error, :not_found} -> raise DOM.NotFoundError
@@ -540,8 +546,8 @@ defmodule DOM do
   def _node_replace_child(
         server,
         parent_id,
-        %{server: new_server, id: new_child_id},
-        %{id: old_child_id} = old_child
+        %{server: new_server, node_id: new_child_id},
+        %{node_id: old_child_id} = old_child
       ) do
     result =
       if new_server == server do
@@ -792,7 +798,7 @@ defmodule DOM do
   defp owner_document_impl(node_id, _from, state) do
     owner =
       if node_id != state.document_id do
-        %Node{server: self(), id: state.document_id, type: :document}
+        %Node{server: self(), node_id: state.document_id, type: :document}
       end
 
     {:reply, owner, state}
@@ -1084,7 +1090,7 @@ defmodule DOM do
 
   defp node_handle(nodes, node_id) do
     type = nodes |> fetch_node!(node_id) |> NodeData.type()
-    %Node{server: self(), id: node_id, type: type}
+    %Node{server: self(), node_id: node_id, type: type}
   end
 
   defp subtree(nodes, node_id) do

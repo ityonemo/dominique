@@ -44,12 +44,12 @@ defmodule Integration.Node.CloneNodeTest do
 
       result = %{
         "shallowName" => Element.local_name(shallow),
-        "shallowSameNode" => shallow.id == parent.id,
+        "shallowSameNode" => shallow.node_id == parent.node_id,
         "shallowChildCount" => shallow |> Node.child_nodes() |> length(),
         "shallowParent" => Node.parent_node(shallow),
         "deepChildren" => deep |> Node.child_nodes() |> Enum.map(&Element.local_name/1),
         "deepText" => Node.text_content(deep),
-        "deepChildIsCopy" => deep_child.id != child.id
+        "deepChildIsCopy" => deep_child.node_id != child.node_id
       }
 
       assert result == expected

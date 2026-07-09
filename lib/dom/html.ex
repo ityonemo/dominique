@@ -56,7 +56,7 @@ after
     document_id = make_ref()
     {:ok, server} = DOM.start_link(document_id: document_id, fragment: {tokens, parsed})
     root_id = GenServer.call(server, :fragment_root)
-    %DOM.Node{server: server, id: root_id, type: :element}
+    %DOM.Node{server: server, node_id: root_id, type: :element}
   end
 
   @doc """

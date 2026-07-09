@@ -52,7 +52,7 @@ defmodule Integration.GetElementByIdTest do
       found = DOM.get_element_by_id(document, "dup")
 
       result = %{
-        "firstWins" => found.id == first.id,
+        "firstWins" => found.node_id == first.node_id,
         "uniqueName" => document |> DOM.get_element_by_id("unique") |> Element.local_name(),
         "missing" => DOM.get_element_by_id(document, "nope")
       }

@@ -18,7 +18,7 @@ defmodule DOM.GetElementsByClassNameTest do
 
     matches = DOM.get_elements_by_class_name(ctx.document, "box")
 
-    assert Enum.map(matches, & &1.id) == [a.id, b.id]
+    assert Enum.map(matches, & &1.node_id) == [a.node_id, b.node_id]
   end
 
   test "requires every requested class token to be present", ctx do
@@ -27,7 +27,7 @@ defmodule DOM.GetElementsByClassNameTest do
 
     matches = DOM.get_elements_by_class_name(ctx.document, "box highlight")
 
-    assert Enum.map(matches, & &1.id) == [both.id]
+    assert Enum.map(matches, & &1.node_id) == [both.node_id]
   end
 
   test "returns an empty list for an empty query", ctx do
@@ -45,7 +45,7 @@ defmodule DOM.GetElementsByClassNameTest do
 
     matches = DOM.get_elements_by_class_name(outer, "box")
 
-    assert Enum.map(matches, & &1.id) == [inner.id]
+    assert Enum.map(matches, & &1.node_id) == [inner.node_id]
   end
 
   defp element(ctx, name, class) do

@@ -16,7 +16,7 @@ defmodule DOM.GetElementByIdTest do
     Element.set_attribute(target, "id", "wanted")
     Node.append_child(ctx.root, target)
 
-    assert DOM.get_element_by_id(ctx.document, "wanted").id == target.id
+    assert DOM.get_element_by_id(ctx.document, "wanted").node_id == target.node_id
   end
 
   test "returns nil when no element has the id", ctx do
@@ -34,7 +34,7 @@ defmodule DOM.GetElementByIdTest do
     Node.append_child(ctx.root, first)
     Node.append_child(ctx.root, second)
 
-    assert DOM.get_element_by_id(ctx.document, "dup").id == first.id
+    assert DOM.get_element_by_id(ctx.document, "dup").node_id == first.node_id
   end
 
   test "scopes the search to the given root's descendants", ctx do
@@ -49,7 +49,7 @@ defmodule DOM.GetElementByIdTest do
     Node.append_child(ctx.root, outside)
 
     # get_element_by_id on `branch` sees only its subtree.
-    assert DOM.get_element_by_id(branch, "scoped").id == inside.id
+    assert DOM.get_element_by_id(branch, "scoped").node_id == inside.node_id
     assert DOM.get_element_by_id(branch, "elsewhere") == nil
   end
 
@@ -59,14 +59,14 @@ defmodule DOM.GetElementByIdTest do
     assert DOM.get_element_by_id(ctx.document, "late-id") == nil
 
     Element.set_attribute(el, "id", "late-id")
-    assert DOM.get_element_by_id(ctx.document, "late-id").id == el.id
+    assert DOM.get_element_by_id(ctx.document, "late-id").node_id == el.node_id
   end
 
   test "stops finding an id after it is removed", ctx do
     el = DOM.create_element(ctx.document, "gone")
     Element.set_attribute(el, "id", "temp")
     Node.append_child(ctx.root, el)
-    assert DOM.get_element_by_id(ctx.document, "temp").id == el.id
+    assert DOM.get_element_by_id(ctx.document, "temp").node_id == el.node_id
 
     Element.remove_attribute(el, "id")
     assert DOM.get_element_by_id(ctx.document, "temp") == nil
