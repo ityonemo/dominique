@@ -573,6 +573,27 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|               \"x\""
                ])
     end
+
+    # spec §13.2.6.4.15 (in cell "anything else" → in body): character tokens in a
+    # cell must reconstruct the active formatting elements first. After </a> leaves
+    # <b> in the AFE, the trailing "3" re-opens <b> around it. Verified against the
+    # Chromium+Firefox oracle.
+    test "characters in a cell reconstruct the active formatting elements" do
+      assert tree("<table><tr><td><a href=q>1<b>2</a>3") ==
+               doc([
+                 "|     <table>",
+                 "|       <tbody>",
+                 "|         <tr>",
+                 "|           <td>",
+                 "|             <a>",
+                 "|               href=\"q\"",
+                 "|               \"1\"",
+                 "|               <b>",
+                 "|                 \"2\"",
+                 "|             <b>",
+                 "|               \"3\""
+               ])
+    end
   end
 
   describe "in body — §13.2.4.3 active formatting list (reconstruction)" do

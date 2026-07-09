@@ -1860,10 +1860,12 @@ defmodule DOM.HTML.TreeBuilder do
     process_characters(:in_table, token, state)
   end
 
-  # "in caption"/"in cell": character tokens are handled by "in body".
+  # "in caption"/"in cell": character tokens are handled by the "in body" rules —
+  # reconstruct the active formatting elements first (so text after a formatting
+  # element left in the AFE by adoption is re-wrapped), then insert.
   defp process_characters(mode, %Token.Character{data: data}, state)
        when mode in [:in_caption, :in_cell] do
-    insert_characters(data, state)
+    insert_characters(data, reconstruct_formatting(state))
   end
 
   # "in select"/"in select in table": reconstruct the active formatting elements
