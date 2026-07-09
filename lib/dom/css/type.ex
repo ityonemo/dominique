@@ -12,6 +12,11 @@ defmodule DOM.CSS.Type do
   @type t :: %__MODULE__{name: String.t(), namespace: DOM.CSS.namespace() | nil}
 
   @impl DOM.CSS
+  # `|div` (`:none`) targets the null namespace, which no parsed element carries
+  # (every element is :html/:svg/:mathml) — so it matches nothing. `*|div`/`div`
+  # (`:any`/`nil`) match any namespace.
+  def match(%{namespace: :none}, _nodes, _candidate_ids), do: []
+
   def match(%{name: name}, nodes, candidate_ids) do
     Query.type(nodes, candidate_ids, name)
   end

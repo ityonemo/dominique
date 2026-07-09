@@ -30,7 +30,8 @@ defmodule CSSTable do
       local_name: local_name,
       attributes: attributes,
       children: children,
-      label: opts[:as]
+      label: opts[:as],
+      namespace: opts[:namespace] || :html
     }
   end
 
@@ -61,6 +62,7 @@ defmodule CSSTable do
       {id,
        %NodeData.Element{
          local_name: node.local_name,
+         namespace: node.namespace,
          attributes: node.attributes,
          parent: parent_id,
          children: child_ids

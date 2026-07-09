@@ -380,6 +380,58 @@ defmodule DOM.CSS.MatchTest do
     end
   end
 
+  describe "namespaces" do
+    setup do
+      # An HTML div next to an SVG rect. `:none` (null namespace) matches neither,
+      # since every element carries :html/:svg/:mathml — never the null namespace.
+      {table, ids} =
+        build(
+          element("root", [], [
+            element("div", [], [], as: :div),
+            element("rect", [], [], namespace: :svg, as: :rect)
+          ])
+        )
+
+      kids = [ids[:div], ids[:rect]]
+      %{table: table, ids: ids, kids: kids}
+    end
+
+    test "a bare type selector (nil namespace) matches any namespace", ctx do
+      assert matched(ctx.table, %Type{name: "rect"}, ctx.kids) == MapSet.new([ctx.ids[:rect]])
+    end
+
+    test "*| (:any) matches any namespace", ctx do
+      assert matched(ctx.table, %Type{name: "rect", namespace: :any}, ctx.kids) ==
+               MapSet.new([ctx.ids[:rect]])
+
+      assert matched(ctx.table, %Universal{namespace: :any}, ctx.kids) == MapSet.new(ctx.kids)
+    end
+
+    test "| (:none, null namespace) matches nothing in our model", ctx do
+      assert matched(ctx.table, %Type{name: "div", namespace: :none}, ctx.kids) == MapSet.new()
+      assert matched(ctx.table, %Universal{namespace: :none}, ctx.kids) == MapSet.new()
+    end
+
+    test "validate! raises on an undeclared string namespace prefix" do
+      assert_raise ArgumentError, ~r/undeclared namespace prefix/, fn ->
+        "svg|rect" |> DOM.CSS.parse() |> DOM.CSS.validate!()
+      end
+    end
+
+    test "validate! raises for a string prefix nested inside :is()" do
+      assert_raise ArgumentError, ~r/undeclared namespace prefix/, fn ->
+        ":is(svg|rect)" |> DOM.CSS.parse() |> DOM.CSS.validate!()
+      end
+    end
+
+    test "validate! accepts bare, *|, and | prefixes" do
+      for selector <- ["rect", "*|rect", "|rect", "*", "*|*", "|*"] do
+        parsed = DOM.CSS.parse(selector)
+        assert DOM.CSS.validate!(parsed) == parsed
+      end
+    end
+  end
+
   describe ":has" do
     setup do
       {table, ids} =

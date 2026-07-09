@@ -142,6 +142,52 @@ defmodule Integration.QuerySelectorTest do
     end
   end
 
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/css/selectors"
+
+    # Namespace prefixes in a querySelector context: no prefixes are declared, so
+    # a real prefix (svg|rect) is a SyntaxError; bare and *| match any namespace
+    # (including the SVG rect); the null-namespace prefix (|rect) matches nothing
+    # because every parsed element is in the html/svg/mathml namespace.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<div id='d'><svg><rect id='r'></rect></svg></div>", "text/html");
+      const count = (sel) => {
+        try { return doc.querySelectorAll(sel).length; }
+        catch (e) { return "error"; }
+      };
+      return {
+        bare: count("rect"),
+        anyNs: count("*|rect"),
+        nullNs: count("|rect"),
+        badPrefix: count("svg|rect")
+      };
+    });
+    """
+
+    test "namespace prefixes match the browser", %{js: expected} do
+      document = DOM.new("<div id='d'><svg><rect id='r'></rect></svg></div>")
+
+      count = fn selector ->
+        try do
+          document |> DOM.query_selector_all(selector) |> length()
+        rescue
+          ArgumentError -> "error"
+        end
+      end
+
+      result = %{
+        "bare" => count.("rect"),
+        "anyNs" => count.("*|rect"),
+        "nullNs" => count.("|rect"),
+        "badPrefix" => count.("svg|rect")
+      }
+
+      assert result == expected
+    end
+  end
+
   # The same tree as the @js battery, with matching explicit ids.
   defp build(document) do
     el(document, "section", "section", [], [

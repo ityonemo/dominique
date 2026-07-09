@@ -187,15 +187,22 @@ defmodule DOM do
   end
 
   def query_selector(document, selector) do
-    GenServer.call(document.server, {:query_selector, document.id, selector})
+    GenServer.call(document.server, {:query_selector, document.id, parse_selector!(selector)})
   end
 
   def query_selector_all(document, selector) do
-    GenServer.call(document.server, {:query_selector_all, document.id, selector})
+    GenServer.call(document.server, {:query_selector_all, document.id, parse_selector!(selector)})
   end
 
   def matches(node, selector) do
-    GenServer.call(node.server, {:matches, node.id, selector})
+    GenServer.call(node.server, {:matches, node.id, parse_selector!(selector)})
+  end
+
+  # Parse and validate a selector in the CALLER's process, so a malformed or
+  # namespace-invalid selector raises `ArgumentError` here rather than crashing
+  # the document server. The server receives the ready AST and never re-parses.
+  defp parse_selector!(selector) do
+    selector |> DOM.CSS.parse() |> DOM.CSS.validate!()
   end
 
   defp fragment_root_impl(_from, state) do
@@ -910,11 +917,10 @@ defmodule DOM do
     {:reply, match, state}
   end
 
+  # `selector` arrives already parsed and validated by the caller (parse_selector!).
   defp matches_impl(node_id, selector, _from, state) do
     matched =
-      selector
-      |> DOM.CSS.parse()
-      |> Enum.any?(fn complex -> DOM.CSS.match(complex, state.nodes, [node_id]) != [] end)
+      Enum.any?(selector, fn complex -> DOM.CSS.match(complex, state.nodes, [node_id]) != [] end)
 
     {:reply, matched, state}
   end
@@ -922,12 +928,12 @@ defmodule DOM do
   # Descendant element ids of `root_id` matching `selector`, in tree order. Each
   # complex in the selector list contributes its matches; the union is ordered by
   # the tree-order descendant walk.
+  # `selector` arrives already parsed and validated by the caller (parse_selector!).
   defp query_ids(root_id, selector, state) do
     candidates = descendant_ids(state.nodes, root_id)
 
     matched =
       selector
-      |> DOM.CSS.parse()
       |> Enum.flat_map(fn complex -> DOM.CSS.match(complex, state.nodes, candidates) end)
       |> MapSet.new()
 

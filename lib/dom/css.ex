@@ -61,4 +61,38 @@ after
   """
   @spec to_string(DOM.CSS.t()) :: String.t()
   def to_string(selector_list), do: DOM.CSS.Serialize.selector_list(selector_list)
+
+  @doc """
+  Validates a parsed selector AST for a query context and returns it unchanged,
+  or raises `ArgumentError`.
+
+  A **string** namespace prefix (e.g. `svg|rect`) is a syntax error in a
+  `querySelector`/`matches` context because no prefixes are declared there — the
+  browser throws. `*|` (`:any`), bare (`nil`), and `|` (`:none`, the null
+  namespace) are all valid and pass through.
+  """
+  @spec validate!(DOM.CSS.t()) :: DOM.CSS.t()
+  def validate!(selector_list) do
+    Enum.each(selector_list, &validate_node!/1)
+    selector_list
+  end
+
+  # Walk the AST by shape (map keys), not by struct module, to avoid a
+  # compile-time dependency on the per-selector modules that `use DOM.CSS`.
+  defp validate_node!(combinator) when is_atom(combinator), do: :ok
+
+  defp validate_node!(%{parts: parts}), do: Enum.each(parts, &validate_node!/1)
+  defp validate_node!(%{simples: simples}), do: Enum.each(simples, &validate_node!/1)
+
+  defp validate_node!(%{namespace: ns}) when is_binary(ns) do
+    raise ArgumentError, "undeclared namespace prefix #{inspect(ns)} in selector"
+  end
+
+  defp validate_node!(%{arg: {:selector_list, list}}), do: Enum.each(list, &validate_node!/1)
+
+  defp validate_node!(%{arg: {a, b, list}}) when is_integer(a) and is_integer(b) do
+    Enum.each(list, &validate_node!/1)
+  end
+
+  defp validate_node!(_simple), do: :ok
 end
