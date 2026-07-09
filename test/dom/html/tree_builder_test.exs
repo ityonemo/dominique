@@ -380,7 +380,7 @@ defmodule DOM.HTML.TreeBuilderTest do
     test "table text preserves the row mode so </tr> still pops the row" do
       assert tree("<table><tr> B</tr> </table>") ==
                doc([
-                 "|     \"B\"",
+                 "|     \" B\"",
                  "|     <table>",
                  "|       <tbody>",
                  "|         <tr>",
