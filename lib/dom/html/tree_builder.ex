@@ -1425,6 +1425,16 @@ defmodule DOM.HTML.TreeBuilder do
   # ==========================================================================
   # The "in select" insertion mode (§13.2.6.4.16)
   # ==========================================================================
+  #
+  # NOTE — customizable select & browser divergence: this mode implements the
+  # newer "customizable <select>" rules (arbitrary content — <button>, <div>,
+  # formatting, <selectedcontent> — nests inside a select). CHROMIUM ships this
+  # and matches the vendored html5lib .dat expectations; FIREFOX has not yet
+  # shipped it and produces a flatter tree (options only). We deliberately follow
+  # Chromium / the .dat here. Consequence for the Playwright oracle: any scenario
+  # exercising select-internal content would FAIL the both-browser consensus
+  # check — such cases must stay in the .dat/unit conformance layer and NOT become
+  # cross-browser integration tests.
 
   defp process(:in_select, %Token.Comment{} = token, state) do
     insert_comment(token, state)
@@ -1440,7 +1450,11 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A start tag "option": if the current node is an option, pop it; insert.
   defp process(:in_select, %Token.StartTag{name: "option"} = token, state) do
-    state = pop_if_current(state, "option")
+    # Customizable select: reconstruct the active formatting elements first, so a
+    # formatting element left open inside the select (e.g. an <i> whose block was
+    # closed) is re-opened around the option. Matches Chromium; see the module note
+    # on select-internal browser divergence.
+    state = state |> reconstruct_formatting() |> pop_if_current("option")
     {_el, state} = insert_html_element(token, state)
     state
   end

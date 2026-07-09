@@ -908,6 +908,23 @@ defmodule DOM.HTML.TreeBuilderTest do
                doc(["|     <select>", "|       <keygen>"])
     end
 
+    # Customizable select: an <option> reconstructs the active formatting elements
+    # first, so an <i> left open in the select (its block closed by </div>) is
+    # re-opened around the option. Matches Chromium / the html5lib .dat; Firefox
+    # (no customizable select yet) produces a flatter tree — this stays a unit/.dat
+    # conformance case, not a cross-browser oracle test.
+    test "an option in a select reconstructs open formatting (customizable select)" do
+      assert tree("<select><div><i></div><option>x") ==
+               doc([
+                 "|     <select>",
+                 "|       <div>",
+                 "|         <i>",
+                 "|       <i>",
+                 "|         <option>",
+                 "|           \"x\""
+               ])
+    end
+
     # spec §13.2.6.4.16 (<hr> start tag): an hr pops a current option/optgroup and
     # is inserted as a void child of the select.
     test "an hr in a select is a void child" do
