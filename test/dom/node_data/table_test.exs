@@ -13,6 +13,11 @@ defmodule DOM.NodeData.TableTest do
     {:ok, tid: :ets.new(:test_nodes, [:set, :private])}
   end
 
+  # A minimal element record for the index primitives (index_put takes a record).
+  defp el(attributes, local_name \\ "div") do
+    %NodeData.Element{local_name: local_name, attributes: attributes}
+  end
+
   describe "creation" do
     test "create_element inserts a detached element record", %{tid: tid} do
       id = Table.create_element(tid, "div")
@@ -116,7 +121,7 @@ defmodule DOM.NodeData.TableTest do
 
     test "index_put registers a node's id; index_lookup finds it", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"id", "foo"}])
+      Table.index_put(index, node, el([{"id", "foo"}]))
       assert Table.index_lookup(index, :id, "foo") == [node]
       assert Table.index_lookup(index, :id, "absent") == []
     end
@@ -125,29 +130,29 @@ defmodule DOM.NodeData.TableTest do
          %{index: index} do
       a = make_ref()
       b = make_ref()
-      Table.index_put(index, a, [{"id", "dup"}])
-      Table.index_put(index, b, [{"id", "dup"}])
+      Table.index_put(index, a, el([{"id", "dup"}]))
+      Table.index_put(index, b, el([{"id", "dup"}]))
       assert Enum.sort(Table.index_lookup(index, :id, "dup")) == Enum.sort([a, b])
     end
 
     test "index_put is an idempotent refresh — re-put with a new id replaces the old",
          %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"id", "old"}])
-      Table.index_put(index, node, [{"id", "new"}])
+      Table.index_put(index, node, el([{"id", "old"}]))
+      Table.index_put(index, node, el([{"id", "new"}]))
       assert Table.index_lookup(index, :id, "old") == []
       assert Table.index_lookup(index, :id, "new") == [node]
     end
 
     test "index_put with no id attribute leaves the node unindexed", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"class", "x"}])
+      Table.index_put(index, node, el([{"class", "x"}]))
       assert Table.index_lookup(index, :id, "x") == []
     end
 
     test "index_retract removes a node's id rows", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"id", "foo"}])
+      Table.index_put(index, node, el([{"id", "foo"}]))
       Table.index_retract(index, node)
       assert Table.index_lookup(index, :id, "foo") == []
     end
@@ -160,7 +165,7 @@ defmodule DOM.NodeData.TableTest do
 
     test "index_put registers each class token; index_lookup finds them", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"class", "box highlight"}])
+      Table.index_put(index, node, el([{"class", "box highlight"}]))
       assert Table.index_lookup(index, :class, "box") == [node]
       assert Table.index_lookup(index, :class, "highlight") == [node]
       assert Table.index_lookup(index, :class, "absent") == []
@@ -169,32 +174,69 @@ defmodule DOM.NodeData.TableTest do
     test "a class token maps to every node carrying it", %{index: index} do
       a = make_ref()
       b = make_ref()
-      Table.index_put(index, a, [{"class", "box"}])
-      Table.index_put(index, b, [{"class", "box other"}])
+      Table.index_put(index, a, el([{"class", "box"}], "a"))
+      Table.index_put(index, b, el([{"class", "box other"}]))
       assert Enum.sort(Table.index_lookup(index, :class, "box")) == Enum.sort([a, b])
     end
 
     test "duplicate class tokens are deduped to one row per (node, token)", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"class", "x x x"}])
+      Table.index_put(index, node, el([{"class", "x x x"}]))
       assert Table.index_lookup(index, :class, "x") == [node]
     end
 
     test "index_put refreshes class rows on change", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"class", "old"}])
-      Table.index_put(index, node, [{"class", "new"}])
+      Table.index_put(index, node, el([{"class", "old"}]))
+      Table.index_put(index, node, el([{"class", "new"}]))
       assert Table.index_lookup(index, :class, "old") == []
       assert Table.index_lookup(index, :class, "new") == [node]
     end
 
     test "index_retract removes a node's class rows too", %{index: index} do
       node = make_ref()
-      Table.index_put(index, node, [{"id", "i"}, {"class", "a b"}])
+      Table.index_put(index, node, el([{"id", "i"}, {"class", "a b"}]))
       Table.index_retract(index, node)
       assert Table.index_lookup(index, :class, "a") == []
       assert Table.index_lookup(index, :class, "b") == []
       assert Table.index_lookup(index, :id, "i") == []
+    end
+  end
+
+  describe "tag index primitives" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "index_put registers a node's tag (local_name)", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([], "section"))
+      assert Table.index_lookup(index, :tag, "section") == [node]
+      assert Table.index_lookup(index, :tag, "div") == []
+    end
+
+    test "a tag maps to every element with that local_name", %{index: index} do
+      a = make_ref()
+      b = make_ref()
+      Table.index_put(index, a, el([], "li"))
+      Table.index_put(index, b, el([], "li"))
+      assert Enum.sort(Table.index_lookup(index, :tag, "li")) == Enum.sort([a, b])
+    end
+
+    test "index_retract removes a node's tag row", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([{"id", "i"}], "span"))
+      Table.index_retract(index, node)
+      assert Table.index_lookup(index, :tag, "span") == []
+      assert Table.index_lookup(index, :id, "i") == []
+    end
+
+    test "the tag membership coexists with id/class rows", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([{"id", "i"}, {"class", "c"}], "p"))
+      assert Table.index_lookup(index, :tag, "p") == [node]
+      assert Table.index_lookup(index, :id, "i") == [node]
+      assert Table.index_lookup(index, :class, "c") == [node]
     end
   end
 
@@ -206,7 +248,7 @@ defmodule DOM.NodeData.TableTest do
     test "passes when the id index mirrors the element rows", %{tid: tid, index: index} do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "id", "one")
-      Table.index_put(index, a, [{"id", "one"}])
+      Table.index_put(index, a, Table.fetch!(tid, a))
 
       assert Table.check_consistency!(tid, index) == :ok
     end
@@ -222,7 +264,7 @@ defmodule DOM.NodeData.TableTest do
     test "raises when the index points at a node with no such id (stale row)",
          %{tid: tid, index: index} do
       a = Table.create_element(tid, "a")
-      Table.index_put(index, a, [{"id", "ghost"}])
+      Table.index_put(index, a, el([{"id", "ghost"}], "a"))
 
       assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
     end
@@ -230,7 +272,7 @@ defmodule DOM.NodeData.TableTest do
     test "raises when the index points at a deleted node", %{tid: tid, index: index} do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "id", "one")
-      Table.index_put(index, a, [{"id", "one"}])
+      Table.index_put(index, a, el([{"id", "one"}]))
       :ets.delete(tid, a)
 
       assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
@@ -239,7 +281,7 @@ defmodule DOM.NodeData.TableTest do
     test "passes when the class index mirrors the element rows", %{tid: tid, index: index} do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "class", "box highlight")
-      Table.index_put(index, a, [{"class", "box highlight"}])
+      Table.index_put(index, a, Table.fetch!(tid, a))
 
       assert Table.check_consistency!(tid, index) == :ok
     end
@@ -248,7 +290,7 @@ defmodule DOM.NodeData.TableTest do
          %{tid: tid, index: index} do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "class", "box highlight")
-      Table.index_put(index, a, [{"class", "box"}])
+      Table.index_put(index, a, el([{"class", "box"}], "a"))
       # "highlight" token intentionally missing from the index
 
       assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
@@ -257,7 +299,7 @@ defmodule DOM.NodeData.TableTest do
     test "raises when the class index has a stale token", %{tid: tid, index: index} do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "class", "box")
-      Table.index_put(index, a, [{"class", "box ghost"}])
+      Table.index_put(index, a, el([{"class", "box ghost"}], "a"))
 
       assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
     end

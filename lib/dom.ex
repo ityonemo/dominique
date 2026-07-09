@@ -240,9 +240,9 @@ defmodule DOM do
     {:reply, node_handle(state.nodes, node_id), state}
   end
 
-  # Register an element's id/class in the index (no-op for non-elements).
-  defp index_element(index, node_id, %NodeData.Element{attributes: attributes}) do
-    Table.index_put(index, node_id, attributes)
+  # Register an element's tag/id/class in the index (no-op for non-elements).
+  defp index_element(index, node_id, %NodeData.Element{} = element) do
+    Table.index_put(index, node_id, element)
   end
 
   defp index_element(_index, _node_id, _node_data), do: :ok

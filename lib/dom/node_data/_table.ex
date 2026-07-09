@@ -293,31 +293,42 @@ defmodule DOM.NodeData.Table do
   # time.
 
   @doc """
-  Refresh `node_id`'s index rows from `attributes`: retract its old id/class rows,
-  then insert one row per id and per (deduped) class token. Idempotent, so it
-  covers set / change / remove of id/class uniformly.
+  Refresh `node_id`'s index rows from its `%NodeData.Element{}` record: retract its
+  old rows, then insert one per membership — the tag (`local_name`), each id, and
+  each (deduped) class token. Idempotent, so it covers set / change / remove
+  uniformly.
   """
-  @spec index_put(tid, id, [{String.t(), String.t()}]) :: :ok
-  def index_put(index, node_id, attributes) do
+  @spec index_put(tid, id, NodeData.Element.t()) :: :ok
+  def index_put(index, node_id, %NodeData.Element{} = element) do
     index_retract(index, node_id)
 
-    for {"id", value} <- attributes do
-      :ets.insert(index, {{:id, value, make_ref()}, node_id})
-    end
-
-    for {"class", value} <- attributes, token <- class_tokens(value) do
-      :ets.insert(index, {{:class, token, make_ref()}, node_id})
+    for {kind, value} <- memberships(element) do
+      :ets.insert(index, {{kind, value, make_ref()}, node_id})
     end
 
     :ok
   end
 
-  @doc "Delete all id/class index rows pointing at `node_id`."
+  @doc "Delete all index rows pointing at `node_id`."
   @spec index_retract(tid, id) :: :ok
   def index_retract(index, node_id) do
-    :ets.match_delete(index, {{:id, :_, :_}, node_id})
-    :ets.match_delete(index, {{:class, :_, :_}, node_id})
+    for kind <- [:tag, :id, :class] do
+      :ets.match_delete(index, {{kind, :_, :_}, node_id})
+    end
+
     :ok
+  end
+
+  # The {kind, value} memberships an element contributes to the index: its tag,
+  # ids, and (deduped) class tokens. Single source of truth for both index_put
+  # and the consistency checker.
+  defp memberships(%NodeData.Element{local_name: local_name, attributes: attributes}) do
+    ids = for {"id", value} <- attributes, do: {:id, value}
+
+    classes =
+      for {"class", value} <- attributes, token <- class_tokens(value), do: {:class, token}
+
+    [{:tag, local_name} | ids ++ classes]
   end
 
   # A class attribute's distinct whitespace-separated tokens (classList is a set,
@@ -332,17 +343,22 @@ defmodule DOM.NodeData.Table do
   """
   @spec reindex(tid, tid) :: :ok
   def reindex(nodes, index) do
-    for {node_id, %NodeData.Element{attributes: attributes}} <- :ets.tab2list(nodes) do
-      index_put(index, node_id, attributes)
+    for {node_id, %NodeData.Element{} = element} <- :ets.tab2list(nodes) do
+      index_put(index, node_id, element)
     end
 
     :ok
   end
 
-  @doc "All node ids carrying `value` for the given index kind (`:id` or `:class`)."
-  @spec index_lookup(tid, :id | :class, String.t()) :: [id]
+  @doc "All node ids carrying `value` for the given index kind (`:tag`/`:id`/`:class`)."
+  @spec index_lookup(tid, :tag | :id | :class, String.t()) :: [id]
+  def index_lookup(index, :tag, value), do: :ets.select(index, index_tag_spec(value))
   def index_lookup(index, :id, value), do: :ets.select(index, index_id_spec(value))
   def index_lookup(index, :class, value), do: :ets.select(index, index_class_spec(value))
+
+  defmatchspecp index_tag_spec(value) do
+    {{:tag, ^value, _ref}, node_id} -> node_id
+  end
 
   defmatchspecp index_id_spec(value) do
     {{:id, ^value, _ref}, node_id} -> node_id
@@ -393,8 +409,8 @@ defmodule DOM.NodeData.Table do
   # dangling row (class tokens deduped as in index_put).
   defp check_index!(rows, index) do
     expected =
-      for {node_id, %NodeData.Element{attributes: attributes}} <- rows,
-          {kind, value} <- memberships(attributes),
+      for {node_id, %NodeData.Element{} = element} <- rows,
+          {kind, value} <- memberships(element),
           do: {kind, value, node_id}
 
     actual =
@@ -404,16 +420,6 @@ defmodule DOM.NodeData.Table do
       raise "inconsistent index: expected #{inspect(Enum.sort(expected))}, " <>
               "got #{inspect(Enum.sort(actual))}"
     end
-  end
-
-  # The {kind, value} memberships an attribute list contributes to the index.
-  defp memberships(attributes) do
-    ids = for {"id", value} <- attributes, do: {:id, value}
-
-    classes =
-      for {"class", value} <- attributes, token <- class_tokens(value), do: {:class, token}
-
-    ids ++ classes
   end
 
   defp check_no_duplicate_children!(id, children) do

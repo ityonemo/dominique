@@ -90,7 +90,7 @@ defmodule DOM.Element do
       [{^node_id, record}] = :ets.lookup(nodes, node_id)
       updated = %{record | attributes: fun.(record.attributes)}
       :ets.insert(nodes, {node_id, updated})
-      Table.index_put(index, node_id, updated.attributes)
+      Table.index_put(index, node_id, updated)
       :ok
     end)
   end
