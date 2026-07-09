@@ -994,6 +994,16 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
 
+    # spec §13.2.6.4.16: "template element" means the HTML-namespace <template>; a
+    # foreign <svg template> is an ordinary element. So a <template> inside <svg>
+    # must not be treated as an HTML template (it has no template mode/content), and
+    # the implied <body> at EOF still lands at the html root, not in the content.
+    test "a foreign template does not consume the html template's mode" do
+      assert tree("<template><svg><template>") ==
+               "| <html>\n|   <head>\n|     <template>\n|       content\n" <>
+                 "|         <svg svg>\n|           <svg template>\n|   <body>"
+    end
+
     # spec §13.2.6.4.16 (</template> end tag): closing a template returns to the
     # enclosing insertion mode, so following content is a sibling of the template.
     test "content after a closed template is a sibling" do

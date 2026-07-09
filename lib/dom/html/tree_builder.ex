@@ -274,10 +274,10 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   defp eof_in_template(state) do
-    if Enum.any?(state.open_elements, &(Node.node_name(&1) == "template")) do
+    if template_on_stack?(state) do
       state
       |> generate_all_implied_end_tags()
-      |> pop_through("template")
+      |> pop_through_html_template()
       |> clear_formatting_to_marker()
       |> pop_template_mode()
       |> reset_insertion_mode()
@@ -459,10 +459,10 @@ defmodule DOM.HTML.TreeBuilder do
   # formatting list to the last marker, pop the template insertion modes, and
   # reset the insertion mode.
   defp process(:in_head, %Token.EndTag{name: "template"}, state) do
-    if Enum.any?(state.open_elements, &(Node.node_name(&1) == "template")) do
+    if template_on_stack?(state) do
       state
       |> generate_all_implied_end_tags()
-      |> pop_through("template")
+      |> pop_through_html_template()
       |> clear_formatting_to_marker()
       |> pop_template_mode()
       |> reset_insertion_mode()
@@ -1939,7 +1939,7 @@ defmodule DOM.HTML.TreeBuilder do
   # location is inside that template's content. Otherwise it is before the last
   # table (if parented), else inside the element above the table on the stack.
   defp foster_location(state) do
-    last_template = Enum.find(state.open_elements, &(Node.node_name(&1) == "template"))
+    last_template = Enum.find(state.open_elements, &html_template?(state, &1))
     last_table = Enum.find(state.open_elements, &(Node.node_name(&1) == "table"))
 
     cond do
@@ -2033,6 +2033,16 @@ defmodule DOM.HTML.TreeBuilder do
     %{state | open_elements: pop_to(state.open_elements, name)}
   end
 
+  # Pop the stack down to and including the first HTML <template> (skipping any
+  # foreign element that merely shares the name "template").
+  defp pop_through_html_template(state) do
+    popped =
+      Enum.drop_while(state.open_elements, &(not html_template?(state, &1)))
+      |> Enum.drop(1)
+
+    %{state | open_elements: popped}
+  end
+
   # Pop down to and including the first heading (h1..h6) on the stack.
   defp pop_through_heading(%__MODULE__{open_elements: [el | rest]} = state) do
     if heading?(el),
@@ -2068,9 +2078,16 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # Whether a template element is anywhere on the stack of open elements.
+  # Whether an HTML template element is anywhere on the stack of open elements.
+  # "Template element" in the spec always means the HTML-namespace <template>; a
+  # foreign <svg template>/<math template> is an ordinary element and must not be
+  # treated as one (else nested-in-foreign templates confuse the template modes).
   defp template_on_stack?(state) do
-    Enum.any?(state.open_elements, &(Node.node_name(&1) == "template"))
+    Enum.any?(state.open_elements, &html_template?(state, &1))
+  end
+
+  defp html_template?(state, el) do
+    Node.node_name(el) == "template" and namespace_of(state, el) == :html
   end
 
   # Pop the stack down to (but not including) the bottom html root element.
@@ -2404,9 +2421,9 @@ defmodule DOM.HTML.TreeBuilder do
 
   defp reset_mode_for(_state, []), do: :in_body
 
-  # A template element resets to the current template insertion mode.
+  # An HTML template element resets to the current template insertion mode.
   defp template_mode(state, node) do
-    if Node.node_name(node) == "template", do: List.first(state.template_modes)
+    if html_template?(state, node), do: List.first(state.template_modes)
   end
 
   # The html element resets to "after head" once the head pointer is set (the head
