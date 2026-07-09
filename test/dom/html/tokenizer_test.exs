@@ -66,6 +66,17 @@ defmodule DOM.HTML.TokenizerTest do
       assert [%Token.StartTag{attributes: [{"a", ""}, {"b", ""}]}] = tokenize("<h a B>")
     end
 
+    # WHATWG §13.2.5.33: a duplicate attribute name is a parse error and the later
+    # duplicate is DROPPED — the first occurrence's value wins.
+    test "a duplicate attribute keeps the first value" do
+      assert [%Token.StartTag{attributes: [{"a", "1"}]}] = tokenize("<h a=1 a=2>")
+    end
+
+    test "duplicate detection is case-insensitive on the (lowercased) name" do
+      assert [%Token.StartTag{attributes: [{"a", "1"}, {"b", "2"}]}] =
+               tokenize("<h a=1 A=2 b=2>")
+    end
+
     # WHATWG "eof-in-tag": a tag whose quoted attribute value never closes runs to
     # end-of-input and the whole (incomplete) tag token is DROPPED — the rest of
     # the input is swallowed as the value, not re-tokenized as markup.
@@ -271,10 +282,10 @@ defmodule DOM.HTML.TokenizerTest do
     # WHATWG "EOF in script data": an unclosed script/style/... tokenizes its
     # interior up to end-of-input, with no end tag.
     test "an unclosed script tokenizes its interior to EOF, no end tag" do
-      assert tokenize("<script>foo") == [
+      assert [
                %Token.StartTag{name: "script", attributes: [], self_closing: false},
-               %Token.Character{data: "foo"}
-             ]
+               %Token.Character{data: "foo", decode?: false}
+             ] = tokenize("<script>foo")
     end
 
     test "an unclosed style tokenizes to EOF" do
@@ -301,10 +312,10 @@ defmodule DOM.HTML.TokenizerTest do
     # WHATWG PLAINTEXT state: everything after <plaintext> is one character run to
     # EOF — no tags, no close tag.
     test "plaintext consumes the rest of the input as one character token" do
-      assert tokenize("<plaintext><div>foo</div>") == [
+      assert [
                %Token.StartTag{name: "plaintext", attributes: [], self_closing: false},
-               %Token.Character{data: "<div>foo</div>"}
-             ]
+               %Token.Character{data: "<div>foo</div>", decode?: false}
+             ] = tokenize("<plaintext><div>foo</div>")
     end
 
     # WHATWG script-data-escaped: after `<!--`, a bare </script> still CLOSES the

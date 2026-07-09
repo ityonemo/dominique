@@ -362,8 +362,21 @@ after
     {rest, [{:tag_name, String.downcase(name)}], context}
   end
 
+  # WHATWG §13.2.5.33: a duplicate attribute name is a parse error and the later
+  # duplicate is dropped — keep the FIRST occurrence of each (lowercased) name.
   defp attributes(rest, [{:attributes, attributes}], context, _loc, _col) do
-    {rest, [{:attributes, attributes}], context}
+    {rest, [{:attributes, dedupe_attributes(attributes)}], context}
+  end
+
+  defp dedupe_attributes(attributes) do
+    {kept, _seen} =
+      Enum.reduce(attributes, {[], MapSet.new()}, fn {name, _value} = attr, {acc, seen} ->
+        if MapSet.member?(seen, name),
+          do: {acc, seen},
+          else: {[attr | acc], MapSet.put(seen, name)}
+      end)
+
+    Enum.reverse(kept)
   end
 
   defp attribute(rest, [{:attribute, [{:attr_name, name}]}], context, _loc, _col) do
