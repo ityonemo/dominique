@@ -109,6 +109,26 @@ defmodule DOM.CSS.Query do
     end
   end
 
+  @doc """
+  Element siblings of `node_id` (including itself), in document order, that have
+  the SAME element type — same `local_name` AND `namespace` (an SVG `<title>` and
+  an HTML `<title>` are different types). Used by the `*-of-type` pseudo-classes.
+  """
+  @spec same_type_siblings(:ets.tid(), reference()) :: [reference()]
+  def same_type_siblings(nodes, node_id) do
+    {name, namespace} = element_type(nodes, node_id)
+
+    nodes
+    |> element_siblings(node_id)
+    |> Enum.filter(&(element_type(nodes, &1) == {name, namespace}))
+  end
+
+  # The `{local_name, namespace}` of an element node.
+  defp element_type(nodes, node_id) do
+    [type] = select(nodes, element_type_spec(node_id))
+    type
+  end
+
   @doc "Whether `node_id` is an element with no child element or text nodes."
   @spec empty?(:ets.tid(), reference()) :: boolean()
   def empty?(nodes, node_id) do
@@ -209,6 +229,11 @@ defmodule DOM.CSS.Query do
   # matched without pinning their other fields to defaults.
   defmatchspecp type_spec(name) do
     {id, %{__struct__: NodeData.Element, local_name: ^name}} -> id
+  end
+
+  defmatchspecp element_type_spec(node_id) do
+    {^node_id, %{__struct__: NodeData.Element, local_name: name, namespace: namespace}} ->
+      {name, namespace}
   end
 
   defmatchspecp element_spec() do

@@ -329,6 +329,57 @@ defmodule DOM.CSS.MatchTest do
     end
   end
 
+  describe "of-type pseudo-classes" do
+    setup do
+      # p, p, span, p — of-type counts the p's separately from the span.
+      {table, ids} =
+        build(
+          element(
+            "div",
+            [],
+            [
+              element("p", [], [], as: :p1),
+              element("p", [], [], as: :p2),
+              element("span", [], [], as: :s),
+              element("p", [], [], as: :p3)
+            ],
+            as: :div
+          )
+        )
+
+      kids = [ids[:p1], ids[:p2], ids[:s], ids[:p3]]
+      %{table: table, ids: ids, kids: kids}
+    end
+
+    test ":first-of-type", ctx do
+      assert matched(ctx.table, pc("p:first-of-type"), ctx.kids) == MapSet.new([ctx.ids[:p1]])
+      assert matched(ctx.table, pc("span:first-of-type"), ctx.kids) == MapSet.new([ctx.ids[:s]])
+    end
+
+    test ":last-of-type", ctx do
+      assert matched(ctx.table, pc("p:last-of-type"), ctx.kids) == MapSet.new([ctx.ids[:p3]])
+    end
+
+    test ":only-of-type", ctx do
+      assert matched(ctx.table, pc("span:only-of-type"), ctx.kids) == MapSet.new([ctx.ids[:s]])
+      assert matched(ctx.table, pc("p:only-of-type"), ctx.kids) == MapSet.new()
+    end
+
+    test ":nth-of-type(2) is the second p", ctx do
+      assert matched(ctx.table, pc("p:nth-of-type(2)"), ctx.kids) == MapSet.new([ctx.ids[:p2]])
+    end
+
+    test ":nth-of-type(odd) counts among same-type siblings", ctx do
+      assert matched(ctx.table, pc("p:nth-of-type(odd)"), ctx.kids) ==
+               MapSet.new([ctx.ids[:p1], ctx.ids[:p3]])
+    end
+
+    test ":nth-last-of-type(1) is the last p", ctx do
+      assert matched(ctx.table, pc("p:nth-last-of-type(1)"), ctx.kids) ==
+               MapSet.new([ctx.ids[:p3]])
+    end
+  end
+
   describe ":has" do
     setup do
       {table, ids} =

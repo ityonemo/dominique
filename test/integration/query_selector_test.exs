@@ -33,7 +33,13 @@ defmodule Integration.QuerySelectorTest do
     "li:not(.box)",
     "li:is(.box, :last-child)",
     "div:has(> p)",
-    "section a, ul li"
+    "section a, ul li",
+    "p:first-of-type",
+    "p:last-of-type",
+    "p:nth-of-type(2)",
+    "p:nth-last-of-type(1)",
+    "div p:only-of-type",
+    "h1:only-of-type"
   ]
 
   playwright do
@@ -69,7 +75,9 @@ defmodule Integration.QuerySelectorTest do
         "[class~=highlight]", "a.box", "ul > li", "section li", "h1 + p",
         "h1 ~ p", "li:first-child", "li:last-child", "li:nth-child(2n)",
         "li:nth-child(odd)", ":root", "li:not(.box)",
-        "li:is(.box, :last-child)", "div:has(> p)", "section a, ul li"
+        "li:is(.box, :last-child)", "div:has(> p)", "section a, ul li",
+        "p:first-of-type", "p:last-of-type", "p:nth-of-type(2)",
+        "p:nth-last-of-type(1)", "div p:only-of-type", "h1:only-of-type"
       ];
 
       const results = {};

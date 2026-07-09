@@ -78,14 +78,47 @@ defmodule DOM.CSS.PseudoClass do
     nth_of(nodes, candidates, {a, b}, list, direction)
   end
 
+  # of-type pseudo-classes: like the child variants but counting only siblings of
+  # the SAME element type (same local_name + namespace).
+  def match(%{name: "first-of-type"}, nodes, candidates),
+    do: nth_type(nodes, candidates, {0, 1}, :forward)
+
+  def match(%{name: "last-of-type"}, nodes, candidates),
+    do: nth_type(nodes, candidates, {0, 1}, :backward)
+
+  def match(%{name: "only-of-type"}, nodes, candidates) do
+    Enum.filter(candidates, &(Query.same_type_siblings(nodes, &1) == [&1]))
+  end
+
+  def match(%{name: "nth-of-type", arg: {a, b}}, nodes, candidates)
+      when is_integer(a) and is_integer(b) do
+    nth_type(nodes, candidates, {a, b}, :forward)
+  end
+
+  def match(%{name: "nth-last-of-type", arg: {a, b}}, nodes, candidates)
+      when is_integer(a) and is_integer(b) do
+    nth_type(nodes, candidates, {a, b}, :backward)
+  end
+
   # Anything else (UI/state pseudo-classes, unknowns) matches nothing.
   def match(_selector, _nodes, _candidates), do: []
 
   # An+B position test among element siblings, counting from the start
-  # (:forward) or end (:backward). Positions are 1-based.
+  # (:forward) or end (:backward).
   defp nth(nodes, candidates, {a, b}, direction) do
+    nth_among(candidates, direction, {a, b}, &Query.element_siblings(nodes, &1))
+  end
+
+  # An+B among same-type element siblings (the *-of-type variants).
+  defp nth_type(nodes, candidates, {a, b}, direction) do
+    nth_among(candidates, direction, {a, b}, &Query.same_type_siblings(nodes, &1))
+  end
+
+  # Keep each candidate whose 1-based position, within the sibling set produced by
+  # `siblings_fun` (reversed for :backward), satisfies An+B.
+  defp nth_among(candidates, direction, {a, b}, siblings_fun) do
     Enum.filter(candidates, fn id ->
-      siblings = Query.element_siblings(nodes, id)
+      siblings = siblings_fun.(id)
       siblings = if direction == :backward, do: Enum.reverse(siblings), else: siblings
       index = Enum.find_index(siblings, &(&1 == id))
       index != nil and anb?(index + 1, a, b)
