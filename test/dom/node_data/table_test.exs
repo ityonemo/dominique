@@ -153,6 +153,51 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "class index primitives" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "index_put registers each class token; index_lookup finds them", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"class", "box highlight"}])
+      assert Table.index_lookup(index, :class, "box") == [node]
+      assert Table.index_lookup(index, :class, "highlight") == [node]
+      assert Table.index_lookup(index, :class, "absent") == []
+    end
+
+    test "a class token maps to every node carrying it", %{index: index} do
+      a = make_ref()
+      b = make_ref()
+      Table.index_put(index, a, [{"class", "box"}])
+      Table.index_put(index, b, [{"class", "box other"}])
+      assert Enum.sort(Table.index_lookup(index, :class, "box")) == Enum.sort([a, b])
+    end
+
+    test "duplicate class tokens are deduped to one row per (node, token)", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"class", "x x x"}])
+      assert Table.index_lookup(index, :class, "x") == [node]
+    end
+
+    test "index_put refreshes class rows on change", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"class", "old"}])
+      Table.index_put(index, node, [{"class", "new"}])
+      assert Table.index_lookup(index, :class, "old") == []
+      assert Table.index_lookup(index, :class, "new") == [node]
+    end
+
+    test "index_retract removes a node's class rows too", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"id", "i"}, {"class", "a b"}])
+      Table.index_retract(index, node)
+      assert Table.index_lookup(index, :class, "a") == []
+      assert Table.index_lookup(index, :class, "b") == []
+      assert Table.index_lookup(index, :id, "i") == []
+    end
+  end
+
   describe "check_consistency!/2 — id index agreement" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
@@ -187,6 +232,32 @@ defmodule DOM.NodeData.TableTest do
       Table.set_attribute(tid, a, "id", "one")
       Table.index_put(index, a, [{"id", "one"}])
       :ets.delete(tid, a)
+
+      assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
+    end
+
+    test "passes when the class index mirrors the element rows", %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.set_attribute(tid, a, "class", "box highlight")
+      Table.index_put(index, a, [{"class", "box highlight"}])
+
+      assert Table.check_consistency!(tid, index) == :ok
+    end
+
+    test "raises when an element's class token is missing from the index",
+         %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.set_attribute(tid, a, "class", "box highlight")
+      Table.index_put(index, a, [{"class", "box"}])
+      # "highlight" token intentionally missing from the index
+
+      assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
+    end
+
+    test "raises when the class index has a stale token", %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.set_attribute(tid, a, "class", "box")
+      Table.index_put(index, a, [{"class", "box ghost"}])
 
       assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
     end

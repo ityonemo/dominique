@@ -305,6 +305,10 @@ defmodule DOM.NodeData.Table do
       :ets.insert(index, {{:id, value, make_ref()}, node_id})
     end
 
+    for {"class", value} <- attributes, token <- class_tokens(value) do
+      :ets.insert(index, {{:class, token, make_ref()}, node_id})
+    end
+
     :ok
   end
 
@@ -312,8 +316,13 @@ defmodule DOM.NodeData.Table do
   @spec index_retract(tid, id) :: :ok
   def index_retract(index, node_id) do
     :ets.match_delete(index, {{:id, :_, :_}, node_id})
+    :ets.match_delete(index, {{:class, :_, :_}, node_id})
     :ok
   end
+
+  # A class attribute's distinct whitespace-separated tokens (classList is a set,
+  # so `class="x x"` yields one `x`). Mirrored in check_consistency!.
+  defp class_tokens(value), do: value |> String.split() |> Enum.uniq()
 
   @doc """
   Populate `index` from every element row in `nodes` — the bulk path used once a
@@ -330,12 +339,17 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
-  @doc "All node ids carrying `value` for the given index kind (`:id`)."
-  @spec index_lookup(tid, :id, String.t()) :: [id]
+  @doc "All node ids carrying `value` for the given index kind (`:id` or `:class`)."
+  @spec index_lookup(tid, :id | :class, String.t()) :: [id]
   def index_lookup(index, :id, value), do: :ets.select(index, index_id_spec(value))
+  def index_lookup(index, :class, value), do: :ets.select(index, index_class_spec(value))
 
   defmatchspecp index_id_spec(value) do
     {{:id, ^value, _ref}, node_id} -> node_id
+  end
+
+  defmatchspecp index_class_spec(value) do
+    {{:class, ^value, _ref}, node_id} -> node_id
   end
 
   # ==========================================================================
@@ -370,24 +384,36 @@ defmodule DOM.NodeData.Table do
     end)
 
     check_parents_are_listed!(rows)
-    if index, do: check_id_index!(rows, index)
+    if index, do: check_index!(rows, index)
     :ok
   end
 
-  # The id index must equal, as a sorted list of {value, node} pairs, the id
-  # attributes of the element rows — no missing, stale, duplicate, or dangling row.
-  defp check_id_index!(rows, index) do
+  # The index must equal, as a sorted list of {kind, value, node} triples, the
+  # id/class memberships of the element rows — no missing, stale, duplicate, or
+  # dangling row (class tokens deduped as in index_put).
+  defp check_index!(rows, index) do
     expected =
-      for {id, %NodeData.Element{attributes: attributes}} <- rows,
-          {"id", value} <- attributes,
-          do: {value, id}
+      for {node_id, %NodeData.Element{attributes: attributes}} <- rows,
+          membership <- memberships(attributes),
+          do: Tuple.append(membership, node_id)
 
-    actual = for {{:id, value, _ref}, node_id} <- :ets.tab2list(index), do: {value, node_id}
+    actual =
+      for {{kind, value, _ref}, node_id} <- :ets.tab2list(index), do: {kind, value, node_id}
 
     if Enum.sort(expected) != Enum.sort(actual) do
-      raise "inconsistent id index: expected #{inspect(Enum.sort(expected))}, " <>
+      raise "inconsistent index: expected #{inspect(Enum.sort(expected))}, " <>
               "got #{inspect(Enum.sort(actual))}"
     end
+  end
+
+  # The {kind, value} memberships an attribute list contributes to the index.
+  defp memberships(attributes) do
+    ids = for {"id", value} <- attributes, do: {:id, value}
+
+    classes =
+      for {"class", value} <- attributes, token <- class_tokens(value), do: {:class, token}
+
+    ids ++ classes
   end
 
   defp check_no_duplicate_children!(id, children) do

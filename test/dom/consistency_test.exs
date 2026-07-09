@@ -88,4 +88,20 @@ defmodule DOM.ConsistencyTest do
     # never appended — legitimately unreachable, but still indexed
     assert_consistent(doc)
   end
+
+  test "class index tracks setAttribute / changed tokens / removeAttribute" do
+    doc = DOM.new("<div id=root></div>")
+    root = DOM.query_selector(doc, "#root")
+    el = DOM.create_element(doc, "span")
+    Node.append_child(root, el)
+
+    Element.set_attribute(el, "class", "box highlight")
+    assert_consistent(doc)
+
+    Element.set_attribute(el, "class", "box")
+    assert_consistent(doc)
+
+    Element.remove_attribute(el, "class")
+    assert_consistent(doc)
+  end
 end
