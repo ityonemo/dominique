@@ -266,6 +266,19 @@ defmodule DOM do
     {:reply, op.(state.nodes), state}
   end
 
+  @doc """
+  Assert the document's ETS invariants (see `DOM.NodeData.Table.check_consistency!/1`),
+  raising on violation. Test-only; wired into an `on_exit` hook by `DOM.Case`.
+  """
+  @spec _check_index_consistency!(GenServer.server()) :: :ok
+  def _check_index_consistency!(server) do
+    GenServer.call(server, :check_index_consistency)
+  end
+
+  defp check_index_consistency_impl(_from, state) do
+    {:reply, Table.check_consistency!(state.nodes), state}
+  end
+
   def _node_append_child(server, parent_id, %{server: child_server, id: child_id} = child) do
     result =
       if child_server == server do
@@ -1092,6 +1105,10 @@ defmodule DOM do
   @impl true
   def handle_call({:atomic_ets_op, op}, from, state) do
     atomic_ets_op_impl(op, from, state)
+  end
+
+  def handle_call(:check_index_consistency, from, state) do
+    check_index_consistency_impl(from, state)
   end
 
   @impl true

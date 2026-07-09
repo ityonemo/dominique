@@ -278,4 +278,64 @@ defmodule DOM.NodeData.Table do
       _ -> false
     end
   end
+
+  # ==========================================================================
+  # Consistency checking
+  # ==========================================================================
+
+  @doc """
+  Assert the node table's `parent`/`children` pointers are mutually consistent,
+  returning `:ok` or raising. For every node:
+
+    * each child in `children` appears exactly once and points back
+      (`child.parent == node`);
+    * conversely, every node whose non-nil `parent` is `node` appears in
+      `node`'s `children`.
+
+  A legitimately detached subtree (its root's `parent` is `nil`, its internal
+  edges agreeing) passes; a `detach`-and-forgot leak or a dangling pointer fails.
+  Meant to run between operations (e.g. an `on_exit` hook), never mid-operation.
+  """
+  @spec check_consistency!(tid) :: :ok
+  def check_consistency!(tid) do
+    rows = :ets.tab2list(tid)
+    parents = Map.new(rows, fn {id, data} -> {id, NodeData.parent(data)} end)
+
+    Enum.each(rows, fn {id, data} ->
+      children = NodeData.children(data)
+      check_no_duplicate_children!(id, children)
+      check_children_point_back!(id, children, parents)
+    end)
+
+    check_parents_are_listed!(rows)
+    :ok
+  end
+
+  defp check_no_duplicate_children!(id, children) do
+    if children != Enum.uniq(children) do
+      raise "inconsistent tree: #{inspect(id)} lists a child more than once"
+    end
+  end
+
+  defp check_children_point_back!(id, children, parents) do
+    Enum.each(children, fn child_id ->
+      if Map.get(parents, child_id) != id do
+        raise "inconsistent tree: #{inspect(id)} lists child #{inspect(child_id)}, " <>
+                "but the child's parent is #{inspect(Map.get(parents, child_id))}"
+      end
+    end)
+  end
+
+  defp check_parents_are_listed!(rows) do
+    children_of = Map.new(rows, fn {id, data} -> {id, NodeData.children(data)} end)
+
+    Enum.each(rows, fn {id, data} ->
+      parent_id = NodeData.parent(data)
+
+      if parent_id != nil and id not in Map.get(children_of, parent_id, []) do
+        raise "inconsistent tree: #{inspect(id)} has parent #{inspect(parent_id)}, " <>
+                "but that parent does not list it as a child"
+      end
+    end)
+  end
 end

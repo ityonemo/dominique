@@ -47,6 +47,68 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "check_consistency! — adjacency integrity" do
+    test "passes for a well-formed tree built through the primitives", %{tid: tid} do
+      doc = Table.create_document(tid)
+      ul = Table.create_element(tid, "ul")
+      a = Table.create_element(tid, "a")
+      b = Table.create_element(tid, "b")
+      Table.append_child(tid, doc, ul)
+      Table.append_child(tid, ul, a)
+      Table.append_child(tid, ul, b)
+
+      assert Table.check_consistency!(tid) == :ok
+    end
+
+    test "passes for a legitimately detached subtree (nil-rooted, self-consistent)", %{tid: tid} do
+      # A detached fragment: its root has parent: nil, its internal edges agree.
+      frag = Table.create_element(tid, "section")
+      child = Table.create_element(tid, "p")
+      Table.append_child(tid, frag, child)
+
+      assert Table.check_consistency!(tid) == :ok
+    end
+
+    test "passes for a template's content fragment (linked via content, parent nil)", %{tid: tid} do
+      {_template, content} = Table.create_template(tid, [{"id", "x"}])
+      inner = Table.create_element(tid, "span")
+      Table.append_child(tid, content, inner)
+
+      assert Table.check_consistency!(tid) == :ok
+    end
+
+    test "raises when a child's parent field is stale (in parent.children but points elsewhere)",
+         %{tid: tid} do
+      p = Table.create_element(tid, "ul")
+      c = Table.create_element(tid, "li")
+      Table.append_child(tid, p, c)
+      # Corrupt: c is listed under p, but c.parent points at nil.
+      Table.put(tid, c, %{Table.fetch!(tid, c) | parent: nil})
+
+      assert_raise RuntimeError, ~r/consisten/i, fn -> Table.check_consistency!(tid) end
+    end
+
+    test "raises when a node's parent lists it nowhere (detach-and-forgot leak)", %{tid: tid} do
+      p = Table.create_element(tid, "ul")
+      c = Table.create_element(tid, "li")
+      Table.append_child(tid, p, c)
+      # Corrupt: drop c from p.children but leave c.parent == p (a stale detach).
+      Table.put(tid, p, %{Table.fetch!(tid, p) | children: []})
+
+      assert_raise RuntimeError, ~r/consisten/i, fn -> Table.check_consistency!(tid) end
+    end
+
+    test "raises when a child appears twice in parent.children", %{tid: tid} do
+      p = Table.create_element(tid, "ul")
+      c = Table.create_element(tid, "li")
+      Table.append_child(tid, p, c)
+      # Corrupt: duplicate the child in the list.
+      Table.put(tid, p, %{Table.fetch!(tid, p) | children: [c, c]})
+
+      assert_raise RuntimeError, ~r/consisten/i, fn -> Table.check_consistency!(tid) end
+    end
+  end
+
   describe "mutation" do
     test "append_child links parent and child both ways", %{tid: tid} do
       p = Table.create_element(tid, "ul")
