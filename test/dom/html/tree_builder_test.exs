@@ -925,6 +925,22 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
 
+    # spec §13.2.6.4.16 (<select> start tag in select): a nested <select> closes
+    # the open select — and does so even through intervening formatting/blocks (the
+    # walk is not stopped by a <b> above the select). Then <option> reconstructs the
+    # <b>, so the second option is in a <b> sibling of the select. Matches Chromium
+    # / the .dat (Firefox, no customizable select, differs; unit/.dat only).
+    test "a nested select closes the outer select through open formatting" do
+      assert tree("<select><b><option><select><option></b></select>") ==
+               doc([
+                 "|     <select>",
+                 "|       <b>",
+                 "|         <option>",
+                 "|     <b>",
+                 "|       <option>"
+               ])
+    end
+
     # spec §13.2.6.4.16 (<hr> start tag): an hr pops a current option/optgroup and
     # is inserted as a void child of the select.
     test "an hr in a select is a void child" do

@@ -2118,15 +2118,14 @@ defmodule DOM.HTML.TreeBuilder do
 
   # "Have a select in select scope" (§13.2.4.2): walk the stack while nodes are
   # optgroup/option; a select returns true, any other element returns false.
-  defp select_in_scope?(%__MODULE__{open_elements: [el | rest]} = state) do
-    case Node.node_name(el) do
-      "select" -> true
-      name when name in ~w(optgroup option) -> select_in_scope?(%{state | open_elements: rest})
-      _ -> false
-    end
+  # Whether a <select> is open on the stack. Customizable select allows arbitrary
+  # content (formatting, blocks) between the select and the current node, and a
+  # nested <select> / </select> still closes the open select through it (verified
+  # against Chromium), so the walk is not stopped by intervening elements — it just
+  # looks for a select anywhere below.
+  defp select_in_scope?(state) do
+    Enum.any?(state.open_elements, &(Node.node_name(&1) == "select"))
   end
-
-  defp select_in_scope?(%__MODULE__{open_elements: []}), do: false
 
   # For </optgroup>: if the current node is an option whose immediately-lower
   # stack entry is an optgroup, pop the option first (so the optgroup can close).
