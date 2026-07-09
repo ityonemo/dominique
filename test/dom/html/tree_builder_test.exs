@@ -941,6 +941,61 @@ defmodule DOM.HTML.TreeBuilderTest do
                ])
     end
 
+    # <selectedcontent> reflects (deep-clones) the content of the select's SELECTED
+    # <option> — by default the first option; else the one with a `selected`
+    # attribute. Modeled as a post-parse pass. Matches Chromium / the .dat (Firefox
+    # has not shipped it; unit/.dat conformance only, per the in-select mode note).
+    test "selectedcontent mirrors the first option by default" do
+      assert tree("<select><button><selectedcontent></button><option>X") ==
+               doc([
+                 "|     <select>",
+                 "|       <button>",
+                 "|         <selectedcontent>",
+                 "|           \"X\"",
+                 "|       <option>",
+                 "|         \"X\""
+               ])
+    end
+
+    test "selectedcontent mirrors the option carrying the selected attribute" do
+      assert tree("<select><button><selectedcontent></button><option>X<option selected>Y") ==
+               doc([
+                 "|     <select>",
+                 "|       <button>",
+                 "|         <selectedcontent>",
+                 "|           \"Y\"",
+                 "|       <option>",
+                 "|         \"X\"",
+                 "|       <option>",
+                 "|         selected=\"\"",
+                 "|         \"Y\""
+               ])
+    end
+
+    test "selectedcontent deep-clones the selected option subtree" do
+      assert tree("<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b") ==
+               doc([
+                 "|     <select>",
+                 "|       <button>",
+                 "|         <selectedcontent>",
+                 "|           \"x\"",
+                 "|           <i>",
+                 "|             \"i\"",
+                 "|             <b>",
+                 "|               \"ib\"",
+                 "|           <b>",
+                 "|             \"b\"",
+                 "|       <option>",
+                 "|         \"x\"",
+                 "|         <i>",
+                 "|           \"i\"",
+                 "|           <b>",
+                 "|             \"ib\"",
+                 "|         <b>",
+                 "|           \"b\""
+               ])
+    end
+
     # spec §13.2.6.4.16 (<hr> start tag): an hr pops a current option/optgroup and
     # is inserted as a void child of the select.
     test "an hr in a select is a void child" do

@@ -102,7 +102,43 @@ defmodule DOM.HTML.TreeBuilder do
   @spec build([struct()]) :: Node.t()
   def build(tokens) do
     state = %__MODULE__{document: DOM.new(), mode: :initial}
-    tokens |> Enum.reduce(state, &step/2) |> eof() |> Map.fetch!(:document)
+    document = tokens |> Enum.reduce(state, &step/2) |> eof() |> Map.fetch!(:document)
+    reflect_selectedcontent(document)
+    document
+  end
+
+  # <selectedcontent> reflects the content of its <select>'s currently-selected
+  # <option>: a deep clone of that option's children becomes the selectedcontent's
+  # children. The selected option is the last one bearing a `selected` attribute,
+  # else the first option (matching Chromium's default selection). Modeled as a
+  # post-parse pass — the reflection is a snapshot of the final parsed tree.
+  defp reflect_selectedcontent(document) do
+    for select <- DOM.get_elements_by_tag_name(document, "select") do
+      contents = DOM.get_elements_by_tag_name(select, "selectedcontent")
+
+      if contents != [] do
+        if option = selected_option(select) do
+          children = Node.child_nodes(option)
+          Enum.each(contents, &clone_children_into(&1, children))
+        end
+      end
+    end
+  end
+
+  # The selected <option> of a select: the last one with a `selected` attribute,
+  # else the first option (nil when the select has no options).
+  defp selected_option(select) do
+    options = DOM.get_elements_by_tag_name(select, "option")
+
+    Enum.find(Enum.reverse(options), &Element.has_attribute(&1, "selected")) ||
+      List.first(options)
+  end
+
+  # Deep-clone each of `children` and append the clones to `target`.
+  defp clone_children_into(target, children) do
+    Enum.each(children, fn child ->
+      Node.append_child(target, Node.clone_node(child, true))
+    end)
   end
 
   @doc """
@@ -133,6 +169,7 @@ defmodule DOM.HTML.TreeBuilder do
     |> Enum.reduce(state, &step/2)
     |> eof()
 
+    reflect_selectedcontent(root)
     root
   end
 
