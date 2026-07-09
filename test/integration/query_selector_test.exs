@@ -237,6 +237,49 @@ defmodule Integration.QuerySelectorTest do
     end
   end
 
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/css/selectors"
+
+    # :scope is the element the query is rooted at. `el.querySelectorAll(":scope")`
+    # returns el; `:scope > p` matches only el's direct-child p; a plain descendant
+    # query never returns el itself.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<div id='root'><p id='p1'>a</p><section><p id='p2'>b</p></section></div>",
+        "text/html");
+      const root = doc.getElementById("root");
+      const ids = (sel) => Array.from(root.querySelectorAll(sel), n => n.getAttribute("id"));
+      return {
+        scope: ids(":scope"),
+        scopeChild: ids(":scope > p"),
+        plainP: ids("p"),
+        rootMatchesScope: root.matches(":scope")
+      };
+    });
+    """
+
+    test ":scope matches the query root like the browser", %{js: expected} do
+      document =
+        DOM.new("<div id='root'><p id='p1'>a</p><section><p id='p2'>b</p></section></div>")
+
+      root = DOM.query_selector(document, "#root")
+
+      ids = fn selector ->
+        root |> DOM.query_selector_all(selector) |> Enum.map(&Element.get_attribute(&1, "id"))
+      end
+
+      result = %{
+        "scope" => ids.(":scope"),
+        "scopeChild" => ids.(":scope > p"),
+        "plainP" => ids.("p"),
+        "rootMatchesScope" => DOM.matches(root, ":scope")
+      }
+
+      assert result == expected
+    end
+  end
+
   # The same tree as the @js battery, with matching explicit ids.
   defp build(document) do
     el(document, "section", "section", [], [

@@ -194,20 +194,26 @@ Pegasus from `lib/dom/css/selector.peg`) turns a selector string into a struct
 AST (`DOM.CSS.Type`, `Compound`, `Complex`, `PseudoClass`, …); `to_string/1`
 serializes it back (round-trip + idempotence are StreamData-property-tested). The
 protocol callback `match(selector, nodes, candidate_ids)` dispatches on the
-selector struct and is meant to run inside the DOM GenServer against the ETS
-table — currently every impl is stubbed `raise "unimplemented"`.
+selector struct and runs inside the DOM GenServer against the ETS table (helpers
+in `lib/dom/css/_query.ex`, `DOM.CSS.Query`).
 
-The **full Level-4 grammar parses**, but `match/3` support is being filled in
-tiers. The parser is complete; matching is not.
+The **full Level-4 grammar parses and matches** for everything derivable from the
+tree. Implemented: type/universal/id/class; attribute (all 6 operators + `i`/`s`
+flags); compound + all 4 combinators; selector lists; `:not`/`:is`/`:where`/`:has`;
+`:root`/`:empty`; `:first/last/only-child`, `:nth-*child(An+B [of S])`; the
+`*-of-type` family; `:lang`/`:dir(ltr|rtl)` (inherited via the ancestor walk);
+`:scope` (bound to the query root in `lib/dom.ex`; `DOM.CSS.bind_scope/2`).
+
+**Namespaces** (query context, no declared prefixes): a **string** prefix
+(`svg|rect`) raises `ArgumentError` — parse + `DOM.CSS.validate!/1` run in the
+CALLER's process (`DOM.query_selector*`/`matches`), so the document server never
+crashes on a bad selector. `*|`/bare match any namespace; `|` (`:none`, the null
+namespace) matches nothing, since every parsed element is `:html`/`:svg`/`:mathml`.
 
 **Deferred — intended to be implemented:**
 
-- **Structural pseudo-classes** (first matcher arc): `:first-child`,
-  `:last-child`, `:only-child`, `:nth-*(An+B [of S])`, `:empty`, `:root`,
-  `:not`, `:is`, `:where`, `:has`. Fully derivable from the tree.
-- **`:lang` / `:dir`** — implementable from the `lang`/`dir` attribute + the
-  ancestor walk we already have (`:dir` also needs bidi rules). Deferred as
-  scope, not impossibility. **We do want these.**
+- **`:dir(auto)`** — needs bidi resolution of element text, which `NodeData` does
+  not model; stays match-nothing.
 - **UI / state / navigation pseudo-classes** — `:hover`, `:focus`, `:active`,
   `:focus-visible`, `:focus-within`, `:checked`, `:disabled`, `:enabled`,
   `:required`, `:valid`, `:indeterminate`, `:read-only`, `:visited`, `:link`,

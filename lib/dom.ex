@@ -918,9 +918,12 @@ defmodule DOM do
   end
 
   # `selector` arrives already parsed and validated by the caller (parse_selector!).
+  # In a `matches` context the node itself is the scoping root for `:scope`.
   defp matches_impl(node_id, selector, _from, state) do
+    scoped = DOM.CSS.bind_scope(selector, node_id)
+
     matched =
-      Enum.any?(selector, fn complex -> DOM.CSS.match(complex, state.nodes, [node_id]) != [] end)
+      Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, state.nodes, [node_id]) != [] end)
 
     {:reply, matched, state}
   end
@@ -929,11 +932,16 @@ defmodule DOM do
   # complex in the selector list contributes its matches; the union is ordered by
   # the tree-order descendant walk.
   # `selector` arrives already parsed and validated by the caller (parse_selector!).
+  # `:scope` is bound to `root_id` so it can anchor relative matches (`:scope > p`)
+  # via the combinator chain. Per querySelectorAll, the candidate result set is
+  # the root's descendants only — the root itself is never returned, so a bare
+  # `:scope` matches nothing (mirrors the browser).
   defp query_ids(root_id, selector, state) do
+    scoped = DOM.CSS.bind_scope(selector, root_id)
     candidates = descendant_ids(state.nodes, root_id)
 
     matched =
-      selector
+      scoped
       |> Enum.flat_map(fn complex -> DOM.CSS.match(complex, state.nodes, candidates) end)
       |> MapSet.new()
 

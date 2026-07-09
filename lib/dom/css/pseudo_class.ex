@@ -100,6 +100,13 @@ defmodule DOM.CSS.PseudoClass do
     nth_type(nodes, candidates, {a, b}, :backward)
   end
 
+  # :scope — the scoping root of the query. `query_ids`/`matches` bind the
+  # concrete root id into the arg before matching (DOM.CSS.bind_scope/2); an
+  # unbound :scope (arg nil) has no root and matches nothing.
+  def match(%{name: "scope", arg: {:scope, scope_id}}, _nodes, candidates) do
+    Enum.filter(candidates, &(&1 == scope_id))
+  end
+
   # :lang(A, B, …) — the element's inherited `lang` (nearest ancestor-or-self
   # bearing one) matches one of the args by the `|=` rule: equal, or a prefix
   # followed by "-", case-insensitively (BCP-47 subtags).

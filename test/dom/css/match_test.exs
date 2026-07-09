@@ -488,6 +488,48 @@ defmodule DOM.CSS.MatchTest do
     end
   end
 
+  describe ":scope" do
+    setup do
+      {table, ids} =
+        build(
+          element(
+            "div",
+            [],
+            [
+              element("p", [], [], as: :p1),
+              element("section", [], [element("p", [], [], as: :p2)], as: :section)
+            ],
+            as: :root
+          )
+        )
+
+      # descendants only, as querySelectorAll passes them (the root is not a
+      # candidate — a bare :scope therefore matches nothing in a real query).
+      descendants = [ids[:p1], ids[:section], ids[:p2]]
+      %{table: table, ids: ids, descendants: descendants}
+    end
+
+    test "bound :scope matches the root when it is offered as a candidate", ctx do
+      # bind_scope pins the root id; matched against a candidate set that includes
+      # the root, :scope selects it. (Real queries never offer the root, so bare
+      # :scope returns nothing there — covered by the integration test.)
+      selector = DOM.CSS.bind_scope(DOM.CSS.parse(":scope"), ctx.ids[:root])
+
+      assert matched(ctx.table, hd(selector), [ctx.ids[:root] | ctx.descendants]) ==
+               MapSet.new([ctx.ids[:root]])
+    end
+
+    test ":scope > p matches only the root's direct-child p, among descendants", ctx do
+      selector = DOM.CSS.bind_scope(DOM.CSS.parse(":scope > p"), ctx.ids[:root])
+      assert matched(ctx.table, hd(selector), ctx.descendants) == MapSet.new([ctx.ids[:p1]])
+    end
+
+    test "an unbound :scope matches nothing", ctx do
+      # Without bind_scope the arg stays nil and there is no root to match.
+      assert matched(ctx.table, pc(":scope"), ctx.descendants) == MapSet.new()
+    end
+  end
+
   describe ":has" do
     setup do
       {table, ids} =

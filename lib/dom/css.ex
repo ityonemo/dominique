@@ -95,4 +95,39 @@ after
   end
 
   defp validate_node!(_simple), do: :ok
+
+  @doc """
+  Binds the scoping root `scope_id` into every `:scope` pseudo-class in the
+  parsed selector, so `match/3` can match it against candidates. Called by the
+  query path once the concrete root id is known.
+  """
+  @spec bind_scope(DOM.CSS.t(), reference()) :: DOM.CSS.t()
+  def bind_scope(selector_list, scope_id) do
+    Enum.map(selector_list, &bind_node(&1, scope_id))
+  end
+
+  # Walk by map shape (as validate!) to avoid a compile-time cycle.
+  defp bind_node(combinator, _scope_id) when is_atom(combinator), do: combinator
+
+  defp bind_node(%{parts: parts} = node, scope_id) do
+    %{node | parts: Enum.map(parts, &bind_node(&1, scope_id))}
+  end
+
+  defp bind_node(%{simples: simples} = node, scope_id) do
+    %{node | simples: Enum.map(simples, &bind_node(&1, scope_id))}
+  end
+
+  defp bind_node(%{name: "scope", arg: nil} = node, scope_id) do
+    %{node | arg: {:scope, scope_id}}
+  end
+
+  defp bind_node(%{arg: {:selector_list, list}} = node, scope_id) do
+    %{node | arg: {:selector_list, bind_scope(list, scope_id)}}
+  end
+
+  defp bind_node(%{arg: {a, b, list}} = node, scope_id) when is_integer(a) and is_integer(b) do
+    %{node | arg: {a, b, bind_scope(list, scope_id)}}
+  end
+
+  defp bind_node(node, _scope_id), do: node
 end
