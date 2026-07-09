@@ -240,6 +240,62 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "attribute index primitives" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "index_put registers each attribute; exact lookup finds by name+value",
+         %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([{"data-role", "nav"}, {"title", "Home"}]))
+      assert Table.index_lookup(index, :attr, "data-role", "nav") == [node]
+      assert Table.index_lookup(index, :attr, "title", "Home") == [node]
+      assert Table.index_lookup(index, :attr, "data-role", "other") == []
+      assert Table.index_lookup(index, :attr, "absent", "x") == []
+    end
+
+    test "by-name lookup returns {value, node} for every value under that name",
+         %{index: index} do
+      a = make_ref()
+      b = make_ref()
+      Table.index_put(index, a, el([{"data-x", "1"}]))
+      Table.index_put(index, b, el([{"data-x", "2"}]))
+
+      assert Enum.sort(Table.index_lookup_attr_name(index, "data-x")) ==
+               Enum.sort([{"1", a}, {"2", b}])
+
+      assert Table.index_lookup_attr_name(index, "absent") == []
+    end
+
+    test "id and class are ALSO indexed as attributes", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([{"id", "main"}, {"class", "box hi"}]))
+      # attribute-selector forms read the attr index directly
+      assert Table.index_lookup(index, :attr, "id", "main") == [node]
+      assert Table.index_lookup(index, :attr, "class", "box hi") == [node]
+      # and they still populate the dedicated id/class indices
+      assert Table.index_lookup(index, :id, "main") == [node]
+      assert Table.index_lookup(index, :class, "box") == [node]
+    end
+
+    test "index_retract removes a node's attribute rows", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([{"data-role", "nav"}]))
+      Table.index_retract(index, node)
+      assert Table.index_lookup(index, :attr, "data-role", "nav") == []
+      assert Table.index_lookup_attr_name(index, "data-role") == []
+    end
+
+    test "index_put refreshes attribute rows on change", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, el([{"data-x", "old"}]))
+      Table.index_put(index, node, el([{"data-x", "new"}]))
+      assert Table.index_lookup(index, :attr, "data-x", "old") == []
+      assert Table.index_lookup(index, :attr, "data-x", "new") == [node]
+    end
+  end
+
   describe "check_consistency!/2 — id index agreement" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}

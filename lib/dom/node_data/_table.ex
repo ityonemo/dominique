@@ -302,8 +302,11 @@ defmodule DOM.NodeData.Table do
   def index_put(index, node_id, %NodeData.Element{} = element) do
     index_retract(index, node_id)
 
-    for {kind, value} <- memberships(element) do
-      :ets.insert(index, {{kind, value, make_ref()}, node_id})
+    for membership <- memberships(element) do
+      # Each membership is `{kind, value…}`; the row key appends a fresh ref so
+      # every membership is a distinct, individually-deletable ordered_set row.
+      key = List.to_tuple(Tuple.to_list(membership) ++ [make_ref()])
+      :ets.insert(index, {key, node_id})
     end
 
     :ok
@@ -316,19 +319,25 @@ defmodule DOM.NodeData.Table do
       :ets.match_delete(index, {{kind, :_, :_}, node_id})
     end
 
+    :ets.match_delete(index, {{:attr, :_, :_, :_}, node_id})
     :ok
   end
 
-  # The {kind, value} memberships an element contributes to the index: its tag,
-  # ids, and (deduped) class tokens. Single source of truth for both index_put
-  # and the consistency checker.
+  # Every membership an element contributes to the index, each a tuple headed by
+  # its kind (the index row key appends a fresh ref):
+  #   {:tag, local_name} | {:id, value} | {:class, token} | {:attr, name, value}
+  # Every attribute yields an {:attr, …} membership (id/class included), so their
+  # attribute-selector forms are index-backed too, alongside the dedicated
+  # {:id,…}/{:class,…} memberships. Single source of truth for index_put and the
+  # consistency checker.
   defp memberships(%NodeData.Element{local_name: local_name, attributes: attributes}) do
     ids = for {"id", value} <- attributes, do: {:id, value}
 
     classes =
       for {"class", value} <- attributes, token <- class_tokens(value), do: {:class, token}
 
-    [{:tag, local_name} | ids ++ classes]
+    attrs = for {name, value} <- attributes, do: {:attr, name, value}
+    [{:tag, local_name} | ids ++ classes ++ attrs]
   end
 
   # A class attribute's distinct whitespace-separated tokens (classList is a set,
@@ -368,6 +377,34 @@ defmodule DOM.NodeData.Table do
     {{:class, ^value, _ref}, node_id} -> node_id
   end
 
+  @doc """
+  All node ids with attribute `name` == `value` — the exact-match path for
+  `[name=value]` (a bounded prefix scan on the `{:attr, name, value, _}` prefix).
+  """
+  @spec index_lookup(tid, :attr, String.t(), String.t()) :: [id]
+  def index_lookup(index, :attr, name, value) do
+    :ets.select(index, index_attr_spec(name, value))
+  end
+
+  @doc """
+  Every `{value, node_id}` for attribute `name` — the by-name path for `[name]`
+  presence and the advanced operators (`~= |= ^= $= *=`) / `i` flag, which filter
+  the values in the caller. A bounded prefix scan on the `{:attr, name, _, _}`
+  prefix.
+  """
+  @spec index_lookup_attr_name(tid, String.t()) :: [{String.t(), id}]
+  def index_lookup_attr_name(index, name) do
+    :ets.select(index, index_attr_name_spec(name))
+  end
+
+  defmatchspecp index_attr_spec(name, value) do
+    {{:attr, ^name, ^value, _ref}, node_id} -> node_id
+  end
+
+  defmatchspecp index_attr_name_spec(name) do
+    {{:attr, ^name, value, _ref}, node_id} -> {value, node_id}
+  end
+
   # ==========================================================================
   # Consistency checking
   # ==========================================================================
@@ -404,22 +441,28 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
-  # The index must equal, as a sorted list of {kind, value, node} triples, the
-  # id/class memberships of the element rows — no missing, stale, duplicate, or
-  # dangling row (class tokens deduped as in index_put).
+  # The index must equal, as a sorted list of {membership, node} pairs, the
+  # memberships (tag/id/class/attr) of the element rows — no missing, stale,
+  # duplicate, or dangling row. A `membership` is the row key with its trailing
+  # ref dropped, so this is arity-agnostic across the kinds.
   defp check_index!(rows, index) do
     expected =
       for {node_id, %NodeData.Element{} = element} <- rows,
-          {kind, value} <- memberships(element),
-          do: {kind, value, node_id}
+          membership <- memberships(element),
+          do: {membership, node_id}
 
     actual =
-      for {{kind, value, _ref}, node_id} <- :ets.tab2list(index), do: {kind, value, node_id}
+      for {key, node_id} <- :ets.tab2list(index), do: {drop_ref(key), node_id}
 
     if Enum.sort(expected) != Enum.sort(actual) do
       raise "inconsistent index: expected #{inspect(Enum.sort(expected))}, " <>
               "got #{inspect(Enum.sort(actual))}"
     end
+  end
+
+  # An index row key minus its trailing membership ref (its {kind, value…} head).
+  defp drop_ref(key) do
+    key |> Tuple.to_list() |> Enum.drop(-1) |> List.to_tuple()
   end
 
   defp check_no_duplicate_children!(id, children) do
