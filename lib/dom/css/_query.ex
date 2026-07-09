@@ -33,10 +33,14 @@ defmodule DOM.CSS.Query do
     index |> Table.index_lookup(:id, id) |> intersect(candidates)
   end
 
-  @doc "Element ids in `candidates` whose `class` attribute contains `token`."
+  @doc """
+  Element ids in `candidates` carrying class `token` — read from the class index
+  (a bounded prefix scan of the `:ordered_set`), then intersected with the
+  candidate scope.
+  """
   @spec class(:ets.tid(), [reference()], String.t()) :: [reference()]
-  def class(nodes, candidates, token) do
-    attribute(nodes, candidates, "class", :includes, token, nil)
+  def class(index, candidates, token) do
+    index |> Table.index_lookup(:class, token) |> intersect(candidates)
   end
 
   @doc """

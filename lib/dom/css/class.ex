@@ -12,8 +12,8 @@ defmodule DOM.CSS.Class do
   @type t :: %__MODULE__{name: String.t()}
 
   @impl DOM.CSS
-  def match(%{name: name}, %{nodes: nodes}, candidate_ids) do
-    Query.class(nodes, candidate_ids, name)
+  def match(%{name: name}, %{index: index}, candidate_ids) do
+    Query.class(index, candidate_ids, name)
   end
 
   defimpl String.Chars do
