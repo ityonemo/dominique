@@ -64,6 +64,10 @@ defmodule DOM.HTML.TreeBuilder do
   # Void elements: a start tag with no children and no end tag.
   @void ~w(area base br col embed hr img input keygen link meta param source track wbr)
 
+  # Void start tags that reconstruct the active formatting elements before
+  # inserting (§13.2.6.4.7). base/link/meta/param/source/track do not.
+  @reconstruct_void ~w(area br embed img keygen wbr input)
+
   # "generate implied end tags" (§13.2.6.3): while the current node is one of
   # these, pop it. An optional exception name is excluded from the set.
   @implied_end_tags ~w(dd dt li optgroup option p rb rp rt rtc)
@@ -722,6 +726,9 @@ defmodule DOM.HTML.TreeBuilder do
   # the later table-child clause), so it is excluded here.
   defp process(:in_body, %Token.StartTag{name: name} = token, state)
        when name in @void and name != "col" do
+    # The area/br/embed/img/keygen/wbr (and input) start tags reconstruct the
+    # active formatting elements first (§13.2.6.4.7); base/link/meta/… do not.
+    state = if name in @reconstruct_void, do: reconstruct_formatting(state), else: state
     {_el, state} = insert_html_element(token, state)
     state = pop(state)
     if void_clears_frameset?(name, token), do: %{state | frameset_ok: false}, else: state

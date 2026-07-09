@@ -576,6 +576,20 @@ defmodule DOM.HTML.TreeBuilderTest do
   end
 
   describe "in body — §13.2.4.3 active formatting list (reconstruction)" do
+    # spec §13.2.6.4.7 (area/br/embed/img/keygen/wbr start tag): these void tags
+    # reconstruct the active formatting elements before inserting. So after a
+    # </font> that leaves <font> in the AFE, an <img> re-opens the <font> and
+    # nests inside it.
+    test "an img start tag reconstructs the active formatting elements" do
+      assert tree("<font><i></font><img>") ==
+               doc([
+                 "|     <font>",
+                 "|       <i>",
+                 "|     <i>",
+                 "|       <img>"
+               ])
+    end
+
     # spec §13.2.4.3: reconstruct the active formatting elements — the </b>
     # adoption splits <b> out of the <p>; the "2" inside the <p> is wrapped by a
     # reconstructed <b>, and "3" (after </b>) stays bare in the <p>.
