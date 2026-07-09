@@ -48,10 +48,15 @@ defmodule DOM.CSS.Query do
   end
 
   @doc """
-  Element ids in `candidates` matching an attribute selector. With `op` nil this
-  is a presence test; otherwise the value is matched per `op` (`:eq`,
-  `:includes`, `:dash`, `:prefix`, `:suffix`, `:substring`), case-insensitively
-  when `flag` is `:i`.
+  Element ids in `candidates` matching an attribute selector, read from the attr
+  index. With `op` nil this is a presence test; otherwise the value is matched
+  per `op` (`:eq`, `:includes`, `:dash`, `:prefix`, `:suffix`, `:substring`),
+  case-insensitively when `flag` is `:i`.
+
+  Exact `[name=value]` (case-sensitive) is a point lookup on the
+  `{:attr, name, value, _}` prefix; presence and every other operator (and any
+  `i`-flagged compare) read all `{value, node_id}` under the name (a bounded
+  by-name prefix scan) and filter the values here.
   """
   @spec attribute(
           :ets.tid(),
@@ -61,11 +66,20 @@ defmodule DOM.CSS.Query do
           String.t() | nil,
           :i | :s | nil
         ) :: [reference()]
-  def attribute(nodes, candidates, name, op, value, flag) do
+  def attribute(index, candidates, name, :eq, value, flag) when flag != :i do
+    index |> Table.index_lookup(:attr, name, value) |> intersect(candidates)
+  end
+
+  def attribute(index, candidates, name, nil, _value, _flag) do
+    matched = for {_value, node_id} <- Table.index_lookup_attr_name(index, name), do: node_id
+    intersect(matched, candidates)
+  end
+
+  def attribute(index, candidates, name, op, value, flag) do
     matched =
-      for {id, attributes} <- select(nodes, attributes_spec()),
-          attribute_match?(attributes, name, op, value, flag),
-          do: id
+      for {actual, node_id} <- Table.index_lookup_attr_name(index, name),
+          value_match?(op, fold(actual, flag), fold(value, flag)),
+          do: node_id
 
     intersect(matched, candidates)
   end
@@ -278,10 +292,6 @@ defmodule DOM.CSS.Query do
     {id, %{__struct__: NodeData.Element}} -> id
   end
 
-  defmatchspecp attributes_spec() do
-    {id, %{__struct__: NodeData.Element, attributes: attributes}} -> {id, attributes}
-  end
-
   defmatchspecp attributes_of_spec(node_id) do
     {^node_id, %{__struct__: NodeData.Element, attributes: attributes}} -> attributes
   end
@@ -318,18 +328,6 @@ defmodule DOM.CSS.Query do
   defp intersect(matched, candidates) do
     set = MapSet.new(matched)
     Enum.filter(candidates, &MapSet.member?(set, &1))
-  end
-
-  # Presence test when op is nil; otherwise compare the stored value per op.
-  defp attribute_match?(attributes, name, nil, _value, _flag) do
-    List.keymember?(attributes, name, 0)
-  end
-
-  defp attribute_match?(attributes, name, op, value, flag) do
-    case List.keyfind(attributes, name, 0) do
-      {^name, actual} -> value_match?(op, fold(actual, flag), fold(value, flag))
-      nil -> false
-    end
   end
 
   defp fold(string, :i), do: String.downcase(string)
