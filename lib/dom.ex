@@ -904,11 +904,16 @@ defmodule DOM do
   end
 
   defp get_element_by_id_impl(root_id, id, _from, state) do
+    # The index gives every node with this id doc-wide (unordered); intersect with
+    # the scope root's descendants and return the first in tree order.
+    matches = MapSet.new(Table.index_lookup(state.index, :id, id))
+
     match_id =
-      Enum.find(descendant_ids(state.nodes, root_id), fn node_id ->
-        node = fetch_node!(state.nodes, node_id)
-        match?(%NodeData.Element{}, node) and List.keyfind(node.attributes, "id", 0) == {"id", id}
-      end)
+      if MapSet.size(matches) == 0 do
+        nil
+      else
+        Enum.find(descendant_ids(state.nodes, root_id), &MapSet.member?(matches, &1))
+      end
 
     match = if match_id, do: node_handle(state.nodes, match_id)
     {:reply, match, state}
