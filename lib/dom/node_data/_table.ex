@@ -394,8 +394,8 @@ defmodule DOM.NodeData.Table do
   defp check_index!(rows, index) do
     expected =
       for {node_id, %NodeData.Element{attributes: attributes}} <- rows,
-          membership <- memberships(attributes),
-          do: Tuple.append(membership, node_id)
+          {kind, value} <- memberships(attributes),
+          do: {kind, value, node_id}
 
     actual =
       for {{kind, value, _ref}, node_id} <- :ets.tab2list(index), do: {kind, value, node_id}

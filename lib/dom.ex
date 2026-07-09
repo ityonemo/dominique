@@ -932,9 +932,17 @@ defmodule DOM do
       if wanted == [] do
         []
       else
+        # Each token's index lookup yields all nodes carrying it doc-wide;
+        # intersect those sets (an element must carry EVERY token), then filter to
+        # the scope root's descendants in tree order.
+        matched =
+          wanted
+          |> Enum.map(&MapSet.new(Table.index_lookup(state.index, :class, &1)))
+          |> Enum.reduce(&MapSet.intersection/2)
+
         state.nodes
         |> descendant_ids(root_id)
-        |> Enum.filter(&class_name_match?(state.nodes, &1, wanted))
+        |> Enum.filter(&MapSet.member?(matched, &1))
         |> Enum.map(&node_handle(state.nodes, &1))
       end
 
@@ -990,18 +998,6 @@ defmodule DOM do
       |> MapSet.new()
 
     Enum.filter(candidates, &MapSet.member?(matched, &1))
-  end
-
-  defp class_name_match?(nodes, node_id, wanted) do
-    node = fetch_node!(nodes, node_id)
-
-    with %NodeData.Element{} <- node,
-         {"class", class} <- List.keyfind(node.attributes, "class", 0) do
-      present = class_tokens(class)
-      Enum.all?(wanted, &(&1 in present))
-    else
-      _ -> false
-    end
   end
 
   defp class_tokens(names), do: String.split(names)
