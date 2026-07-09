@@ -13,11 +13,14 @@ defmodule DOM.HTML.TreeBuilder do
   #
   # Spec: https://html.spec.whatwg.org/multipage/parsing.html#tree-construction
 
-  alias DOM.Element
   alias DOM.HTML.Token
-  alias DOM.Node
+  alias DOM.NodeData.Table
 
+  # `tid` is the nodes ETS table; every other node-referencing field holds a raw
+  # node id (a `reference()`), not a `%DOM.Node{}` handle. All tree reads/writes go
+  # through DOM.NodeData.Table on `tid` — direct :ets, no GenServer round-trips.
   defstruct [
+    :tid,
     :document,
     :mode,
     :original_mode,
@@ -103,13 +106,16 @@ defmodule DOM.HTML.TreeBuilder do
   # switches to "in select in table" rather than "in select" (§13.2.6.4.7).
   @table_modes [:in_table, :in_caption, :in_table_body, :in_row, :in_cell]
 
-  @doc "Builds a document tree from a decoded token list (§13.2.6.4)."
-  @spec build([struct()]) :: Node.t()
-  def build(tokens) do
-    state = %__MODULE__{document: DOM.new(), mode: :initial}
-    document = tokens |> Enum.reduce(state, &step/2) |> eof() |> Map.fetch!(:document)
-    reflect_selectedcontent(document)
-    document
+  @doc """
+  Build a document tree from a decoded token list directly into the nodes ETS
+  table `tid` (§13.2.6.4). `document_id` is the pre-inserted Document record's id.
+  Operates in-process via DOM.NodeData.Table — no GenServer calls. Returns `:ok`.
+  """
+  @spec build_into(:ets.tid(), reference(), [struct()]) :: :ok
+  def build_into(tid, document_id, tokens) do
+    state = %__MODULE__{tid: tid, document: document_id, mode: :initial}
+    tokens |> Enum.reduce(state, &step/2) |> eof() |> reflect_selectedcontent()
+    :ok
   end
 
   # <selectedcontent> reflects the content of its <select>'s currently-selected
@@ -117,52 +123,60 @@ defmodule DOM.HTML.TreeBuilder do
   # children. The selected option is the last one bearing a `selected` attribute,
   # else the first option (matching Chromium's default selection). Modeled as a
   # post-parse pass — the reflection is a snapshot of the final parsed tree.
-  defp reflect_selectedcontent(document) do
-    for select <- DOM.get_elements_by_tag_name(document, "select") do
-      contents = DOM.get_elements_by_tag_name(select, "selectedcontent")
+  defp reflect_selectedcontent(state), do: reflect_selectedcontent(state, state.document)
 
-      if contents != [] do
-        if option = selected_option(select) do
-          children = Node.child_nodes(option)
-          Enum.each(contents, &clone_children_into(&1, children))
-        end
-      end
+  defp reflect_selectedcontent(state, root) do
+    for select <- Table.elements_by_tag_name(state.tid, root, "select"),
+        do: reflect_select(state, select)
+
+    :ok
+  end
+
+  defp reflect_select(state, select) do
+    contents = Table.elements_by_tag_name(state.tid, select, "selectedcontent")
+    option = contents != [] && selected_option(state, select)
+
+    if option do
+      children = Table.children(state.tid, option)
+      Enum.each(contents, &clone_children_into(state, &1, children))
     end
   end
 
   # The selected <option> of a select: the last one with a `selected` attribute,
   # else the first option (nil when the select has no options).
-  defp selected_option(select) do
-    options = DOM.get_elements_by_tag_name(select, "option")
+  defp selected_option(state, select) do
+    options = Table.elements_by_tag_name(state.tid, select, "option")
 
-    Enum.find(Enum.reverse(options), &Element.has_attribute(&1, "selected")) ||
+    Enum.find(Enum.reverse(options), &Table.has_attribute(state.tid, &1, "selected")) ||
       List.first(options)
   end
 
   # Deep-clone each of `children` and append the clones to `target`.
-  defp clone_children_into(target, children) do
+  defp clone_children_into(state, target, children) do
     Enum.each(children, fn child ->
-      Node.append_child(target, Node.clone_node(child, true))
+      Table.append_child(state.tid, target, Table.clone(state.tid, child, true))
     end)
   end
 
   @doc """
-  The HTML fragment parsing algorithm (§13.4): parse `tokens` as the contents of
-  a `context` element (`%{name, namespace}`). Returns the synthetic `html` root
-  element whose children are the fragment nodes (serialize its children to get
-  the fragment outline). Does NOT wire into `inner_html` — that is a later step.
+  The HTML fragment parsing algorithm (§13.4), building directly into `tid`.
+  `document_id` is the pre-inserted Document record. Returns the synthetic `html`
+  root element's id (serialize its children to get the fragment outline).
   """
-  @spec build_fragment([struct()], %{name: String.t(), namespace: atom()}) :: Node.t()
-  def build_fragment(tokens, context) do
-    document = DOM.new()
-    root = DOM.create_element(document, "html")
-    Node.append_child(document, root)
+  @spec build_fragment_into(:ets.tid(), reference(), [struct()], %{
+          name: String.t(),
+          namespace: atom()
+        }) :: reference()
+  def build_fragment_into(tid, document_id, tokens, context) do
+    root = Table.create_element(tid, "html")
+    Table.append_child(tid, document_id, root)
 
-    context_el = DOM._create_element_ns(document, context.name, context.namespace, [])
+    context_el = Table.create_element_ns(tid, context.name, context.namespace, [])
 
     state =
       %__MODULE__{
-        document: document,
+        tid: tid,
+        document: document_id,
         open_elements: [root],
         context: context_el,
         namespaces: fragment_namespaces(context, context_el),
@@ -170,11 +184,7 @@ defmodule DOM.HTML.TreeBuilder do
       }
       |> reset_insertion_mode()
 
-    tokens
-    |> Enum.reduce(state, &step/2)
-    |> eof()
-
-    reflect_selectedcontent(root)
+    tokens |> Enum.reduce(state, &step/2) |> eof() |> reflect_selectedcontent(root)
     root
   end
 
@@ -245,7 +255,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   # An annotation-xml (MathML) element with an "svg" start tag stays HTML content.
   defp annotation_xml_svg?(state, node, %Token.StartTag{name: "svg"}) do
-    namespace_of(state, node) == :mathml and Node.node_name(node) == "annotation-xml"
+    namespace_of(state, node) == :mathml and Table.node_name(state.tid, node) == "annotation-xml"
   end
 
   defp annotation_xml_svg?(_state, _node, _token), do: false
@@ -260,14 +270,14 @@ defmodule DOM.HTML.TreeBuilder do
   # `html`-context fragment still implies head+body.
   defp eof(%__MODULE__{context: context, mode: mode} = state)
        when not is_nil(context) and mode in [:in_head, :after_head] do
-    if Node.node_name(context) == "head", do: state, else: eof_pre_body(state)
+    if Table.node_name(state.tid, context) == "head", do: state, else: eof_pre_body(state)
   end
 
   defp eof(%__MODULE__{mode: :initial} = state), do: eof(%{state | mode: :before_html})
 
   defp eof(%__MODULE__{mode: :before_html} = state) do
     html = create_element_for(%Token.StartTag{name: "html"}, state)
-    append(state.document, html)
+    append(state, state.document, html)
     eof(%{state | open_elements: [html], mode: :before_head})
   end
 
@@ -347,7 +357,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A comment token: insert a comment as the last child of the Document.
   defp process(:initial, %Token.Comment{} = token, state) do
-    append(state.document, comment(token, state))
+    append(state, state.document, comment(token, state))
     state
   end
 
@@ -361,14 +371,14 @@ defmodule DOM.HTML.TreeBuilder do
   # the suite observes it, so this is an intentional, isolated omission.
   defp process(:initial, %Token.Doctype{} = token, state) do
     doctype =
-      DOM.create_document_type(
-        state.document,
+      Table.create_doctype(
+        state.tid,
         token.name || "",
         token.public_id,
         token.system_id
       )
 
-    append(state.document, doctype)
+    append(state, state.document, doctype)
     %{state | mode: :before_html}
   end
 
@@ -385,7 +395,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A comment token: insert a comment as the last child of the Document.
   defp process(:before_html, %Token.Comment{} = token, state) do
-    append(state.document, comment(token, state))
+    append(state, state.document, comment(token, state))
     state
   end
 
@@ -393,7 +403,7 @@ defmodule DOM.HTML.TreeBuilder do
   # it to the Document, push it onto the stack. Switch to "before head".
   defp process(:before_html, %Token.StartTag{name: "html"} = token, state) do
     html = create_element_for(token, state)
-    append(state.document, html)
+    append(state, state.document, html)
     %{state | open_elements: [html], mode: :before_head}
   end
 
@@ -406,7 +416,7 @@ defmodule DOM.HTML.TreeBuilder do
   # "before head", then reprocess the token.
   defp process(:before_html, token, state) do
     html = create_element_for(%Token.StartTag{name: "html"}, state)
-    append(state.document, html)
+    append(state, state.document, html)
     reprocess(:before_head, token, %{state | open_elements: [html], mode: :before_head})
   end
 
@@ -659,7 +669,7 @@ defmodule DOM.HTML.TreeBuilder do
   # any attribute not already present onto the top (html) element.
   defp process(:in_body, %Token.StartTag{name: "html"} = token, state) do
     if not template_on_stack?(state),
-      do: merge_attributes(List.last(state.open_elements), token.attributes)
+      do: merge_attributes(state.tid, List.last(state.open_elements), token.attributes)
 
     state
   end
@@ -671,7 +681,7 @@ defmodule DOM.HTML.TreeBuilder do
     body = second_element(state)
 
     if body && not template_on_stack?(state) do
-      merge_attributes(body, token.attributes)
+      merge_attributes(state.tid, body, token.attributes)
       %{state | frameset_ok: false}
     else
       state
@@ -685,7 +695,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_body, %Token.StartTag{name: "frameset"} = token, state) do
     if frameset_replaceable?(state) do
       body = second_element(state)
-      if parent = Node.parent_node(body), do: Node.remove_child(parent, body)
+      if parent = Table.parent(state.tid, body), do: Table.remove_child(state.tid, parent, body)
       state = pop_to_html_root(state)
       {_el, state} = insert_html_element(token, state)
       %{state | mode: :in_frameset}
@@ -797,7 +807,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_body, %Token.StartTag{name: name} = token, state)
        when name in ~w(h1 h2 h3 h4 h5 h6) do
     state = close_p_if_button_scope(state)
-    state = if heading?(current_node(state)), do: pop(state), else: state
+    state = if heading?(state.tid, current_node(state)), do: pop(state), else: state
     {_el, state} = insert_html_element(token, state)
     state
   end
@@ -864,7 +874,9 @@ defmodule DOM.HTML.TreeBuilder do
   # then reconstruct and insert (they do not nest).
   defp process(:in_body, %Token.StartTag{name: name} = token, state)
        when name in ~w(optgroup option) do
-    state = if Node.node_name(current_node(state)) == "option", do: pop(state), else: state
+    state =
+      if Table.node_name(state.tid, current_node(state)) == "option", do: pop(state), else: state
+
     {_el, state} = insert_html_element(token, reconstruct_formatting(state))
     state
   end
@@ -1287,7 +1299,7 @@ defmodule DOM.HTML.TreeBuilder do
   # An end tag "colgroup": if the current node is not a colgroup, parse error,
   # ignore; otherwise pop it, switch to "in table".
   defp process(:in_column_group, %Token.EndTag{name: "colgroup"}, state) do
-    if Node.node_name(current_node(state)) == "colgroup" do
+    if Table.node_name(state.tid, current_node(state)) == "colgroup" do
       %{pop(state) | mode: :in_table}
     else
       state
@@ -1309,7 +1321,7 @@ defmodule DOM.HTML.TreeBuilder do
   # Anything else: if the current node is not a colgroup, parse error, ignore;
   # otherwise pop it, switch to "in table", reprocess.
   defp process(:in_column_group, token, state) do
-    if Node.node_name(current_node(state)) == "colgroup" do
+    if Table.node_name(state.tid, current_node(state)) == "colgroup" do
       reprocess(:in_table, token, %{pop(state) | mode: :in_table})
     else
       state
@@ -1531,7 +1543,7 @@ defmodule DOM.HTML.TreeBuilder do
   # optgroup); then, if the current node is an optgroup, pop it.
   defp process(:in_select, %Token.EndTag{name: "optgroup"}, state) do
     state = pop_option_before_optgroup(state)
-    if Node.node_name(current_node(state)) == "optgroup", do: pop(state), else: state
+    if Table.node_name(state.tid, current_node(state)) == "optgroup", do: pop(state), else: state
   end
 
   # An end tag "option": if the current node is an option, pop it.
@@ -1677,12 +1689,12 @@ defmodule DOM.HTML.TreeBuilder do
   # case); otherwise pop it, and (non-fragment) if the new current node is not a
   # frameset, switch to "after frameset".
   defp process(:in_frameset, %Token.EndTag{name: "frameset"}, state) do
-    if Node.node_name(current_node(state)) == "html" do
+    if Table.node_name(state.tid, current_node(state)) == "html" do
       state
     else
       state = pop(state)
 
-      if is_nil(state.context) and Node.node_name(current_node(state)) != "frameset",
+      if is_nil(state.context) and Table.node_name(state.tid, current_node(state)) != "frameset",
         do: %{state | mode: :after_frameset},
         else: state
     end
@@ -1734,7 +1746,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A comment token: insert as the last child of the Document.
   defp process(:after_after_frameset, %Token.Comment{} = token, state) do
-    append(state.document, comment(token, state))
+    append(state, state.document, comment(token, state))
     state
   end
 
@@ -1757,7 +1769,7 @@ defmodule DOM.HTML.TreeBuilder do
   # A comment token: insert as the last child of the first element (the html
   # element).
   defp process(:after_body, %Token.Comment{} = token, state) do
-    append(List.last(state.open_elements) || state.document, comment(token, state))
+    append(state, List.last(state.open_elements) || state.document, comment(token, state))
     state
   end
 
@@ -1782,7 +1794,7 @@ defmodule DOM.HTML.TreeBuilder do
   # the fragment's real Document is not what is returned.
   defp process(:after_after_body, %Token.Comment{} = token, state) do
     target = if state.context, do: List.last(state.open_elements), else: state.document
-    append(target, comment(token, state))
+    append(state, target, comment(token, state))
     state
   end
 
@@ -1849,7 +1861,7 @@ defmodule DOM.HTML.TreeBuilder do
   # mode, switch to "in table text", reprocess). Otherwise foster-parent via the
   # "anything else" path (process using "in body").
   defp process_characters(:in_table, token, state) do
-    if Node.node_name(current_node(state)) in ~w(table tbody template tfoot thead tr) do
+    if Table.node_name(state.tid, current_node(state)) in ~w(table tbody template tfoot thead tr) do
       # Save the ACTUAL current mode (may be :in_table, :in_row, or
       # :in_table_body when reached via those modes' character delegation) so the
       # "in table text" flush returns to it — e.g. a whitespace run in a row must
@@ -1923,7 +1935,7 @@ defmodule DOM.HTML.TreeBuilder do
   # place (foster-parenting aware), push onto the stack. Returns {element, state}.
   defp insert_html_element(token, state) do
     element = create_element_for(token, state)
-    insert_at(appropriate_insertion_location(state), element)
+    insert_at(state, appropriate_insertion_location(state), element)
     {element, %{state | open_elements: [element | state.open_elements]}}
   end
 
@@ -1931,8 +1943,8 @@ defmodule DOM.HTML.TreeBuilder do
   # insert the element at the appropriate place, record the content mapping, and
   # push the element onto the stack. Returns {element, state}.
   defp insert_template_element(token, state) do
-    {element, content} = DOM._create_template(state.document, token.attributes)
-    insert_at(appropriate_insertion_location(state), element)
+    {element, content} = Table.create_template(state.tid, token.attributes)
+    insert_at(state, appropriate_insertion_location(state), element)
 
     {element,
      %{
@@ -1962,7 +1974,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   # "Insert a comment": at the appropriate insertion location.
   defp insert_comment(token, state) do
-    insert_at(appropriate_insertion_location(state), comment(token, state))
+    insert_at(state, appropriate_insertion_location(state), comment(token, state))
   end
 
   # "Insert a character": at the appropriate insertion location, coalescing with a
@@ -1975,9 +1987,12 @@ defmodule DOM.HTML.TreeBuilder do
   defp insert_characters(data, state) do
     {parent, reference} = appropriate_insertion_location(state)
 
-    case preceding_text(parent, reference) do
-      %Node{type: :text} = text -> Node.set_text_content(text, Node.value(text) <> data)
-      _ -> insert_at({parent, reference}, DOM.create_text_node(state.document, data))
+    text = preceding_text(state, parent, reference)
+
+    if is_reference(text) and Table.type(state.tid, text) == :text do
+      Table.set_value(state.tid, text, Table.value(state.tid, text) <> data)
+    else
+      insert_at(state, {parent, reference}, Table.create_text(state.tid, data))
     end
 
     state
@@ -1985,10 +2000,10 @@ defmodule DOM.HTML.TreeBuilder do
 
   # The text node a character run would coalesce with: the child immediately
   # before `reference` (or the last child when appending).
-  defp preceding_text(parent, nil), do: parent |> Node.child_nodes() |> List.last()
+  defp preceding_text(state, parent, nil), do: state.tid |> Table.children(parent) |> List.last()
 
-  defp preceding_text(parent, reference) do
-    parent |> Node.child_nodes() |> Enum.take_while(&(&1 != reference)) |> List.last()
+  defp preceding_text(state, parent, reference) do
+    state.tid |> Table.children(parent) |> Enum.take_while(&(&1 != reference)) |> List.last()
   end
 
   # "Appropriate place for inserting a node" (§13.2.6.1): normally the current
@@ -2000,7 +2015,8 @@ defmodule DOM.HTML.TreeBuilder do
     target = current_node(state)
 
     location =
-      if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
+      if state.foster_parenting and
+           Table.node_name(state.tid, target) in ~w(table tbody tfoot thead tr) do
         foster_location(state)
       else
         {target, nil}
@@ -2024,7 +2040,7 @@ defmodule DOM.HTML.TreeBuilder do
   # table (if parented), else inside the element above the table on the stack.
   defp foster_location(state) do
     last_template = Enum.find(state.open_elements, &html_template?(state, &1))
-    last_table = Enum.find(state.open_elements, &(Node.node_name(&1) == "table"))
+    last_table = Enum.find(state.open_elements, &(Table.node_name(state.tid, &1) == "table"))
 
     cond do
       template_before_table?(state.open_elements, last_template, last_table) ->
@@ -2033,7 +2049,7 @@ defmodule DOM.HTML.TreeBuilder do
       is_nil(last_table) ->
         {List.last(state.open_elements) || state.document, nil}
 
-      parent = Node.parent_node(last_table) ->
+      parent = Table.parent(state.tid, last_table) ->
         {parent, last_table}
 
       :else ->
@@ -2059,32 +2075,34 @@ defmodule DOM.HTML.TreeBuilder do
 
   # Insert `child` at {parent, reference}: append when reference is nil, else
   # insert immediately before reference.
-  defp insert_at({parent, nil}, child), do: Node.append_child(parent, child)
-  defp insert_at({parent, reference}, child), do: Node.insert_before(parent, child, reference)
+  defp insert_at(state, {parent, nil}, child), do: Table.append_child(state.tid, parent, child)
+
+  defp insert_at(state, {parent, reference}, child),
+    do: Table.insert_before(state.tid, parent, child, reference)
 
   # Add each attribute not already present on `element` (the html/body attribute
   # merge for a duplicate start tag). `nil` element (fragment case) is a no-op.
-  defp merge_attributes(nil, _attributes), do: :ok
+  defp merge_attributes(_tid, nil, _attributes), do: :ok
 
-  defp merge_attributes(element, attributes) do
+  defp merge_attributes(tid, element, attributes) do
     Enum.each(attributes, fn {name, value} ->
-      if not Element.has_attribute(element, name),
-        do: Element.set_attribute(element, name, value)
+      if not Table.has_attribute(tid, element, name),
+        do: Table.set_attribute(tid, element, name, value)
     end)
   end
 
   # "Create an element for the token": element + its attributes.
   defp create_element_for(token, state) do
-    element = DOM.create_element(state.document, token.name)
+    element = Table.create_element(state.tid, token.name)
 
     Enum.each(token.attributes, fn {name, value} ->
-      Element.set_attribute(element, name, value)
+      Table.set_attribute(state.tid, element, name, value)
     end)
 
     element
   end
 
-  defp comment(token, state), do: DOM.create_comment(state.document, token.data)
+  defp comment(token, state), do: Table.create_comment(state.tid, token.data)
 
   # ==========================================================================
   # Stack helpers
@@ -2101,20 +2119,20 @@ defmodule DOM.HTML.TreeBuilder do
 
   # Pop down to and including the first element named `name` (no-op if absent —
   # returns the original stack).
-  defp pop_to(stack, name), do: pop_to(stack, name, stack)
+  defp pop_to(tid, stack, name), do: pop_to(tid, stack, name, stack)
 
-  defp pop_to([el | rest], name, original) do
-    if Node.node_name(el) == name, do: rest, else: pop_to(rest, name, original)
+  defp pop_to(tid, [el | rest], name, original) do
+    if Table.node_name(tid, el) == name, do: rest, else: pop_to(tid, rest, name, original)
   end
 
-  defp pop_to([], _name, original), do: original
+  defp pop_to(_tid, [], _name, original), do: original
 
-  defp append(parent, child), do: Node.append_child(parent, child)
+  defp append(state, parent, child), do: Table.append_child(state.tid, parent, child)
 
   # Pop the stack down to and INCLUDING the first element named `name`. (Callers
   # guarantee it is present via a scope check.)
   defp pop_through(state, name) do
-    %{state | open_elements: pop_to(state.open_elements, name)}
+    %{state | open_elements: pop_to(state.tid, state.open_elements, name)}
   end
 
   # Pop the stack down to and including the first HTML <template> (skipping any
@@ -2129,14 +2147,14 @@ defmodule DOM.HTML.TreeBuilder do
 
   # Pop down to and including the first heading (h1..h6) on the stack.
   defp pop_through_heading(%__MODULE__{open_elements: [el | rest]} = state) do
-    if heading?(el),
+    if heading?(state.tid, el),
       do: %{state | open_elements: rest},
       else: pop_through_heading(%{state | open_elements: rest})
   end
 
   # Pop the current node if it is named `name`.
   defp pop_if_current(state, name) do
-    if Node.node_name(current_node(state)) == name, do: pop(state), else: state
+    if Table.node_name(state.tid, current_node(state)) == name, do: pop(state), else: state
   end
 
   # The void elements whose start tag sets frameset-ok to "not ok" (§13.2.6.4.7).
@@ -2150,7 +2168,7 @@ defmodule DOM.HTML.TreeBuilder do
   # still set.
   defp frameset_replaceable?(state) do
     body = second_element(state)
-    not is_nil(body) and Node.node_name(body) == "body" and state.frameset_ok
+    not is_nil(body) and Table.node_name(state.tid, body) == "body" and state.frameset_ok
   end
 
   # The second element from the bottom of the stack (the stack head is the top),
@@ -2171,7 +2189,7 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   defp html_template?(state, el) do
-    Node.node_name(el) == "template" and namespace_of(state, el) == :html
+    Table.node_name(state.tid, el) == "template" and namespace_of(state, el) == :html
   end
 
   # Pop the stack down to (but not including) the bottom html root element.
@@ -2187,13 +2205,13 @@ defmodule DOM.HTML.TreeBuilder do
   # against Chromium), so the walk is not stopped by intervening elements — it just
   # looks for a select anywhere below.
   defp select_in_scope?(state) do
-    Enum.any?(state.open_elements, &(Node.node_name(&1) == "select"))
+    Enum.any?(state.open_elements, &(Table.node_name(state.tid, &1) == "select"))
   end
 
   # For </optgroup>: if the current node is an option whose immediately-lower
   # stack entry is an optgroup, pop the option first (so the optgroup can close).
   defp pop_option_before_optgroup(%__MODULE__{open_elements: [a, b | _]} = state) do
-    if Node.node_name(a) == "option" and Node.node_name(b) == "optgroup",
+    if Table.node_name(state.tid, a) == "option" and Table.node_name(state.tid, b) == "optgroup",
       do: pop(state),
       else: state
   end
@@ -2215,7 +2233,7 @@ defmodule DOM.HTML.TreeBuilder do
   # element (optionally excluding `except`), pop it.
   defp generate_implied_end_tags(state, except \\ nil) do
     node = current_node(state)
-    name = Node.node_name(node)
+    name = Table.node_name(state.tid, node)
 
     if name in @implied_end_tags and name != except do
       generate_implied_end_tags(pop(state), except)
@@ -2230,7 +2248,7 @@ defmodule DOM.HTML.TreeBuilder do
                                ~w(caption colgroup tbody td tfoot th thead tr)
 
   defp generate_all_implied_end_tags(state) do
-    if Node.node_name(current_node(state)) in @thorough_implied_end_tags,
+    if Table.node_name(state.tid, current_node(state)) in @thorough_implied_end_tags,
       do: generate_all_implied_end_tags(pop(state)),
       else: state
   end
@@ -2253,7 +2271,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp close_list_item(state, names), do: close_list_item(state, names, state.open_elements)
 
   defp close_list_item(state, names, [node | rest]) do
-    name = Node.node_name(node)
+    name = Table.node_name(state.tid, node)
 
     cond do
       name in names ->
@@ -2284,7 +2302,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   defp in_scope?(state, [el | rest], name, markers) do
     html? = namespace_of(state, el) == :html
-    node_name = Node.node_name(el)
+    node_name = Table.node_name(state.tid, el)
 
     cond do
       html? and node_name == name -> true
@@ -2300,30 +2318,30 @@ defmodule DOM.HTML.TreeBuilder do
   # and annotation-xml; SVG foreignObject/desc/title.
   defp foreign_scope_marker?(state, el) do
     mathml_text_point?(state, el) or html_integration_point?(state, el) or
-      (namespace_of(state, el) == :mathml and Node.node_name(el) == "annotation-xml")
+      (namespace_of(state, el) == :mathml and Table.node_name(state.tid, el) == "annotation-xml")
   end
 
   # "Have a heading (h1..h6) in scope" (for the heading end tag): walk the stack;
   # any heading returns true, a default-scope marker returns false.
-  defp any_heading_in_scope?(state), do: heading_in_scope?(state.open_elements)
+  defp any_heading_in_scope?(state), do: heading_in_scope?(state.tid, state.open_elements)
 
-  defp heading_in_scope?([el | rest]) do
-    name = Node.node_name(el)
+  defp heading_in_scope?(tid, [el | rest]) do
+    name = Table.node_name(tid, el)
 
     cond do
-      heading?(el) -> true
+      heading?(tid, el) -> true
       name in @scope_markers -> false
-      :else -> heading_in_scope?(rest)
+      :else -> heading_in_scope?(tid, rest)
     end
   end
 
-  defp heading_in_scope?([]), do: false
+  defp heading_in_scope?(_tid, []), do: false
 
   # "Any other end tag" loop (§13.2.6.4.7): walk from the current node; a matching
   # element closes (generate implied end tags except it, pop through it); a
   # "special" element stops the loop (parse error, ignore).
   defp any_other_end_tag(state, name, [el | rest]) do
-    node_name = Node.node_name(el)
+    node_name = Table.node_name(state.tid, el)
 
     cond do
       node_name == name ->
@@ -2345,7 +2363,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp drop_including([el | rest], el), do: rest
   defp drop_including([_ | rest], el), do: drop_including(rest, el)
 
-  defp heading?(node), do: Node.node_name(node) in ~w(h1 h2 h3 h4 h5 h6)
+  defp heading?(tid, node), do: Table.node_name(tid, node) in ~w(h1 h2 h3 h4 h5 h6)
 
   # "Special" category elements (§13.2.6.4.7): the end-tag scan stops on these.
   @special ~w(address applet area article aside base basefont bgsound blockquote
@@ -2366,7 +2384,7 @@ defmodule DOM.HTML.TreeBuilder do
   # block or a scope-terminating "special" node during the adoption agency.
   defp special_element?(state, el) do
     case namespace_of(state, el) do
-      :html -> special?(Node.node_name(el))
+      :html -> special?(Table.node_name(state.tid, el))
       _ -> mathml_text_point?(state, el) or html_integration_point?(state, el)
     end
   end
@@ -2389,7 +2407,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp clear_to_table_row_context(state), do: clear_stack_to(state, ~w(tr template html))
 
   defp clear_stack_to(state, names) do
-    if Node.node_name(current_node(state)) in names,
+    if Table.node_name(state.tid, current_node(state)) in names,
       do: state,
       else: clear_stack_to(pop(state), names)
   end
@@ -2498,13 +2516,13 @@ defmodule DOM.HTML.TreeBuilder do
   defp reset_mode_for(state, [last]) do
     node = if state.context, do: state.context, else: last
 
-    template_mode(state, node) || select_mode(node, []) || html_mode(state, node) ||
-      mode_for_node(node) || :in_body
+    template_mode(state, node) || select_mode(state.tid, node, []) || html_mode(state, node) ||
+      mode_for_node(state.tid, node) || :in_body
   end
 
   defp reset_mode_for(state, [node | rest]) do
-    template_mode(state, node) || select_mode(node, rest) || html_mode(state, node) ||
-      mode_for_node(node) || reset_mode_for(state, rest)
+    template_mode(state, node) || select_mode(state.tid, node, rest) || html_mode(state, node) ||
+      mode_for_node(state.tid, node) || reset_mode_for(state, rest)
   end
 
   defp reset_mode_for(_state, []), do: :in_body
@@ -2517,16 +2535,16 @@ defmodule DOM.HTML.TreeBuilder do
   # The html element resets to "after head" once the head pointer is set (the head
   # has been seen), else "before head" (§13.2.6.3).
   defp html_mode(state, node) do
-    if Node.node_name(node) == "html" and state.head, do: :after_head
+    if Table.node_name(state.tid, node) == "html" and state.head, do: :after_head
   end
 
   # A "select" open element resets to "in select in table" if a table is below it
   # on the stack (before a template), else "in select" (§13.2.6.3).
-  defp select_mode(node, below) do
-    if Node.node_name(node) == "select" do
+  defp select_mode(tid, node, below) do
+    if Table.node_name(tid, node) == "select" do
       if Enum.any?(
-           Enum.take_while(below, &(Node.node_name(&1) != "template")),
-           &(Node.node_name(&1) == "table")
+           Enum.take_while(below, &(Table.node_name(tid, &1) != "template")),
+           &(Table.node_name(tid, &1) == "table")
          ),
          do: :in_select_in_table,
          else: :in_select
@@ -2551,7 +2569,7 @@ defmodule DOM.HTML.TreeBuilder do
     "html" => :before_head
   }
 
-  defp mode_for_node(node), do: Map.get(@reset_modes, Node.node_name(node))
+  defp mode_for_node(tid, node), do: Map.get(@reset_modes, Table.node_name(tid, node))
 
   # ==========================================================================
   # §13.2.4.3 / §13.2.6.4.7  Active formatting list + adoption agency
@@ -2599,7 +2617,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp formatting_after_marker(state, name) do
     state.active_formatting
     |> Enum.take_while(&(&1 != :marker))
-    |> Enum.find(fn {el, _t} -> Node.node_name(el) == name end)
+    |> Enum.find(fn {el, _t} -> Table.node_name(state.tid, el) == name end)
   end
 
   # "Clear the list of active formatting elements up to the last marker": drop
@@ -2677,7 +2695,7 @@ defmodule DOM.HTML.TreeBuilder do
     do: remove_from_formatting(state, elem_of(entry))
 
   defp element_in_scope?(state, element) do
-    has_in_scope?(state, Node.node_name(element), @scope_markers)
+    has_in_scope?(state, Table.node_name(state.tid, element), @scope_markers)
   end
 
   # The 0-based position of `element`'s AFE entry (head = 0).
@@ -2729,7 +2747,8 @@ defmodule DOM.HTML.TreeBuilder do
   # (foster parenting honored). Returns {parent, reference}.
   defp appropriate_insertion_location_for(state, target) do
     location =
-      if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
+      if state.foster_parenting and
+           Table.node_name(state.tid, target) in ~w(table tbody tfoot thead tr) do
         foster_location(state)
       else
         {target, nil}
@@ -2747,7 +2766,7 @@ defmodule DOM.HTML.TreeBuilder do
 
     # If the current node is an HTML element named subject and is NOT in the AFE
     # list, just pop it and return.
-    if Node.node_name(current) == subject and not in_formatting?(state, current) do
+    if Table.node_name(state.tid, current) == subject and not in_formatting?(state, current) do
       remove_from_stack(state, current)
     else
       adoption_outer_loop(state, subject, token, 0)
@@ -2810,13 +2829,13 @@ defmodule DOM.HTML.TreeBuilder do
       adoption_inner_loop({fmt_el, furthest}, state, furthest, furthest, 0, bookmark)
 
     # Step 15: insert last_node into common_ancestor at the appropriate place.
-    insert_at(appropriate_insertion_location_for(state, common_ancestor), last_node)
+    insert_at(state, appropriate_insertion_location_for(state, common_ancestor), last_node)
 
     # Steps 16-18: new element for the formatting token; move furthest's children
     # into it; append it to furthest.
     new_el = create_element_for(fmt_token, state)
-    Enum.each(Node.child_nodes(furthest), &Node.append_child(new_el, &1))
-    Node.append_child(furthest, new_el)
+    Enum.each(Table.children(state.tid, furthest), &Table.append_child(state.tid, new_el, &1))
+    Table.append_child(state.tid, furthest, new_el)
 
     state
     # Step 19: replace fmt_el in the AFE list with the new element at the bookmark.
@@ -2868,7 +2887,7 @@ defmodule DOM.HTML.TreeBuilder do
        ) do
     {new, state} = recreate_formatting(state, above)
     bookmark = if last_node == furthest, do: formatting_index(state, new), else: bookmark
-    Node.append_child(new, last_node)
+    Table.append_child(state.tid, new, last_node)
     adoption_inner_loop(ctx, state, new, new, inner, bookmark)
   end
 
@@ -3012,29 +3031,30 @@ defmodule DOM.HTML.TreeBuilder do
 
   defp adjusted_current_node(state), do: current_node(state)
 
-  # The namespace of an element handle: :svg / :mathml if recorded, else :html.
-  defp namespace_of(_state, %Node{type: type}) when type != :element, do: :html
-  defp namespace_of(state, %Node{} = el), do: Map.get(state.namespaces, el, :html)
+  # The namespace of a node id: :svg / :mathml if recorded (only foreign elements
+  # are), else :html. Non-elements are never in the map, so they answer :html.
+  defp namespace_of(state, id), do: Map.get(state.namespaces, id, :html)
 
   # A MathML text integration point: an mi/mo/mn/ms/mtext element in the MathML
   # namespace.
   defp mathml_text_point?(state, node) do
-    namespace_of(state, node) == :mathml and Node.node_name(node) in ~w(mi mo mn ms mtext)
+    namespace_of(state, node) == :mathml and
+      Table.node_name(state.tid, node) in ~w(mi mo mn ms mtext)
   end
 
   # An HTML integration point: a MathML annotation-xml whose encoding attribute is
   # text/html or application/xhtml+xml; or an SVG foreignObject/desc/title.
   defp html_integration_point?(state, node) do
     case namespace_of(state, node) do
-      :svg -> Node.node_name(node) in ~w(foreignObject desc title)
-      :mathml -> annotation_xml_html?(node)
+      :svg -> Table.node_name(state.tid, node) in ~w(foreignObject desc title)
+      :mathml -> annotation_xml_html?(state.tid, node)
       :html -> false
     end
   end
 
-  defp annotation_xml_html?(node) do
-    Node.node_name(node) == "annotation-xml" and
-      String.downcase(Element.get_attribute(node, "encoding") || "") in [
+  defp annotation_xml_html?(tid, node) do
+    Table.node_name(tid, node) == "annotation-xml" and
+      String.downcase(Table.get_attribute(tid, node, "encoding") || "") in [
         "text/html",
         "application/xhtml+xml"
       ]
@@ -3052,8 +3072,8 @@ defmodule DOM.HTML.TreeBuilder do
   # "Insert a foreign element": create it in `namespace` (with adjusted attrs),
   # insert at the appropriate place, push it, and record its namespace.
   defp insert_foreign_element(token, namespace, state) do
-    element = DOM._create_element_ns(state.document, token.name, namespace, token.attributes)
-    insert_at(appropriate_insertion_location(state), element)
+    element = Table.create_element_ns(state.tid, token.name, namespace, token.attributes)
+    insert_at(state, appropriate_insertion_location(state), element)
 
     {element,
      %{
@@ -3191,7 +3211,7 @@ defmodule DOM.HTML.TreeBuilder do
       namespace_of(state, node) == :html ->
         process(state.mode, %Token.EndTag{name: name}, state)
 
-      String.downcase(Node.node_name(node)) == name ->
+      String.downcase(Table.node_name(state.tid, node)) == name ->
         %{state | open_elements: drop_including(state.open_elements, node)}
 
       :else ->

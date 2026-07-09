@@ -36,7 +36,7 @@ after
     html
     |> tokenize()
     |> Enum.map(&DOM.HTML.Token.decode/1)
-    |> DOM.HTML.TreeBuilder.build()
+    |> DOM._parse_document()
   end
 
   # RCDATA (title/textarea) and RAWTEXT (style/script/…) fragment contexts: the
@@ -53,7 +53,7 @@ after
   def parse_fragment(html, context) do
     parsed = parse_context(context)
     tokens = fragment_tokens(html, parsed.name)
-    DOM.HTML.TreeBuilder.build_fragment(tokens, parsed)
+    DOM._fragment_document(tokens, parsed)
   end
 
   # A raw-text/RCDATA context makes the whole input one text token. RCDATA

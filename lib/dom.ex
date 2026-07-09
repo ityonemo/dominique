@@ -20,6 +20,7 @@ defmodule DOM do
   use GenServer
   use MatchSpec
 
+  alias DOM.HTML.TreeBuilder
   alias DOM.Node
   alias DOM.NodeData
   alias DOM.NodeData.Table
@@ -29,11 +30,12 @@ defmodule DOM do
   # ==========================================================================
 
   @enforce_keys [:nodes, :document_id]
-  defstruct [:nodes, :document_id]
+  defstruct [:nodes, :document_id, :fragment_root]
 
   @type state :: %__MODULE__{
           nodes: :ets.tid(),
-          document_id: reference()
+          document_id: reference(),
+          fragment_root: reference() | nil
         }
 
   @type t :: Node.t()
@@ -42,15 +44,47 @@ defmodule DOM do
   # Lifecycle
   # ==========================================================================
 
-  defp start_link(document_id) do
-    GenServer.start_link(__MODULE__, document_id)
+  # Options: `:document_id` (required); optional `:parse` (a decoded token list) or
+  # `:fragment` ({tokens, context}) — the build then runs in a handle_continue on
+  # this server's own ETS table, before it serves any request.
+  defp start_link(opts) do
+    GenServer.start_link(__MODULE__, opts)
   end
 
   @impl true
-  def init(document_id) do
+  def init(opts) do
+    document_id = Keyword.fetch!(opts, :document_id)
     nodes = :ets.new(__MODULE__, [:set, :private])
     :ets.insert(nodes, {document_id, %NodeData.Document{}})
-    {:ok, %__MODULE__{nodes: nodes, document_id: document_id}}
+    state = %__MODULE__{nodes: nodes, document_id: document_id}
+
+    case build_continue(opts) do
+      nil -> {:ok, state}
+      continue -> {:ok, state, {:continue, continue}}
+    end
+  end
+
+  defp build_continue(opts) do
+    cond do
+      tokens = opts[:parse] -> {:parse, tokens}
+      fragment = opts[:fragment] -> {:fragment, fragment}
+      :else -> nil
+    end
+  end
+
+  # Build the parsed tree directly into this server's ETS table, in-process, via
+  # DOM.NodeData.Table — no GenServer round-trips — before any request is served.
+  @impl true
+  def handle_continue({:parse, tokens}, state) do
+    TreeBuilder.build_into(state.nodes, state.document_id, tokens)
+    {:noreply, state}
+  end
+
+  def handle_continue({:fragment, {tokens, context}}, state) do
+    root_id =
+      TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
+
+    {:noreply, %{state | fragment_root: root_id}}
   end
 
   # ==========================================================================
@@ -92,8 +126,27 @@ defmodule DOM do
 
   def new do
     document_id = make_ref()
-    {:ok, server} = start_link(document_id)
+    {:ok, server} = start_link(document_id: document_id)
     %Node{server: server, id: document_id, type: :document}
+  end
+
+  @doc false
+  # Start a document server that parses `tokens` into its table (via the
+  # handle_continue build), returning the document handle. Used by DOM.HTML.parse.
+  def _parse_document(tokens) do
+    document_id = make_ref()
+    {:ok, server} = start_link(document_id: document_id, parse: tokens)
+    %Node{server: server, id: document_id, type: :document}
+  end
+
+  @doc false
+  # Start a document server that parses `tokens` as a fragment in `context`,
+  # returning the synthetic html root ELEMENT handle. Used by DOM.HTML.parse_fragment.
+  def _fragment_document(tokens, context) do
+    document_id = make_ref()
+    {:ok, server} = start_link(document_id: document_id, fragment: {tokens, context})
+    root_id = GenServer.call(server, :fragment_root)
+    %Node{server: server, id: root_id, type: :element}
   end
 
   def create_element(document, local_name) do
@@ -110,13 +163,6 @@ defmodule DOM do
       namespace: namespace,
       attributes: attributes
     })
-  end
-
-  @doc false
-  # Internal: create a template element together with its "template contents"
-  # DocumentFragment, link them, and return {template_handle, content_handle}.
-  def _create_template(document, attributes) do
-    GenServer.call(document.server, {:create_template, attributes})
   end
 
   @doc false
@@ -166,17 +212,14 @@ defmodule DOM do
     GenServer.call(node.server, {:matches, node.id, selector})
   end
 
+  defp fragment_root_impl(_from, state) do
+    {:reply, state.fragment_root, state}
+  end
+
   defp create_impl(node_data, _from, state) do
     node_id = make_ref()
     Table.put(state.nodes, node_id, node_data)
     {:reply, node_handle(state.nodes, node_id), state}
-  end
-
-  # Create a template element linked to a fresh content DocumentFragment.
-  defp create_template_impl(attributes, _from, state) do
-    {template_id, content_id} = Table.create_template(state.nodes, attributes)
-    reply = {node_handle(state.nodes, template_id), node_handle(state.nodes, content_id)}
-    {:reply, reply, state}
   end
 
   # The content DocumentFragment handle of a template element (nil if unset).
@@ -944,13 +987,12 @@ defmodule DOM do
   # ==========================================================================
 
   @impl true
-  def handle_call({:create, node_data}, from, state) do
-    create_impl(node_data, from, state)
+  def handle_call(:fragment_root, from, state) do
+    fragment_root_impl(from, state)
   end
 
-  @impl true
-  def handle_call({:create_template, attributes}, from, state) do
-    create_template_impl(attributes, from, state)
+  def handle_call({:create, node_data}, from, state) do
+    create_impl(node_data, from, state)
   end
 
   @impl true
