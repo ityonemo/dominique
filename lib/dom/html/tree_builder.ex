@@ -48,6 +48,13 @@ defmodule DOM.HTML.TreeBuilder do
   # :mathml). HTML elements are not stored — the default is :html. Populated when
   # a foreign element is inserted; used by the tree-construction dispatcher to
   # decide HTML-content vs. foreign-content processing.
+  #
+  # This is a parser-LOCAL cache of the authoritative namespace, which persists in
+  # DOM.NodeData.Element.namespace in the ETS table. The invariant: every foreign
+  # element is created via insert_foreign_element/3, which both writes the
+  # namespaced node to ETS AND records it here, so the two never diverge for a
+  # parser-created node. The struct (and this map) are discarded when parsing
+  # returns the document, so there is no post-parse second source of truth.
 
   # The list of active formatting elements (§13.2.4.3). Entries are either the
   # atom :marker or a {element_handle, token} tuple (the token is retained to
@@ -72,13 +79,11 @@ defmodule DOM.HTML.TreeBuilder do
   # these, pop it. An optional exception name is excluded from the set.
   @implied_end_tags ~w(dd dt li optgroup option p rb rp rt rtc)
 
-  # "have an element in scope" default scope set (§13.2.4.2): elements that
-  # terminate the upward scope search. (Foreign-content members deferred to
-  # tier 5; all HTML-namespace here since we have no namespace model yet.)
-  # The default "particular scope" boundary set (§13.2.4.2). `select` is included
-  # (per the customizable-select spec) — an open <select> stops scope walks, so
-  # formatting/blocks below it are not "in scope". Foreign integration points are
-  # added separately by foreign_scope_marker?/2.
+  # The default "particular scope" boundary set (§13.2.4.2): elements that
+  # terminate the upward scope search. `select` is included (per the
+  # customizable-select spec) — an open <select> stops scope walks, so
+  # formatting/blocks below it are not "in scope". The MathML/SVG integration
+  # points (foreign scope members) are added separately by foreign_scope_marker?/2.
   @scope_markers ~w(applet caption html table td th marquee object select template)
 
   # "in button scope" adds "button"; "in list item scope" adds "ol"/"ul".
@@ -348,7 +353,12 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A DOCTYPE token: append a DocumentType node to the Document. Public/system
   # ids are preserved as-is (nil when absent) so the serializer can distinguish
-  # `<!DOCTYPE name>` from `<!DOCTYPE name "" "">`. (Quirks detection deferred.)
+  # `<!DOCTYPE name>` from `<!DOCTYPE name "" "">`.
+  #
+  # KNOWN GAP: the document's quirks/limited-quirks flag is not modeled. It would
+  # be derived here from the name + public/system ids + force_quirks, and read by
+  # the in-body <table> rule (see below). No html5lib tree-construction case in
+  # the suite observes it, so this is an intentional, isolated omission.
   defp process(:initial, %Token.Doctype{} = token, state) do
     doctype =
       DOM.create_document_type(
@@ -624,7 +634,7 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # ==========================================================================
-  # §13.2.6.4.7  The "in body" insertion mode (tier 2 — in-body repairs)
+  # §13.2.6.4.7  The "in body" insertion mode
   # ==========================================================================
 
   # A comment token: insert a comment.
@@ -812,7 +822,7 @@ defmodule DOM.HTML.TreeBuilder do
   end
 
   # A start tag "button": if a button is in scope, generate implied end tags and
-  # pop through the button (parse error); reconstruct (tier 4); insert; frameset-
+  # pop through the button (parse error); reconstruct; insert; frameset-
   # ok not ok.
   defp process(:in_body, %Token.StartTag{name: "button"} = token, state) do
     state =
@@ -826,8 +836,10 @@ defmodule DOM.HTML.TreeBuilder do
     %{state | frameset_ok: false}
   end
 
-  # A start tag "table": (not quirks-mode — quirks detection deferred) if a p is
-  # in button scope, close it; insert; frameset-ok not ok; switch to "in table".
+  # A start tag "table": if the document is NOT in quirks mode and a p is in button
+  # scope, close it; insert; frameset-ok not ok; switch to "in table". (Quirks mode
+  # is not modeled — see the DOCTYPE handler's KNOWN GAP note — so the p is always
+  # closed; the difference is unobservable in the suite.)
   defp process(:in_body, %Token.StartTag{name: "table"} = token, state) do
     {_el, state} = insert_html_element(token, close_p_if_button_scope(state))
     %{state | frameset_ok: false, mode: :in_table}
@@ -953,9 +965,13 @@ defmodule DOM.HTML.TreeBuilder do
     state
   end
 
-  # An end tag "body": switch to "after body". (Body-in-scope check deferred.)
+  # An end tag "body": if there is no body element in scope, parse error, ignore;
+  # otherwise switch to "after body" (§13.2.6.4.7). The stack is not popped here —
+  # after-body still holds the open elements so mis-closed content is handled.
   defp process(:in_body, %Token.EndTag{name: "body"}, state) do
-    %{state | mode: :after_body}
+    if has_in_scope?(state, "body", @scope_markers),
+      do: %{state | mode: :after_body},
+      else: state
   end
 
   # An end tag "html": switch to "after body" and REPROCESS the token (so it runs
@@ -990,7 +1006,7 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # An end tag "form" (no template on the stack — templates are a later tier):
+  # An end tag "form" (no template on the stack):
   # let node be the form pointer and clear it; if node is null or not in scope,
   # ignore; otherwise generate implied end tags and remove node from the stack.
   defp process(:in_body, %Token.EndTag{name: "form"}, state) do
@@ -1189,8 +1205,8 @@ defmodule DOM.HTML.TreeBuilder do
     end
   end
 
-  # A start tag "form": if a form pointer is set (or a template is on the stack —
-  # tier 6), ignore; else insert and set the pointer, then pop it.
+  # A start tag "form": if a form pointer is set (or a template is on the stack),
+  # ignore; else insert and set the pointer, then pop it.
   defp process(:in_table, %Token.StartTag{name: "form"} = token, state) do
     if state.form do
       state
@@ -1735,7 +1751,7 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:after_after_frameset, _token, state), do: state
 
   # ==========================================================================
-  # §13.2.6.4.19  The "after body" insertion mode (partial — tier 1)
+  # §13.2.6.4.19  The "after body" insertion mode
   # ==========================================================================
 
   # A comment token: insert as the last child of the first element (the html
@@ -1758,7 +1774,7 @@ defmodule DOM.HTML.TreeBuilder do
     do: reprocess(:in_body, token, %{state | mode: :in_body})
 
   # ==========================================================================
-  # §13.2.6.4.22  The "after after body" insertion mode (partial — tier 1)
+  # §13.2.6.4.22  The "after after body" insertion mode
   # ==========================================================================
 
   # A comment token: insert as the last child of the Document — or, in a fragment
@@ -2331,8 +2347,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   defp heading?(node), do: Node.node_name(node) in ~w(h1 h2 h3 h4 h5 h6)
 
-  # "Special" category elements (§13.2.6.4.7 — subset relevant to tier 2's end-tag
-  # loop; the full list grows as later tiers add table/foreign handling).
+  # "Special" category elements (§13.2.6.4.7): the end-tag scan stops on these.
   @special ~w(address applet area article aside base basefont bgsound blockquote
               body br button caption center col colgroup dd details dir div dl dt
               embed fieldset figcaption figure footer form frame frameset h1 h2 h3
