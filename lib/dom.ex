@@ -22,6 +22,7 @@ defmodule DOM do
 
   alias DOM.Node
   alias DOM.NodeData
+  alias DOM.NodeData.Table
 
   # ==========================================================================
   # Types
@@ -167,22 +168,13 @@ defmodule DOM do
 
   defp create_impl(node_data, _from, state) do
     node_id = make_ref()
-    :ets.insert(state.nodes, {node_id, node_data})
+    Table.put(state.nodes, node_id, node_data)
     {:reply, node_handle(state.nodes, node_id), state}
   end
 
   # Create a template element linked to a fresh content DocumentFragment.
   defp create_template_impl(attributes, _from, state) do
-    content_id = make_ref()
-    template_id = make_ref()
-    :ets.insert(state.nodes, {content_id, %NodeData.DocumentFragment{}})
-
-    :ets.insert(
-      state.nodes,
-      {template_id,
-       %NodeData.Element{local_name: "template", attributes: attributes, content: content_id}}
-    )
-
+    {template_id, content_id} = Table.create_template(state.nodes, attributes)
     reply = {node_handle(state.nodes, template_id), node_handle(state.nodes, content_id)}
     {:reply, reply, state}
   end
@@ -260,11 +252,7 @@ defmodule DOM do
         {:reply, :ok, state}
 
       :else ->
-        detach_from_parent(state.nodes, child_id, child_data)
-        parent = fetch_node!(state.nodes, parent_id)
-
-        put_node(state.nodes, parent_id, %{parent | children: parent.children ++ [child_id]})
-        put_node(state.nodes, child_id, %{child_data | parent: parent_id})
+        Table.append_child(state.nodes, parent_id, child_id)
         {:reply, :ok, state}
     end
   end
@@ -366,18 +354,7 @@ defmodule DOM do
         {:reply, :ok, state}
 
       :else ->
-        detach_from_parent(state.nodes, child_id, child_data)
-        parent = fetch_node!(state.nodes, parent_id)
-
-        {before, [reference_child | after_reference]} =
-          Enum.split_while(parent.children, &(&1 != reference_child_id))
-
-        put_node(state.nodes, parent_id, %{
-          parent
-          | children: before ++ [child_id, reference_child | after_reference]
-        })
-
-        put_node(state.nodes, child_id, %{child_data | parent: parent_id})
+        Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
         {:reply, :ok, state}
     end
   end
@@ -477,14 +454,7 @@ defmodule DOM do
     parent_data = fetch_node!(state.nodes, parent_id)
 
     if child_id in parent_data.children do
-      child_data = fetch_node!(state.nodes, child_id)
-
-      put_node(state.nodes, parent_id, %{
-        parent_data
-        | children: List.delete(parent_data.children, child_id)
-      })
-
-      put_node(state.nodes, child_id, %{child_data | parent: nil})
+      Table.remove_child(state.nodes, parent_id, child_id)
       {:reply, :ok, state}
     else
       {:reply, {:error, :not_found}, state}
@@ -726,11 +696,8 @@ defmodule DOM do
     end)
   end
 
-  defp detach_from_parent(nodes, child_id, child) do
-    if parent_id = child.parent do
-      parent = fetch_node!(nodes, parent_id)
-      put_node(nodes, parent_id, %{parent | children: List.delete(parent.children, child_id)})
-    end
+  defp detach_from_parent(nodes, child_id, _child) do
+    Table.detach(nodes, child_id)
   end
 
   defp inclusive_ancestor?(nodes, ancestor_id, node_id) do
@@ -764,41 +731,9 @@ defmodule DOM do
   end
 
   defp clone_node_impl(node_id, deep?, _from, state) do
-    clone_id = clone_subtree(state.nodes, node_id, deep?)
+    clone_id = Table.clone(state.nodes, node_id, deep?)
     {:reply, node_handle(state.nodes, clone_id), state}
   end
-
-  # Copies node_id's data under a fresh id with no parent. When deep?, its
-  # children are cloned recursively and attached; otherwise the clone is a leaf.
-  defp clone_subtree(nodes, node_id, deep?) do
-    node_data = fetch_node!(nodes, node_id)
-    clone_id = make_ref()
-
-    children =
-      if deep? do
-        Enum.map(NodeData.children(node_data), fn child_id ->
-          child_clone_id = clone_subtree(nodes, child_id, true)
-          child_clone = fetch_node!(nodes, child_clone_id)
-          put_node(nodes, child_clone_id, reparent(child_clone, clone_id))
-          child_clone_id
-        end)
-      else
-        []
-      end
-
-    put_node(nodes, clone_id, clone_data(node_data, children))
-    clone_id
-  end
-
-  defp reparent(%{parent: _} = node_data, parent_id), do: %{node_data | parent: parent_id}
-
-  # A detached clone: no parent, and (for containers) the given cloned children.
-  # Leaf records have no `children` field, so only set it when present.
-  defp clone_data(%{children: _} = node_data, children) do
-    %{node_data | parent: nil, children: children}
-  end
-
-  defp clone_data(node_data, _children), do: %{node_data | parent: nil}
 
   def _element_inner_html(server, node_id) do
     GenServer.call(server, {:inner_html, node_id})
@@ -988,19 +923,9 @@ defmodule DOM do
   # Helper functions
   # ==========================================================================
 
-  defmatchspecp fetch_node(node_id) do
-    {^node_id, node_data} -> node_data
-  end
+  defp fetch_node!(nodes, node_id), do: Table.fetch!(nodes, node_id)
 
-  defp fetch_node!(nodes, node_id) do
-    [node_data] = :ets.select(nodes, fetch_node(node_id))
-    node_data
-  end
-
-  defp put_node(nodes, node_id, node) do
-    true = :ets.insert(nodes, {node_id, node})
-    :ok
-  end
+  defp put_node(nodes, node_id, node), do: Table.put(nodes, node_id, node)
 
   defp node_handle(nodes, node_id) do
     type = nodes |> fetch_node!(node_id) |> NodeData.type()
