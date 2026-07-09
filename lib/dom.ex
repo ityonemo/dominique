@@ -895,19 +895,24 @@ defmodule DOM do
   end
 
   defp get_elements_by_tag_name_impl(node_id, name, _from, state) do
-    matches =
-      state.nodes
-      |> descendant_ids(node_id)
-      |> Enum.filter(&tag_name_match?(state.nodes, &1, name))
-      |> Enum.map(&node_handle(state.nodes, &1))
+    descendants = descendant_ids(state.nodes, node_id)
 
-    {:reply, matches, state}
+    ids =
+      if name == "*" do
+        # "*" wants every element descendant — the tag index gives no benefit, so
+        # keep the element scan.
+        Enum.filter(descendants, &element?(state.nodes, &1))
+      else
+        # A named tag is a point lookup in the tag index; keep tree order by
+        # filtering the ordered descendant walk against the (scope-free) match set.
+        matched = MapSet.new(Table.index_lookup(state.index, :tag, name))
+        Enum.filter(descendants, &MapSet.member?(matched, &1))
+      end
+
+    {:reply, Enum.map(ids, &node_handle(state.nodes, &1)), state}
   end
 
-  defp tag_name_match?(nodes, node_id, name) do
-    node = fetch_node!(nodes, node_id)
-    match?(%NodeData.Element{}, node) and (name == "*" or node.local_name == name)
-  end
+  defp element?(nodes, node_id), do: match?(%NodeData.Element{}, fetch_node!(nodes, node_id))
 
   defp get_element_by_id_impl(root_id, id, _from, state) do
     # The index gives every node with this id doc-wide (unordered); intersect with
