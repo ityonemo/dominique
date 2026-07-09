@@ -432,6 +432,62 @@ defmodule DOM.CSS.MatchTest do
     end
   end
 
+  describe ":lang and :dir" do
+    setup do
+      # lang/dir inherit down the subtree; p2 overrides lang to fr.
+      {table, ids} =
+        build(
+          element(
+            "div",
+            [{"lang", "en-US"}, {"dir", "rtl"}],
+            [
+              element("p", [], [], as: :p1),
+              element("p", [{"lang", "fr"}], [], as: :p2),
+              element("span", [], [], as: :span)
+            ],
+            as: :div
+          )
+        )
+
+      all = [ids[:div], ids[:p1], ids[:p2], ids[:span]]
+      %{table: table, ids: ids, all: all}
+    end
+
+    test ":lang(en) matches the declaring element and its inheritors, |= style", ctx do
+      # en matches en-US by the |= rule; p2 overrides to fr, so it is excluded.
+      assert matched(ctx.table, pc(":lang(en)"), ctx.all) ==
+               MapSet.new([ctx.ids[:div], ctx.ids[:p1], ctx.ids[:span]])
+    end
+
+    test ":lang(fr) matches only the fr subtree", ctx do
+      assert matched(ctx.table, pc(":lang(fr)"), ctx.all) == MapSet.new([ctx.ids[:p2]])
+    end
+
+    test ":lang is case-insensitive and accepts multiple args", ctx do
+      assert matched(ctx.table, pc(":lang(EN)"), ctx.all) ==
+               MapSet.new([ctx.ids[:div], ctx.ids[:p1], ctx.ids[:span]])
+
+      assert matched(ctx.table, pc(":lang(de, fr)"), ctx.all) == MapSet.new([ctx.ids[:p2]])
+    end
+
+    test ":lang requires a subtag boundary (en does not match english)" do
+      {table, ids} = build(element("div", [{"lang", "english"}], [], as: :d))
+      assert matched(table, pc(":lang(en)"), [ids[:d]]) == MapSet.new()
+    end
+
+    test ":dir(rtl) matches the declaring element and its inheritors", ctx do
+      assert matched(ctx.table, pc(":dir(rtl)"), ctx.all) == MapSet.new(ctx.all)
+    end
+
+    test ":dir(ltr) matches nothing here", ctx do
+      assert matched(ctx.table, pc(":dir(ltr)"), ctx.all) == MapSet.new()
+    end
+
+    test ":dir(auto) is not modeled and matches nothing", ctx do
+      assert matched(ctx.table, pc(":dir(auto)"), ctx.all) == MapSet.new()
+    end
+  end
+
   describe ":has" do
     setup do
       {table, ids} =

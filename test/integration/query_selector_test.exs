@@ -188,6 +188,55 @@ defmodule Integration.QuerySelectorTest do
     end
   end
 
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/css/selectors"
+
+    # :lang and :dir inherit down the subtree from the element that declares the
+    # lang/dir attribute; :lang uses the |= rule (en matches en-US). p2 overrides
+    # lang to fr. Parsed from markup so both sides build the same tree.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<div id='d' lang='en-US' dir='rtl'>" +
+          "<p id='p1'>a</p><p id='p2' lang='fr'>b</p><span id='s'>c</span>" +
+        "</div>", "text/html");
+      const ids = (sel) =>
+        Array.from(doc.querySelectorAll("#d, #d *")).filter(n => n.matches(sel))
+          .map(n => n.getAttribute("id"));
+      return {
+        langEn: ids(":lang(en)"),
+        langFr: ids(":lang(fr)"),
+        dirRtl: ids(":dir(rtl)"),
+        dirLtr: ids(":dir(ltr)")
+      };
+    });
+    """
+
+    test ":lang and :dir match the browser", %{js: expected} do
+      document =
+        DOM.new(
+          "<div id='d' lang='en-US' dir='rtl'>" <>
+            "<p id='p1'>a</p><p id='p2' lang='fr'>b</p><span id='s'>c</span>" <>
+            "</div>"
+        )
+
+      ids = fn selector ->
+        document
+        |> DOM.query_selector_all(selector)
+        |> Enum.map(&Element.get_attribute(&1, "id"))
+      end
+
+      result = %{
+        "langEn" => ids.(":lang(en)"),
+        "langFr" => ids.(":lang(fr)"),
+        "dirRtl" => ids.(":dir(rtl)"),
+        "dirLtr" => ids.(":dir(ltr)")
+      }
+
+      assert result == expected
+    end
+  end
+
   # The same tree as the @js battery, with matching explicit ids.
   defp build(document) do
     el(document, "section", "section", [], [

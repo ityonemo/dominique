@@ -100,7 +100,38 @@ defmodule DOM.CSS.PseudoClass do
     nth_type(nodes, candidates, {a, b}, :backward)
   end
 
-  # Anything else (UI/state pseudo-classes, unknowns) matches nothing.
+  # :lang(A, B, …) — the element's inherited `lang` (nearest ancestor-or-self
+  # bearing one) matches one of the args by the `|=` rule: equal, or a prefix
+  # followed by "-", case-insensitively (BCP-47 subtags).
+  def match(%{name: "lang", arg: {:args, langs}}, nodes, candidates) do
+    wanted = Enum.map(langs, &String.downcase/1)
+
+    nodes
+    |> Query.elements(candidates)
+    |> Enum.filter(fn id ->
+      case Query.inherited_attribute(nodes, id, "lang") do
+        nil -> false
+        value -> Enum.any?(wanted, &lang_matches?(String.downcase(value), &1))
+      end
+    end)
+  end
+
+  # :dir(ltr|rtl) — the element's inherited `dir` attribute equals the keyword.
+  # :dir(auto) needs bidi resolution of the element's text, which NodeData does
+  # not model, so it matches nothing (falls through to the catch-all).
+  def match(%{name: "dir", arg: {:args, [dir]}}, nodes, candidates)
+      when dir in ["ltr", "rtl"] do
+    nodes
+    |> Query.elements(candidates)
+    |> Enum.filter(fn id ->
+      value = Query.inherited_attribute(nodes, id, "dir")
+      value != nil and String.downcase(value) == dir
+    end)
+  end
+
+  # Anything else (UI/state pseudo-classes, :dir(auto), unknowns) matches
+  # nothing — mirrors the browser, where e.g. :hover yields no elements in a
+  # static querySelector rather than erroring.
   def match(_selector, _nodes, _candidates), do: []
 
   # An+B position test among element siblings, counting from the start
@@ -135,6 +166,12 @@ defmodule DOM.CSS.PseudoClass do
       index = Enum.find_index(matching, &(&1 == id))
       index != nil and anb?(index + 1, a, b)
     end)
+  end
+
+  # The `|=` match used by :lang — value equals wanted, or begins with it plus a
+  # "-" boundary (so `en` matches `en-US` but not `english`). Both downcased.
+  defp lang_matches?(value, wanted) do
+    value == wanted or String.starts_with?(value, wanted <> "-")
   end
 
   # Does `position` satisfy An+B, i.e. exists k >= 0 with position == a*k + b?

@@ -129,6 +129,31 @@ defmodule DOM.CSS.Query do
     type
   end
 
+  @doc """
+  The value of attribute `name` on the nearest of `node_id`-or-ancestor that
+  carries it, or `nil` if none does. Models the inheritance of `lang`/`dir`,
+  which apply to a subtree from the element that declares them.
+  """
+  @spec inherited_attribute(:ets.tid(), reference(), String.t()) :: String.t() | nil
+  def inherited_attribute(nodes, node_id, name) do
+    [node_id | ancestors(nodes, node_id)]
+    |> Enum.find_value(fn id -> own_attribute(nodes, id, name) end)
+  end
+
+  # The value of attribute `name` set directly on `node_id`, or nil.
+  defp own_attribute(nodes, node_id, name) do
+    case select(nodes, attributes_of_spec(node_id)) do
+      [attributes] ->
+        case List.keyfind(attributes, name, 0) do
+          {^name, value} -> value
+          nil -> nil
+        end
+
+      [] ->
+        nil
+    end
+  end
+
   @doc "Whether `node_id` is an element with no child element or text nodes."
   @spec empty?(:ets.tid(), reference()) :: boolean()
   def empty?(nodes, node_id) do
@@ -242,6 +267,10 @@ defmodule DOM.CSS.Query do
 
   defmatchspecp attributes_spec() do
     {id, %{__struct__: NodeData.Element, attributes: attributes}} -> {id, attributes}
+  end
+
+  defmatchspecp attributes_of_spec(node_id) do
+    {^node_id, %{__struct__: NodeData.Element, attributes: attributes}} -> attributes
   end
 
   defmatchspecp parent_spec(node_id) do
