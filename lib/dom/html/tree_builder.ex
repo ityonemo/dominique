@@ -713,8 +713,11 @@ defmodule DOM.HTML.TreeBuilder do
 
   # A start tag for a void element: insert an HTML element, immediately pop it,
   # acknowledge the self-closing flag. area/br/embed/img/keygen/wbr and a
-  # non-hidden input additionally set frameset-ok to "not ok".
-  defp process(:in_body, %Token.StartTag{name: name} = token, state) when name in @void do
+  # non-hidden input additionally set frameset-ok to "not ok". `col` is NOT an
+  # in-body void tag — it is a table-child tag ignored in "in body" (handled by
+  # the later table-child clause), so it is excluded here.
+  defp process(:in_body, %Token.StartTag{name: name} = token, state)
+       when name in @void and name != "col" do
     {_el, state} = insert_html_element(token, state)
     state = pop(state)
     if void_clears_frameset?(name, token), do: %{state | frameset_ok: false}, else: state

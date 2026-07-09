@@ -268,6 +268,13 @@ defmodule DOM.HTML.TreeBuilderTest do
                doc(["|     <p>", "|       \"a\"", "|     <table>"])
     end
 
+    # spec §13.2.6.4.7: a <col> (a table-child tag) is a parse error and IGNORED in
+    # "in body" — it is NOT a void element there. So a <col> after </table> is
+    # dropped rather than inserted at body level.
+    test "a col start tag in body is ignored" do
+      assert tree("<table></table><col>") == doc(["|     <table>"])
+    end
+
     # spec §13.2.6.4.7 (</form> end tag): the form pointer is checked against the
     # stack. A form fostered out of the stack by a table leaves a dangling
     # pointer, and </form> must ignore it (not crash). Regression guard.
