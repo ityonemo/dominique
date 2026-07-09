@@ -77,21 +77,6 @@ defmodule DOM do
     end
   end
 
-  # Build the parsed tree directly into this server's ETS table, in-process, via
-  # DOM.NodeData.Table — no GenServer round-trips — before any request is served.
-  @impl true
-  def handle_continue({:parse, tokens}, state) do
-    TreeBuilder.build_into(state.nodes, state.document_id, tokens)
-    {:noreply, state}
-  end
-
-  def handle_continue({:fragment, {tokens, context}}, state) do
-    root_id =
-      TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
-
-    {:noreply, %{state | fragment_root: root_id}}
-  end
-
   # ==========================================================================
   # API
   # ==========================================================================
@@ -213,6 +198,19 @@ defmodule DOM do
 
   defp fragment_root_impl(_from, state) do
     {:reply, state.fragment_root, state}
+  end
+
+  # Build the parsed tree directly into this server's ETS table, in-process (via
+  # DOM.NodeData.Table — no GenServer round-trips), before it serves any request.
+  # handle_continue impls take no `from`.
+  defp parse_impl(tokens, state) do
+    TreeBuilder.build_into(state.nodes, state.document_id, tokens)
+    {:noreply, state}
+  end
+
+  defp fragment_impl(tokens, context, state) do
+    root_id = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
+    {:noreply, %{state | fragment_root: root_id}}
   end
 
   defp create_impl(node_data, _from, state) do
@@ -984,6 +982,15 @@ defmodule DOM do
   # ==========================================================================
   # Router
   # ==========================================================================
+
+  @impl true
+  def handle_continue({:parse, tokens}, state) do
+    parse_impl(tokens, state)
+  end
+
+  def handle_continue({:fragment, {tokens, context}}, state) do
+    fragment_impl(tokens, context, state)
+  end
 
   @impl true
   def handle_call(:fragment_root, from, state) do
