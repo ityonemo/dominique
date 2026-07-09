@@ -605,6 +605,23 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|       \"3\""
                ])
     end
+
+    # spec §13.2.6.4.7 (<a> start tag): when the open <a> is NOT in table scope
+    # (a <table> sits above it), the adoption agency makes no reparenting change,
+    # but the open <a> must still be removed from the AFE and the stack before the
+    # new <a> is inserted — otherwise a duplicate <a> lingers and later blocks nest
+    # inside it instead of at body level.
+    test "a nested a inside a table removes the old a from the lists" do
+      assert tree("<a><table><a></table><p>x") ==
+               doc([
+                 "|     <a>",
+                 "|       <a>",
+                 "|       <table>",
+                 "|     <p>",
+                 "|       <a>",
+                 "|         \"x\""
+               ])
+    end
   end
 
   describe "foreign content — §13.2.6.4.7 / §13.2.6.5 (SVG / MathML)" do

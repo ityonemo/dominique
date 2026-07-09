@@ -838,10 +838,15 @@ defmodule DOM.HTML.TreeBuilder do
   defp process(:in_body, %Token.StartTag{name: "a"} = token, state) do
     state =
       if existing = formatting_after_marker(state, "a") do
+        # formatting_after_marker returns the AFE {element, token} entry; the
+        # removal helpers take the ELEMENT, so unwrap it (a tuple would silently
+        # no-op both removals, leaving a duplicate <a> in the AFE and stack).
+        el = elem_of(existing)
+
         state
         |> adoption_agency(%Token.EndTag{name: "a"})
-        |> remove_from_formatting(existing)
-        |> remove_from_stack(existing)
+        |> remove_from_formatting(el)
+        |> remove_from_stack(el)
       else
         state
       end
