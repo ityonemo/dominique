@@ -64,4 +64,28 @@ defmodule DOM.ConsistencyTest do
     Node.append_child(root, clone)
     assert_consistent(doc)
   end
+
+  test "id index tracks setAttribute / changed id / removeAttribute" do
+    doc = DOM.new("<div id=root></div>")
+    root = DOM.query_selector(doc, "#root")
+    el = DOM.create_element(doc, "span")
+    Node.append_child(root, el)
+
+    Element.set_attribute(el, "id", "first")
+    assert_consistent(doc)
+
+    Element.set_attribute(el, "id", "second")
+    assert_consistent(doc)
+
+    Element.remove_attribute(el, "id")
+    assert_consistent(doc)
+  end
+
+  test "id index survives a created-but-unappended element with an id" do
+    doc = DOM.new("<div id=root></div>")
+    el = DOM.create_element(doc, "span")
+    Element.set_attribute(el, "id", "detached")
+    # never appended — legitimately unreachable, but still indexed
+    assert_consistent(doc)
+  end
 end

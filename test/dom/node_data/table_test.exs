@@ -109,6 +109,89 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "id index primitives" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "index_put registers a node's id; index_lookup finds it", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"id", "foo"}])
+      assert Table.index_lookup(index, :id, "foo") == [node]
+      assert Table.index_lookup(index, :id, "absent") == []
+    end
+
+    test "index_lookup returns all nodes sharing an id value (duplicates allowed)",
+         %{index: index} do
+      a = make_ref()
+      b = make_ref()
+      Table.index_put(index, a, [{"id", "dup"}])
+      Table.index_put(index, b, [{"id", "dup"}])
+      assert Enum.sort(Table.index_lookup(index, :id, "dup")) == Enum.sort([a, b])
+    end
+
+    test "index_put is an idempotent refresh — re-put with a new id replaces the old",
+         %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"id", "old"}])
+      Table.index_put(index, node, [{"id", "new"}])
+      assert Table.index_lookup(index, :id, "old") == []
+      assert Table.index_lookup(index, :id, "new") == [node]
+    end
+
+    test "index_put with no id attribute leaves the node unindexed", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"class", "x"}])
+      assert Table.index_lookup(index, :id, "x") == []
+    end
+
+    test "index_retract removes a node's id rows", %{index: index} do
+      node = make_ref()
+      Table.index_put(index, node, [{"id", "foo"}])
+      Table.index_retract(index, node)
+      assert Table.index_lookup(index, :id, "foo") == []
+    end
+  end
+
+  describe "check_consistency!/2 — id index agreement" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "passes when the id index mirrors the element rows", %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.set_attribute(tid, a, "id", "one")
+      Table.index_put(index, a, [{"id", "one"}])
+
+      assert Table.check_consistency!(tid, index) == :ok
+    end
+
+    test "raises when an element's id is missing from the index", %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.set_attribute(tid, a, "id", "one")
+      # index intentionally NOT updated
+
+      assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
+    end
+
+    test "raises when the index points at a node with no such id (stale row)",
+         %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.index_put(index, a, [{"id", "ghost"}])
+
+      assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
+    end
+
+    test "raises when the index points at a deleted node", %{tid: tid, index: index} do
+      a = Table.create_element(tid, "a")
+      Table.set_attribute(tid, a, "id", "one")
+      Table.index_put(index, a, [{"id", "one"}])
+      :ets.delete(tid, a)
+
+      assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
+    end
+  end
+
   describe "mutation" do
     test "append_child links parent and child both ways", %{tid: tid} do
       p = Table.create_element(tid, "ul")

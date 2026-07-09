@@ -18,6 +18,8 @@ defmodule DOM.NodeData.Table do
   hierarchy / fragment-flattening checks the public DOM API additionally needs.
   """
 
+  use MatchSpec
+
   alias DOM.NodeData
 
   @type tid :: :ets.tid()
@@ -280,24 +282,84 @@ defmodule DOM.NodeData.Table do
   end
 
   # ==========================================================================
+  # id/class index (a separate :ordered_set tid)
+  # ==========================================================================
+  #
+  # Index rows are `{{:id | :class, value, make_ref()}, node_id}`. The trailing
+  # ref makes each membership uniquely deletable; the ordered_set keeps rows that
+  # share a `{:id, value, _}` prefix contiguous, so a lookup is a bounded prefix
+  # range scan (O(log n + k)). The index tracks which node ROWS carry which
+  # id/class — independent of tree reachability; scope filtering happens at query
+  # time.
+
+  @doc """
+  Refresh `node_id`'s index rows from `attributes`: retract its old id/class rows,
+  then insert one row per id and per (deduped) class token. Idempotent, so it
+  covers set / change / remove of id/class uniformly.
+  """
+  @spec index_put(tid, id, [{String.t(), String.t()}]) :: :ok
+  def index_put(index, node_id, attributes) do
+    index_retract(index, node_id)
+
+    for {"id", value} <- attributes do
+      :ets.insert(index, {{:id, value, make_ref()}, node_id})
+    end
+
+    :ok
+  end
+
+  @doc "Delete all id/class index rows pointing at `node_id`."
+  @spec index_retract(tid, id) :: :ok
+  def index_retract(index, node_id) do
+    :ets.match_delete(index, {{:id, :_, :_}, node_id})
+    :ok
+  end
+
+  @doc """
+  Populate `index` from every element row in `nodes` — the bulk path used once a
+  subtree is built directly into the node table (e.g. after HTML parsing, where
+  the tree builder writes only the node table). Assumes the relevant index rows
+  are not already present.
+  """
+  @spec reindex(tid, tid) :: :ok
+  def reindex(nodes, index) do
+    for {node_id, %NodeData.Element{attributes: attributes}} <- :ets.tab2list(nodes) do
+      index_put(index, node_id, attributes)
+    end
+
+    :ok
+  end
+
+  @doc "All node ids carrying `value` for the given index kind (`:id`)."
+  @spec index_lookup(tid, :id, String.t()) :: [id]
+  def index_lookup(index, :id, value), do: :ets.select(index, index_id_spec(value))
+
+  defmatchspecp index_id_spec(value) do
+    {{:id, ^value, _ref}, node_id} -> node_id
+  end
+
+  # ==========================================================================
   # Consistency checking
   # ==========================================================================
 
   @doc """
-  Assert the node table's `parent`/`children` pointers are mutually consistent,
-  returning `:ok` or raising. For every node:
+  Assert the document's ETS invariants, returning `:ok` or raising:
 
-    * each child in `children` appears exactly once and points back
-      (`child.parent == node`);
-    * conversely, every node whose non-nil `parent` is `node` appears in
-      `node`'s `children`.
+    * **adjacency integrity** — `parent`/`children` pointers agree bidirectionally
+      (see below);
+    * **id index agreement** (when an `index` tid is given) — the id index exactly
+      mirrors the id attributes of every element row.
 
-  A legitimately detached subtree (its root's `parent` is `nil`, its internal
-  edges agreeing) passes; a `detach`-and-forgot leak or a dangling pointer fails.
-  Meant to run between operations (e.g. an `on_exit` hook), never mid-operation.
+  Adjacency, for every node: each child in `children` appears exactly once and
+  points back (`child.parent == node`); and every node whose non-nil `parent` is
+  `node` appears in `node`'s `children`. A legitimately detached subtree (its
+  root's `parent` is `nil`, internal edges agreeing) passes; a `detach`-and-forgot
+  leak or a dangling pointer fails. Meant to run between operations (e.g. an
+  `on_exit` hook), never mid-operation.
   """
   @spec check_consistency!(tid) :: :ok
-  def check_consistency!(tid) do
+  @spec check_consistency!(tid, tid) :: :ok
+  def check_consistency!(tid, index \\ nil) do
     rows = :ets.tab2list(tid)
     parents = Map.new(rows, fn {id, data} -> {id, NodeData.parent(data)} end)
 
@@ -308,7 +370,24 @@ defmodule DOM.NodeData.Table do
     end)
 
     check_parents_are_listed!(rows)
+    if index, do: check_id_index!(rows, index)
     :ok
+  end
+
+  # The id index must equal, as a sorted list of {value, node} pairs, the id
+  # attributes of the element rows — no missing, stale, duplicate, or dangling row.
+  defp check_id_index!(rows, index) do
+    expected =
+      for {id, %NodeData.Element{attributes: attributes}} <- rows,
+          {"id", value} <- attributes,
+          do: {value, id}
+
+    actual = for {{:id, value, _ref}, node_id} <- :ets.tab2list(index), do: {value, node_id}
+
+    if Enum.sort(expected) != Enum.sort(actual) do
+      raise "inconsistent id index: expected #{inspect(Enum.sort(expected))}, " <>
+              "got #{inspect(Enum.sort(actual))}"
+    end
   end
 
   defp check_no_duplicate_children!(id, children) do

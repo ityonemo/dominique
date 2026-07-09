@@ -11,6 +11,7 @@ defmodule DOM.Element do
 
   alias DOM.Node
   alias DOM.NodeData.Element
+  alias DOM.NodeData.Table
 
   @doc "The element's local name, or `nil` for a non-element node."
   @spec local_name(Node.t()) :: String.t() | nil
@@ -85,9 +86,11 @@ defmodule DOM.Element do
   # Atomically reads the record, applies `fun` to its attribute list, and writes
   # the updated record back — a single server hop so no operation interleaves.
   defp update_attributes(%Node{id: node_id} = element, fun) do
-    DOM._atomic_ets_op(element.server, fn nodes ->
+    DOM._atomic_ets_op(element.server, fn nodes, index ->
       [{^node_id, record}] = :ets.lookup(nodes, node_id)
-      :ets.insert(nodes, {node_id, %{record | attributes: fun.(record.attributes)}})
+      updated = %{record | attributes: fun.(record.attributes)}
+      :ets.insert(nodes, {node_id, updated})
+      Table.index_put(index, node_id, updated.attributes)
       :ok
     end)
   end

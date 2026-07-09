@@ -155,7 +155,7 @@ defmodule DOM.Node do
   def parent_node(%__MODULE__{} = node) do
     # Two dependent reads (parent id, then that id's handle) run in one atomic op
     # so the tree can't be mutated between them.
-    DOM._atomic_ets_op(node.server, fn nodes ->
+    DOM._atomic_ets_op(node.server, fn nodes, _index ->
       case :ets.select(nodes, parent_id_spec(node.id)) do
         [nil] ->
           nil

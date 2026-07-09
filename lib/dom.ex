@@ -29,11 +29,12 @@ defmodule DOM do
   # Types
   # ==========================================================================
 
-  @enforce_keys [:nodes, :document_id]
-  defstruct [:nodes, :document_id, :fragment_root]
+  @enforce_keys [:nodes, :index, :document_id]
+  defstruct [:nodes, :index, :document_id, :fragment_root]
 
   @type state :: %__MODULE__{
           nodes: :ets.tid(),
+          index: :ets.tid(),
           document_id: reference(),
           fragment_root: reference() | nil
         }
@@ -60,8 +61,9 @@ defmodule DOM do
   def init(opts) do
     document_id = Keyword.fetch!(opts, :document_id)
     nodes = :ets.new(__MODULE__, [:set, :private])
+    index = :ets.new(:"#{__MODULE__}.Index", [:ordered_set, :private])
     :ets.insert(nodes, {document_id, %NodeData.Document{}})
-    state = %__MODULE__{nodes: nodes, document_id: document_id}
+    state = %__MODULE__{nodes: nodes, index: index, document_id: document_id}
 
     case build_continue(opts) do
       nil -> {:ok, state}
@@ -95,7 +97,8 @@ defmodule DOM do
   @spec matches(Node.t(), String.t()) :: boolean()
   @spec _select(GenServer.server(), :ets.match_spec()) :: [term()]
   @spec _select_replace(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
-  @spec _atomic_ets_op(GenServer.server(), (:ets.tid() -> result)) :: result when result: term()
+  @spec _atomic_ets_op(GenServer.server(), (:ets.tid(), :ets.tid() -> result)) :: result
+        when result: term()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
   @spec _node_remove_child(GenServer.server(), reference(), Node.t()) :: Node.t()
@@ -214,19 +217,29 @@ defmodule DOM do
   # handle_continue impls take no `from`.
   defp parse_impl(tokens, state) do
     TreeBuilder.build_into(state.nodes, state.document_id, tokens)
+    Table.reindex(state.nodes, state.index)
     {:noreply, state}
   end
 
   defp fragment_impl(tokens, context, state) do
     root_id = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
+    Table.reindex(state.nodes, state.index)
     {:noreply, %{state | fragment_root: root_id}}
   end
 
   defp create_impl(node_data, _from, state) do
     node_id = make_ref()
     Table.put(state.nodes, node_id, node_data)
+    index_element(state.index, node_id, node_data)
     {:reply, node_handle(state.nodes, node_id), state}
   end
+
+  # Register an element's id/class in the index (no-op for non-elements).
+  defp index_element(index, node_id, %NodeData.Element{attributes: attributes}) do
+    Table.index_put(index, node_id, attributes)
+  end
+
+  defp index_element(_index, _node_id, _node_data), do: :ok
 
   # The content DocumentFragment handle of a template element (nil if unset).
   defp element_content_impl(id, _from, state) do
@@ -263,7 +276,7 @@ defmodule DOM do
   end
 
   defp atomic_ets_op_impl(op, _from, state) do
-    {:reply, op.(state.nodes), state}
+    {:reply, op.(state.nodes, state.index), state}
   end
 
   @doc """
@@ -276,7 +289,7 @@ defmodule DOM do
   end
 
   defp check_index_consistency_impl(_from, state) do
-    {:reply, Table.check_consistency!(state.nodes), state}
+    {:reply, Table.check_consistency!(state.nodes, state.index), state}
   end
 
   def _node_append_child(server, parent_id, %{server: child_server, id: child_id} = child) do
@@ -437,7 +450,7 @@ defmodule DOM do
        ) do
       {:reply, {:error, :hierarchy_request}, state}
     else
-      materialize_subtree(state.nodes, child_id, subtree)
+      materialize_subtree(state.nodes, state.index, child_id, subtree)
 
       if match?(%NodeData.DocumentFragment{}, child_data) do
         append_fragment(state.nodes, parent_id, child_id, child_data)
@@ -475,7 +488,7 @@ defmodule DOM do
         {:reply, {:error, :hierarchy_request}, state}
 
       :else ->
-        materialize_subtree(state.nodes, child_id, subtree)
+        materialize_subtree(state.nodes, state.index, child_id, subtree)
 
         if match?(%NodeData.DocumentFragment{}, child_data) do
           insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
@@ -495,7 +508,7 @@ defmodule DOM do
     end
   end
 
-  defp materialize_subtree(nodes, child_id, subtree) do
+  defp materialize_subtree(nodes, index, child_id, subtree) do
     subtree =
       Enum.map(subtree, fn
         {^child_id, node_data} -> {child_id, %{node_data | parent: nil}}
@@ -503,6 +516,7 @@ defmodule DOM do
       end)
 
     true = :ets.insert(nodes, subtree)
+    Enum.each(subtree, fn {id, node_data} -> index_element(index, id, node_data) end)
   end
 
   def _node_remove_child(server, parent_id, %{id: child_id} = child) do
@@ -583,7 +597,7 @@ defmodule DOM do
       new_child_data,
       old_child_id,
       subtree_nodes,
-      fn -> materialize_subtree(state.nodes, new_child_id, subtree) end,
+      fn -> materialize_subtree(state.nodes, state.index, new_child_id, subtree) end,
       state
     )
   end
@@ -664,11 +678,7 @@ defmodule DOM do
   defp remove_subtree_impl(node_id, _from, state) do
     node_data = fetch_node!(state.nodes, node_id)
     detach_from_parent(state.nodes, node_id, node_data)
-
-    state.nodes
-    |> subtree(node_id)
-    |> Enum.each(fn {id, _node_data} -> :ets.delete(state.nodes, id) end)
-
+    delete_subtree(state.nodes, state.index, node_id)
     {:reply, :ok, state}
   end
 
@@ -794,6 +804,7 @@ defmodule DOM do
 
   defp clone_node_impl(node_id, deep?, _from, state) do
     clone_id = Table.clone(state.nodes, node_id, deep?)
+    Table.reindex(state.nodes, state.index)
     {:reply, node_handle(state.nodes, clone_id), state}
   end
 
@@ -858,10 +869,14 @@ defmodule DOM do
   end
 
   # Fragment-parse `html` in `context` into this document's table; return the
-  # synthetic fragment-root id (whose children are the parsed nodes).
+  # synthetic fragment-root id (whose children are the parsed nodes). The parsed
+  # elements are indexed via a reindex pass (index_put is idempotent, so
+  # re-touching already-indexed nodes is harmless).
   defp fragment_root_for(html, context, state) do
     tokens = DOM.HTML.fragment_tokens(html, context.name)
-    TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
+    root = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
+    Table.reindex(state.nodes, state.index)
+    root
   end
 
   def _element_outer_html(server, node_id) do
@@ -996,16 +1011,20 @@ defmodule DOM do
   # Replace all children with a single Text node (none when value is empty).
   defp set_text_content_impl(node_id, value, _from, state) do
     node = fetch_node!(state.nodes, node_id)
-    Enum.each(node.children, &delete_subtree(state.nodes, &1))
+    Enum.each(node.children, &delete_subtree(state.nodes, state.index, &1))
     children = if value == "", do: [], else: [new_text(state.nodes, node_id, value)]
     put_node(state.nodes, node_id, %{node | children: children})
     {:reply, :ok, state}
   end
 
-  defp delete_subtree(nodes, node_id) do
+  # Delete a subtree from the node table and retract each element's index rows.
+  defp delete_subtree(nodes, index, node_id) do
     nodes
     |> subtree(node_id)
-    |> Enum.each(fn {id, _node_data} -> :ets.delete(nodes, id) end)
+    |> Enum.each(fn {id, _node_data} ->
+      Table.index_retract(index, id)
+      :ets.delete(nodes, id)
+    end)
   end
 
   defp new_text(nodes, parent_id, value) do
