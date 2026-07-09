@@ -180,8 +180,25 @@ after
     {rest, [struct!(Token.StartTag, name: find_raw_name(args), attributes: attributes)], context}
   end
 
-  defp raw_text(rest, [{_tag, codepoints}], context, _loc, _col) do
-    {rest, [struct!(Token.Character, data: to_string_utf8(codepoints))], context}
+  # RAWTEXT / script-data elements: their interior is captured verbatim and its
+  # character references are NOT decoded (RCDATA elements — title/textarea — do
+  # decode). The rule tag (:raw_text_script, :raw_text_title, …) identifies the
+  # element, so the decode? flag is derived from it.
+  @rcdata_raw ~w(title textarea)
+
+  defp raw_text(rest, [{tag, codepoints}], context, _loc, _col) do
+    token = struct!(Token.Character, data: to_string_utf8(codepoints), decode?: raw_decode?(tag))
+    {rest, [token], context}
+  end
+
+  # Only RCDATA interiors decode character references. The rule tag is
+  # :raw_text_<name> for the raw elements or :plaintext_body for <plaintext>
+  # (RAWTEXT — no decode).
+  defp raw_decode?(:plaintext_body), do: false
+
+  defp raw_decode?(tag) do
+    "raw_text_" <> name = Atom.to_string(tag)
+    name in @rcdata_raw
   end
 
   defp raw_close(rest, [{_close, args}], context, _loc, _col) do

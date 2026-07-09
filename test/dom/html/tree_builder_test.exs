@@ -1308,4 +1308,32 @@ defmodule DOM.HTML.TreeBuilderTest do
                ~s(| <html>\n|   <head>\n|     <title>\n|       "a<b>c"\n|   <body>)
     end
   end
+
+  # Character-reference decoding is tokenizer-state dependent: RCDATA content
+  # (title/textarea) IS decoded; RAWTEXT and script-data content
+  # (script/style/xmp/iframe/noembed/noframes) is NOT — the reference stays
+  # literal. (WHATWG §13.2.5: RAWTEXT/script-data states do not consume character
+  # references.)
+  describe "raw-text vs RCDATA entity decoding — §13.2.5" do
+    defp raw_text_of(html, tag) do
+      [el] = html |> DOM.HTML.parse() |> DOM.get_elements_by_tag_name(tag)
+      DOM.Node.text_content(el)
+    end
+
+    test "RCDATA content (title, textarea) decodes character references" do
+      assert raw_text_of("<title>&amp;</title>", "title") == "&"
+      assert raw_text_of("<textarea>&amp;</textarea>", "textarea") == "&"
+    end
+
+    test "RAWTEXT / script-data content does NOT decode character references" do
+      for tag <- ~w(script style xmp iframe noembed noframes) do
+        assert raw_text_of("<#{tag}>&amp;</#{tag}>", tag) == "&amp;",
+               "expected #{tag} to keep &amp; literal"
+      end
+    end
+
+    test "ordinary text still decodes references" do
+      assert tree("<p>&amp;") == doc(["|     <p>", "|       \"&\""])
+    end
+  end
 end

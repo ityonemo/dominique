@@ -56,10 +56,15 @@ after
     DOM.HTML.TreeBuilder.build_fragment(tokens, parsed)
   end
 
-  # A raw-text/RCDATA context makes the whole input one text token; otherwise the
-  # normal tokenization + reference decoding applies.
-  defp fragment_tokens(html, name) when name in @fragment_rcdata or name in @fragment_rawtext do
-    [%DOM.HTML.Token.Character{data: html}]
+  # A raw-text/RCDATA context makes the whole input one text token. RCDATA
+  # (title/textarea) still decodes character references; RAWTEXT/script data does
+  # not (decode?: false). Other contexts use normal tokenization + decoding.
+  defp fragment_tokens(html, name) when name in @fragment_rcdata do
+    [DOM.HTML.Token.decode(%DOM.HTML.Token.Character{data: html})]
+  end
+
+  defp fragment_tokens(html, name) when name in @fragment_rawtext do
+    [%DOM.HTML.Token.Character{data: html, decode?: false}]
   end
 
   defp fragment_tokens(html, _name) do
