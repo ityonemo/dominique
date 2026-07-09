@@ -2646,11 +2646,16 @@ defmodule DOM.HTML.TreeBuilder do
   # The appropriate insertion location with `target` as the override target
   # (foster parenting honored). Returns {parent, reference}.
   defp appropriate_insertion_location_for(state, target) do
-    if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
-      foster_location(state)
-    else
-      {target, nil}
-    end
+    location =
+      if state.foster_parenting and Node.node_name(target) in ~w(table tbody tfoot thead tr) do
+        foster_location(state)
+      else
+        {target, nil}
+      end
+
+    # If the location's parent is a template, redirect into its content fragment —
+    # e.g. the adoption agency reparenting into a <template> common ancestor.
+    template_content_location(state, location)
   end
 
   # "The adoption agency algorithm" (§13.2.6.4.7). `token` is the end tag whose

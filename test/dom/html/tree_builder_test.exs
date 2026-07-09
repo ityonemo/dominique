@@ -1023,6 +1023,22 @@ defmodule DOM.HTML.TreeBuilderTest do
                  "|         <svg svg>\n|           <svg template>\n|   <body>"
     end
 
+    # spec §13.2.6.4.7 (adoption agency) + §13.2.6.1: when the adoption agency's
+    # common ancestor is a <template>, the reparented node goes into the template's
+    # CONTENT fragment, not the template element. So `<template><i><menu>Foo</i>`
+    # keeps the reconstructed <i> inside the <menu>, all within the content.
+    test "adoption inside a template reparents into the content fragment" do
+      assert tree("<body><template><i><menu>Foo</i>") ==
+               doc([
+                 "|     <template>",
+                 "|       content",
+                 "|         <i>",
+                 "|         <menu>",
+                 "|           <i>",
+                 "|             \"Foo\""
+               ])
+    end
+
     # spec §13.2.6.4.16 (</template> end tag): closing a template returns to the
     # enclosing insertion mode, so following content is a sibling of the template.
     test "content after a closed template is a sibling" do
