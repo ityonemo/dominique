@@ -410,8 +410,89 @@ defmodule DOM.NodeData.Table do
   defp interval(<<>>, <<>>, so_far), do: build_interval(so_far, [], 0x80)
 
   defp build_interval(so_far, a, b) do
-    {IO.iodata_to_binary([so_far, a]), IO.iodata_to_binary([so_far, b])}
+    {build_key([so_far, a]), build_key([so_far, b])}
   end
+
+  # The one place order-keys are materialized: flatten accumulated prefix iodata
+  # (shared-prefix bytes, an appended byte, a remapped suffix, …) into a binary key.
+  # Used across interval / multispan / graft / common-prefix.
+  defp build_key(iodata), do: IO.iodata_to_binary(iodata)
+
+  @doc """
+  `multispan(a, b, count)` allocates `count` fresh extents `[{s1,e1}, …]` in one
+  pass, all strictly inside `a < b` and mutually ordered/disjoint with room
+  between them: `a < s1 < e1 < s2 < … < e_count < b`. The batch analog of
+  `interval/2` (`multispan(a, b, 1)` ≈ `interval(a, b)`), for bulk-loading a whole
+  child list into a parent's window at once.
+
+  Same input contract as `interval/2`: `a`, `b` non-empty binaries with `a < b`,
+  `a` not a proper prefix of `b`. `count >= 1`.
+  """
+  @spec multispan(binary(), binary(), pos_integer()) :: [{binary(), binary()}]
+  def multispan(a, b, count), do: multispan(a, b, count, [])
+
+  @spec multispan(binary(), binary(), pos_integer(), iodata()) :: [{binary(), binary()}]
+  defp multispan(<<a, rest1::binary>>, <<b, rest2::binary>>, count, so_far) do
+    case b - a - 2 do
+      -2 ->
+        # a == b: shared byte, descend accumulating it into the prefix.
+        multispan(rest1, rest2, count, [so_far, a])
+
+      -1 ->
+        # a + 1 == b: adjacent bytes, no interior value between them. Length-extend
+        # under `a` (mirroring interval/2's delta-1 descent): keep the shared byte
+        # `a` and carve into its tail below 0xFF — all of `(a.rest1, a.0xFF)` sits
+        # below `b`, so the whole batch stays under the upper bound.
+        multispan(rest1, <<0xFF>>, count, [so_far, a])
+
+      delta when delta > count * 2 ->
+        # roomy: `count` windows fit at this byte. Stride 2*interval per window
+        # (gap, window, gap, window, …); interval = usable span / (2*count).
+        interval = div(delta, 2 * count)
+        build_multispan_safe(so_far, a, count, interval)
+
+      _too_tight ->
+        # can't fit `count` windows at this byte. Spread them across the interior
+        # bytes `a+1 … b-1` (there are `b - a - 1` of them), recursing under each to
+        # length-extend, over-provisioning per byte, trimming to exactly `count`.
+        interior = b - a - 1
+        per_nextbyte = div(count, interior) + 1
+
+        {windows, _left} =
+          Enum.flat_map_reduce(1..interior, count, fn offset, left ->
+            multispan_under_byte(rest1, [so_far, a + offset], per_nextbyte, left)
+          end)
+
+        windows
+    end
+  end
+
+  # far corners, mirroring interval/2's empty-bound clamps.
+  defp multispan(<<>>, b, count, so_far), do: multispan(<<0>>, b, count, so_far)
+  defp multispan(any, <<>>, count, so_far), do: multispan(any, <<0xFF>>, count, so_far)
+
+  # One interior byte's share during the too-tight spread: place up to `per_byte`
+  # windows (but no more than `left` still owed) under `prefix`'s tail, or nothing
+  # once the quota is met. Returns the flat_map_reduce `{windows, remaining}` pair.
+  defp multispan_under_byte(_rest, _prefix, _per_byte, left) when left <= 0, do: {[], left}
+
+  defp multispan_under_byte(rest, prefix, per_byte, left) do
+    got = multispan(rest, <<0xFF>>, min(left, per_byte), prefix)
+    {got, left - length(got)}
+  end
+
+  # `count` windows carved at this byte, laid out gap-window-gap-window-…: window
+  # `idx` is [a + (2·idx+1)·interval, a + (2·idx+2)·interval]. The leading gap keeps
+  # the first start strictly above `a`; the last stop is a + 2·count·interval ≤
+  # a + delta < b. Order + disjointness are guaranteed by the even stride.
+  defp build_multispan_safe(prefix, a, count, interval) do
+    Enum.map(0..(count - 1), fn idx ->
+      {build_index(prefix, a + (2 * idx + 1) * interval),
+       build_index(prefix, a + (2 * idx + 2) * interval)}
+    end)
+  end
+
+  defp build_index(prefix, nextbyte), do: build_key([prefix, nextbyte])
 
   # ==========================================================================
   # Grafting (relocate an already-labeled subtree by prefix substitution)
@@ -449,7 +530,7 @@ defmodule DOM.NodeData.Table do
   # Swap the first `prefix_len` bytes of `key` for `anchor`.
   defp reprefix(key, anchor, prefix_len) do
     suffix = binary_part(key, prefix_len, byte_size(key) - prefix_len)
-    IO.iodata_to_binary([anchor, suffix])
+    build_key([anchor, suffix])
   end
 
   @doc """
@@ -467,10 +548,10 @@ defmodule DOM.NodeData.Table do
       1 ->
         # adjacent bytes: no midpoint — descend into `start`'s tail (length-extend).
         # 0xFF can't be the byte we increment: b would have wrapped, breaking a<b.
-        IO.iodata_to_binary([so_far, a, remainder_prefix(rest1, [])])
+        build_key([so_far, a, remainder_prefix(rest1, [])])
 
       delta ->
-        IO.iodata_to_binary([so_far, a + div(delta, 2)])
+        build_key([so_far, a + div(delta, 2)])
     end
   end
 

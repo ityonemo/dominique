@@ -183,6 +183,32 @@ defmodule DOM.NodeData.IntervalPropertyTest do
     end
   end
 
+  # --- multispan/3 contract --------------------------------------------------
+
+  property "multispan(a, b, n) returns n ordered, disjoint windows strictly inside (a, b)" do
+    check all({a, b} <- ordered_pair(), count <- integer(1..8)) do
+      windows = Table.multispan(a, b, count)
+
+      assert length(windows) == count,
+             "wrong window count for #{inspect({a, b})} n=#{count}: got #{length(windows)}"
+
+      # every window is a valid non-empty extent strictly inside the gap
+      Enum.each(windows, fn {s, e} ->
+        assert is_binary(s) and byte_size(s) > 0 and is_binary(e) and byte_size(e) > 0
+        assert s < e, "empty/inverted window #{inspect({s, e})}"
+        assert a < s and e < b, "window #{inspect({s, e})} escapes gap #{inspect({a, b})}"
+      end)
+
+      # windows are ordered and mutually disjoint with a gap between them:
+      # e_i < s_{i+1} for consecutive windows.
+      windows
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.each(fn [{_s1, e1}, {s2, _e2}] ->
+        assert e1 < s2, "windows overlap/misordered: #{inspect({e1, s2})}"
+      end)
+    end
+  end
+
   # --- graft/5 contract ------------------------------------------------------
 
   # Build a subtree of real interval-carved extents inside `(pstart, pstop)`,
