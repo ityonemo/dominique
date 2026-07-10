@@ -321,8 +321,15 @@ defmodule DOM.NodeData.Table do
     clone_id
   end
 
-  defp clone_data(%{children: _} = data, children), do: %{data | parent: nil, children: children}
-  defp clone_data(data, _children), do: %{data | parent: nil}
+  # A clone is a detached subtree with no extent yet — its `root`/`start`/`stop`
+  # are cleared so the placement seam (append via the extent mutators, or the
+  # clone-seam carve) assigns fresh ones. Copying the source's extents would alias
+  # a stale window from another tree.
+  defp clone_data(%{children: _} = data, children) do
+    %{data | parent: nil, children: children, root: nil, start: nil, stop: nil}
+  end
+
+  defp clone_data(data, _children), do: %{data | parent: nil, root: nil, start: nil, stop: nil}
 
   @doc "Descendant ids of `root_id` in tree (document) order — excludes `root_id`."
   @spec descendant_ids(tid, id) :: [id]
@@ -700,6 +707,28 @@ defmodule DOM.NodeData.Table do
   def span_build_all(nodes, index) do
     for {id, data} <- :ets.tab2list(nodes), NodeData.parent(data) == nil do
       span_build(nodes, index, id)
+    end
+
+    :ok
+  end
+
+  @doc """
+  (Re)build the span rows for every labeled node straight from its record extent
+  — no carve, no `children` field. The extents themselves (written live by the
+  mutators) are the order source; this only mirrors them into the index's span
+  rows. Retracts each node's old span rows first, so it is idempotent. O(n).
+  """
+  @spec span_index_all(tid, tid) :: :ok
+  def span_index_all(nodes, index) do
+    for {id, %{start: start} = data} when start != nil <- :ets.tab2list(nodes) do
+      span_retract(index, id)
+
+      span_put(index, id, %{
+        root: ns_root(data, id),
+        parent: data.parent,
+        start: start,
+        stop: data.stop
+      })
     end
 
     :ok

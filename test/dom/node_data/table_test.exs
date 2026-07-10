@@ -549,6 +549,44 @@ defmodule DOM.NodeData.TableTest do
     p.start < c.start and c.start < c.stop and c.stop < p.stop
   end
 
+  describe "span_index_all (span rows from record extents, no carve, no field)" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "populates span rows straight from the extents the mutators wrote",
+         %{tid: tid, index: index} do
+      # Build via the extent-authoritative mutators — extents already correct, no
+      # span_build carve needed. span_index_all just copies extents -> span rows.
+      root = Table.create_document(tid)
+      ul = Table.create_element(tid, "ul")
+      a = Table.create_element(tid, "a")
+      b = Table.create_element(tid, "b")
+      Table.append_child(tid, root, ul)
+      Table.append_child(tid, ul, a)
+      Table.append_child(tid, ul, b)
+
+      Table.reindex(tid, index)
+      Table.span_index_all(tid, index)
+
+      assert Table.check_consistency!(tid, index) == :ok
+      assert Table.span_children_of(tid, index, root) == [ul]
+      assert Table.span_children_of(tid, index, ul) == [a, b]
+    end
+
+    test "idempotent — re-running leaves the same span rows", %{tid: tid, index: index} do
+      root = Table.create_document(tid)
+      x = Table.create_element(tid, "x")
+      Table.append_child(tid, root, x)
+      Table.reindex(tid, index)
+
+      Table.span_index_all(tid, index)
+      first = :ets.tab2list(index) |> Enum.sort()
+      Table.span_index_all(tid, index)
+      assert :ets.tab2list(index) |> Enum.sort() == first
+    end
+  end
+
   describe "children_by_extent (order from record extents, nodes tid alone)" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}

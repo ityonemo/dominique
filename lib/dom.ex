@@ -342,40 +342,25 @@ defmodule DOM do
     end
   end
 
-  # Re-derive spans from the (now-consistent) `children` field after an incremental
-  # mutation, keeping the span index in agreement with the field (the dual-write
-  # guard). span_build_all is idempotent and re-carves every root; the trees a
-  # single op touches are small, so this stays cheap on the mutation path.
-  defp resync_spans(state), do: Table.span_build_all(state.nodes, state.index)
+  # Mirror the record extents (written live by the extent-authoritative mutators)
+  # into the index's span rows after an incremental mutation. Idempotent; the
+  # extents are the order source, so this only copies them — no carve from the
+  # `children` field.
+  defp resync_spans(state), do: Table.span_index_all(state.nodes, state.index)
 
+  # Flatten a fragment's children onto `parent_id` (append). Each child moves via
+  # the extent-authoritative mutator, so its extent is placed as it is spliced; the
+  # now-empty fragment record keeps a nil child list.
   defp append_fragment(nodes, parent_id, fragment_id, fragment) do
-    parent = fetch_node!(nodes, parent_id)
-    reparent_fragment_children(nodes, parent_id, fragment)
-
-    put_node(nodes, parent_id, %{parent | children: parent.children ++ fragment.children})
-    put_node(nodes, fragment_id, %{fragment | children: []})
+    Enum.each(fragment.children, &Table.append_child(nodes, parent_id, &1))
+    put_node(nodes, fragment_id, %{fetch_node!(nodes, fragment_id) | children: []})
   end
 
+  # Flatten a fragment's children into `parent_id` before `reference_child_id`, in
+  # order, each via the extent-authoritative insert_before mutator.
   defp insert_fragment(nodes, parent_id, fragment_id, fragment, reference_child_id) do
-    parent = fetch_node!(nodes, parent_id)
-    reparent_fragment_children(nodes, parent_id, fragment)
-
-    {before, after_reference} =
-      Enum.split_while(parent.children, &(&1 != reference_child_id))
-
-    put_node(nodes, parent_id, %{
-      parent
-      | children: before ++ fragment.children ++ after_reference
-    })
-
-    put_node(nodes, fragment_id, %{fragment | children: []})
-  end
-
-  defp reparent_fragment_children(nodes, parent_id, fragment) do
-    Enum.each(fragment.children, fn child_id ->
-      child = fetch_node!(nodes, child_id)
-      put_node(nodes, child_id, %{child | parent: parent_id})
-    end)
+    Enum.each(fragment.children, &Table.insert_before(nodes, parent_id, &1, reference_child_id))
+    put_node(nodes, fragment_id, %{fetch_node!(nodes, fragment_id) | children: []})
   end
 
   def _node_insert_before(server, parent_id, child, nil) do
@@ -473,12 +458,7 @@ defmodule DOM do
       if match?(%NodeData.DocumentFragment{}, child_data) do
         append_fragment(state.nodes, parent_id, child_id, child_data)
       else
-        put_node(state.nodes, parent_id, %{
-          parent_data
-          | children: parent_data.children ++ [child_id]
-        })
-
-        put_node(state.nodes, child_id, %{child_data | parent: parent_id})
+        Table.append_child(state.nodes, parent_id, child_id)
       end
 
       resync_spans(state)
@@ -512,15 +492,7 @@ defmodule DOM do
         if match?(%NodeData.DocumentFragment{}, child_data) do
           insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
         else
-          {before, after_reference} =
-            Enum.split_while(parent_data.children, &(&1 != reference_child_id))
-
-          put_node(state.nodes, parent_id, %{
-            parent_data
-            | children: before ++ [child_id | after_reference]
-          })
-
-          put_node(state.nodes, child_id, %{child_data | parent: parent_id})
+          Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
         end
 
         resync_spans(state)
@@ -656,33 +628,19 @@ defmodule DOM do
 
       :else ->
         prepare.()
-        detach_child(state.nodes, old_child_id)
-        parent = fetch_node!(state.nodes, parent_id)
-        {before, [^old_child_id | rest]} = split_at_child(parent.children, old_child_id)
+        # Splice the replacement in immediately before old_child (each moved node
+        # via the extent-authoritative insert_before, so extents land in old's
+        # neighborhood), then remove old_child — leaving its gap.
+        if match?(%NodeData.DocumentFragment{}, new_child_data) do
+          insert_fragment(state.nodes, parent_id, new_child_id, new_child_data, old_child_id)
+        else
+          Table.insert_before(state.nodes, parent_id, new_child_id, old_child_id)
+        end
 
-        replacement =
-          if match?(%NodeData.DocumentFragment{}, new_child_data) do
-            reparent_fragment_children(state.nodes, parent_id, new_child_data)
-            put_node(state.nodes, new_child_id, %{new_child_data | children: []})
-            new_child_data.children
-          else
-            put_node(state.nodes, new_child_id, %{new_child_data | parent: parent_id})
-            [new_child_id]
-          end
-
-        put_node(state.nodes, parent_id, %{parent | children: before ++ replacement ++ rest})
+        Table.remove_child(state.nodes, parent_id, old_child_id)
         resync_spans(state)
         {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
     end
-  end
-
-  defp detach_child(nodes, child_id) do
-    child = fetch_node!(nodes, child_id)
-    put_node(nodes, child_id, %{child | parent: nil})
-  end
-
-  defp split_at_child(children, child_id) do
-    Enum.split_while(children, &(&1 != child_id))
   end
 
   def _export_subtree(server, node_id) do
@@ -1051,8 +1009,15 @@ defmodule DOM do
   defp set_text_content_impl(node_id, value, _from, state) do
     node = fetch_node!(state.nodes, node_id)
     Enum.each(node.children, &delete_subtree(state.nodes, state.index, &1))
-    children = if value == "", do: [], else: [new_text(state.nodes, node_id, value)]
-    put_node(state.nodes, node_id, %{node | children: children})
+    put_node(state.nodes, node_id, %{fetch_node!(state.nodes, node_id) | children: []})
+
+    if value != "" do
+      # append via the extent-authoritative mutator so the new text node is placed
+      # (extent written), then mirrored into the span rows by resync.
+      text_id = Table.create_text(state.nodes, value)
+      Table.append_child(state.nodes, node_id, text_id)
+    end
+
     resync_spans(state)
     {:reply, :ok, state}
   end
@@ -1066,12 +1031,6 @@ defmodule DOM do
       Table.span_retract(index, id)
       :ets.delete(nodes, id)
     end)
-  end
-
-  defp new_text(nodes, parent_id, value) do
-    text_id = make_ref()
-    :ets.insert(nodes, {text_id, %NodeData.Text{value: value, parent: parent_id}})
-    text_id
   end
 
   def _node_set_value(server, node_id, value) do
