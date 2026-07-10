@@ -2,16 +2,15 @@ defmodule DOM.NodeData.Document do
   @moduledoc "ETS record for the document node."
 
   # `root`/`start`/`stop`: the document is a tree root, so `parent` is nil and
-  # `start`/`stop` are the fixed root extent (<<0x00>>..<<0x80>>). Dual-maintained
-  # with `children`; see DOM.NodeData.Table.
-  defstruct parent: nil, children: [], root: nil, start: nil, stop: nil
+  # `start`/`stop` are the fixed root extent (<<0x00>>..<<0x80>>). Child adjacency
+  # is extent-borne (no `children` field); see DOM.NodeData.Table.
+  defstruct parent: nil, root: nil, start: nil, stop: nil
 
   use DOM.NodeData
   use DOM.HTML
 
   @type t :: %__MODULE__{
           parent: nil,
-          children: [reference()],
           root: reference() | nil,
           start: binary() | nil,
           stop: binary() | nil

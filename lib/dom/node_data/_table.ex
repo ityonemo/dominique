@@ -8,10 +8,13 @@ defmodule DOM.NodeData.Table do
   byte-identical trees), and the HTML tree builder calls these functions directly
   on the document's tid while parsing, avoiding a server round-trip per node.
 
-  Records are the per-type `DOM.NodeData.*` structs stored as `{node_id, data}`;
-  the adjacency is `parent`/`children` id pointers, so "moving" a node is a
-  two-record edit (detach from the old parent, splice into the new) and its
-  subtree follows for free. Reads go through the `DOM.NodeData` protocol.
+  Records are the per-type `DOM.NodeData.*` structs stored as `{node_id, data}`.
+  Adjacency is nested-set: each node carries a `parent` pointer and a `{root,
+  start, stop}` extent (binary order-keys); a node's ordered children are the rows
+  whose `parent` is it, read by `start` key (`children_by_extent/2`). "Moving" a
+  node re-labels its subtree's extents (a fresh `interval` for a new node, a
+  `graft` for an existing subtree). The index tid mirrors the extents as span rows
+  for O(log n + m) range reads.
 
   These functions assume SAME-DOCUMENT, hierarchy-valid operations (what the tree
   builder produces). The server's `*_impl` wraps them with the cross-document /
@@ -113,8 +116,7 @@ defmodule DOM.NodeData.Table do
   Extent-authoritative: assigns `child_id` a fresh extent in the gap after
   `parent_id`'s last child (a fresh node via `interval`, an already-labeled
   subtree via `graft`), so the adjacency is readable by extent order (see
-  `children_by_extent/2`) with no separate carve pass. The `children` field is
-  dual-written until it is removed.
+  `children_by_extent/2`) with no separate carve pass.
   """
   @spec append_child(tid, id, id) :: :ok
   def append_child(tid, parent_id, child_id) do
@@ -169,7 +171,7 @@ defmodule DOM.NodeData.Table do
   end
 
   # Ensure `id` carries an extent: a tree root (parent nil) with no extent yet is
-  # seeded with the fixed root window `<<0x00>>..<<0x80>>` (mirrors span_build).
+  # seeded with the fixed root window `<<0x00>>..<<0x80>>` (the tree-root extent).
   # Returns the (possibly updated) record.
   defp ensure_extent(tid, id) do
     case fetch!(tid, id) do
@@ -313,8 +315,13 @@ defmodule DOM.NodeData.Table do
   # into a fresh sub-interval. Single pass: order from the source's extents,
   # adjacency from parent pointers — no `children` field.
   defp clone_subtree(tid, src_id, deep?, clone_id, root, parent, start, stop) do
-    data = %{fetch!(tid, src_id) | parent: parent, root: root, start: start, stop: stop}
-    put(tid, clone_id, clone_reset(data))
+    put(tid, clone_id, %{
+      fetch!(tid, src_id)
+      | parent: parent,
+        root: root,
+        start: start,
+        stop: stop
+    })
 
     if deep? do
       tid
@@ -326,11 +333,6 @@ defmodule DOM.NodeData.Table do
       end)
     end
   end
-
-  # Clear the transient `children` field on kinds that still carry it (removed once
-  # the field is gone); extents/parent already set by the caller.
-  defp clone_reset(%{children: _} = data), do: %{data | children: []}
-  defp clone_reset(data), do: data
 
   @doc "Descendant ids of `root_id` in tree (document) order — excludes `root_id`."
   @spec descendant_ids(tid, id) :: [id]

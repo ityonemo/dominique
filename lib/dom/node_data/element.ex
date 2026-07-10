@@ -7,11 +7,11 @@ defmodule DOM.NodeData.Element do
     :content,
     namespace: :html,
     parent: nil,
-    children: [],
     attributes: [],
     # Nested-set extent: `root` is the tree root's id; `{start, stop}` are binary
-    # order-keys containing all descendants' extents. Dual-maintained with
-    # `children` during the adjacency migration; see DOM.NodeData.Table.
+    # order-keys containing all descendants' extents. This IS the child adjacency —
+    # a node's ordered children are the rows whose `parent` is it, by `start` key
+    # (DOM.NodeData.Table.children_by_extent/2). See DOM.NodeData.Table.
     root: nil,
     start: nil,
     stop: nil
@@ -27,7 +27,6 @@ defmodule DOM.NodeData.Element do
           namespace: namespace(),
           content: reference() | nil,
           parent: reference() | nil,
-          children: [reference()],
           attributes: [{String.t(), String.t()}],
           root: reference() | nil,
           start: binary() | nil,

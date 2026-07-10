@@ -22,7 +22,7 @@ defmodule DOM.NodeData.TableTest do
     test "create_element inserts a detached element record", %{tid: tid} do
       id = Table.create_element(tid, "div")
 
-      assert %NodeData.Element{local_name: "div", parent: nil, children: []} =
+      assert %NodeData.Element{local_name: "div", parent: nil, start: nil} =
                Table.fetch!(tid, id)
 
       assert Table.node_name(tid, id) == "div"

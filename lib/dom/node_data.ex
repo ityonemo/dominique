@@ -9,9 +9,10 @@ defprotocol DOM.NodeData do
 
   The protocol carries the per-kind values the server dispatches on: the handle
   `type` atom, the DOM `nodeType` number, and the DOM `nodeName`. Structural
-  fields (`parent`, `children`, `value`, `attributes`, `local_name`) are read as
-  plain struct fields; `parent/1` and `children/1` in the `after` block wrap the
-  common ones so leaf kinds without a `children` field answer `[]`.
+  fields (`parent`, `value`, `attributes`, `local_name`, the nested-set extent
+  `root`/`start`/`stop`) are read as plain struct fields; `parent/1` in the `after`
+  block wraps the common one. Child adjacency is NOT a field — it is derived from
+  the extents (`DOM.NodeData.Table.children_by_extent/2`).
   """
 
   @type t ::
@@ -31,10 +32,6 @@ defprotocol DOM.NodeData do
   @doc "The DOM `nodeName`."
   def node_name(node_data)
 after
-  @doc "Child ids of the record, or `[]` for leaf kinds without children."
-  def children(%{children: children}), do: children
-  def children(_leaf), do: []
-
   @doc "Parent id of the record, or `nil`."
   def parent(%{parent: parent}), do: parent
 end

@@ -52,19 +52,23 @@ defmodule CSSTable do
   def build(root) do
     table = :ets.new(:css_table, [:set, :public])
     index = :ets.new(:css_index, [:ordered_set, :public])
-    {_next, ids} = insert(table, root, nil, 0, %{})
-    # Carve nested-set extents over the built tree, then mirror them into span rows
-    # (the adjacency the matcher reads) — the shape DOM.CSS.match/3 expects.
-    carve_extents(table, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
+    {_next, ids, kids} = insert(table, root, nil, 0, %{}, %{})
+    # Carve nested-set extents over the built tree (adjacency the matcher reads
+    # comes from these + their span rows) — the shape DOM.CSS.match/3 expects.
+    carve_extents(table, kids, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
     Table.reindex(table, index)
     Table.span_index_all(table, index)
     {%{nodes: table, index: index}, ids}
   end
 
-  # Inserts a node under `parent_id`; returns {next_index, ids}.
-  defp insert(table, %{kind: :element} = node, parent_id, index, ids) do
+  # Inserts a node under `parent_id`; returns {next_index, ids, kids} where `kids`
+  # maps each element id to its ordered child ids (the extent carve reads it, so no
+  # NodeData `children` field is needed).
+  defp insert(table, %{kind: :element} = node, parent_id, index, ids, kids) do
     id = make_ref()
-    {child_ids, next_index, ids} = insert_children(table, node.children, id, index + 1, ids)
+
+    {child_ids, next_index, ids, kids} =
+      insert_children(table, node.children, id, index + 1, ids, kids)
 
     :ets.insert(
       table,
@@ -73,43 +77,43 @@ defmodule CSSTable do
          local_name: node.local_name,
          namespace: node.namespace,
          attributes: node.attributes,
-         parent: parent_id,
-         children: child_ids
+         parent: parent_id
        }}
     )
 
     ids = Map.put(ids, index, id)
     ids = if node.label, do: Map.put(ids, node.label, id), else: ids
-    {next_index, ids}
+    {next_index, ids, Map.put(kids, id, child_ids)}
   end
 
-  defp insert(table, %{kind: :text} = node, parent_id, index, ids) do
+  defp insert(table, %{kind: :text} = node, parent_id, index, ids, kids) do
     id = make_ref()
     :ets.insert(table, {id, %NodeData.Text{value: node.value, parent: parent_id}})
-    {index + 1, Map.put(ids, index, id)}
+    {index + 1, Map.put(ids, index, id), kids}
   end
 
-  defp insert_children(table, children, parent_id, index, ids) do
-    {child_ids, {next_index, ids}} =
-      Enum.map_reduce(children, {index, ids}, fn child, {idx, acc} ->
-        {new_idx, new_acc} = insert(table, child, parent_id, idx, acc)
+  defp insert_children(table, children, parent_id, index, ids, kids) do
+    {child_ids, {next_index, ids, kids}} =
+      Enum.map_reduce(children, {index, ids, kids}, fn child, {idx, acc_ids, acc_kids} ->
+        {new_idx, new_ids, new_kids} = insert(table, child, parent_id, idx, acc_ids, acc_kids)
         # the child's own id is the last one inserted at idx
-        {Map.fetch!(new_acc, idx), {new_idx, new_acc}}
+        {Map.fetch!(new_ids, idx), {new_idx, new_ids, new_kids}}
       end)
 
-    {child_ids, next_index, ids}
+    {child_ids, next_index, ids, kids}
   end
 
-  # Carve nested-set extents over the tree from the (still-present) children field,
-  # mirroring the tree builder's live extent assignment.
-  defp carve_extents(table, id, root, parent, start, stop) do
+  # Carve nested-set extents over the tree from the `kids` map (id -> ordered child
+  # ids), mirroring the tree builder's live extent assignment.
+  defp carve_extents(table, kids, id, root, parent, start, stop) do
     [{^id, data}] = :ets.lookup(table, id)
     :ets.insert(table, {id, %{data | root: root, parent: parent, start: start, stop: stop}})
 
-    data.children
+    kids
+    |> Map.get(id, [])
     |> Enum.reduce(start, fn child, prev ->
       {cstart, cstop} = Table.interval(prev, stop)
-      carve_extents(table, child, root, id, cstart, cstop)
+      carve_extents(table, kids, child, root, id, cstart, cstop)
       cstop
     end)
   end

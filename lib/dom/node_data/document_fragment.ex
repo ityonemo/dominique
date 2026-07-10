@@ -2,15 +2,15 @@ defmodule DOM.NodeData.DocumentFragment do
   @moduledoc "ETS record for a document fragment node."
 
   # `root`/`start`/`stop`: a fragment is a tree root (until adopted), so it carries
-  # its own extent. Dual-maintained with `children`; see DOM.NodeData.Table.
-  defstruct parent: nil, children: [], root: nil, start: nil, stop: nil
+  # its own extent. Child adjacency is extent-borne (no `children` field); see
+  # DOM.NodeData.Table.
+  defstruct parent: nil, root: nil, start: nil, stop: nil
 
   use DOM.NodeData
   use DOM.HTML
 
   @type t :: %__MODULE__{
           parent: reference() | nil,
-          children: [reference()],
           root: reference() | nil,
           start: binary() | nil,
           stop: binary() | nil
