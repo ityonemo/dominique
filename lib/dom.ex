@@ -382,8 +382,11 @@ defmodule DOM do
         {:reply, :ok, state}
 
       :else ->
+        snapshot = range_snapshot(state)
+        at = length(Table.children(state.nodes, parent_id))
         Table.append_child(state.nodes, parent_id, child_id)
         resync_spans(state)
+        adjust_ranges(state, snapshot, {:insert, parent_id, at, 1})
         {:reply, :ok, state}
     end
   end
@@ -393,6 +396,62 @@ defmodule DOM do
   # extents are the order source, so this only copies them — no carve from the
   # `children` field.
   defp resync_spans(state), do: Table.span_index_all(state.nodes, state.index)
+
+  # A snapshot of every node's start key, captured BEFORE a structural mutation so
+  # live-range adjustment can (a) remap boundaries whose container's key changed
+  # (graft) and (b) find a parent/removed container by its pre-mutation key.
+  defp range_snapshot(state) do
+    if Table.range_all_rows(state.index) == [] do
+      nil
+    else
+      for {id, %{start: start}} when start != nil <- :ets.tab2list(state.nodes),
+          into: %{},
+          do: {id, start}
+    end
+  end
+
+  # Apply live-range adjustment after a structural op, given the pre-mutation
+  # `snapshot` (nil when no ranges exist — a fast no-op). `op` describes the edit:
+  #   {:insert, parent_id, at_index, count} | {:remove, parent_id, at_index, removed_id}
+  # The remap (containers whose start key changed) always runs; then the op's
+  # child-index offset rule.
+  defp adjust_ranges(_state, nil, _op), do: :ok
+
+  defp adjust_ranges(state, snapshot, op) do
+    apply_remap(state, snapshot)
+    apply_offset_rule(state, snapshot, op)
+    :ok
+  end
+
+  # Remap boundaries whose container node's start key changed between the snapshot
+  # and now (a graft moved the container / its subtree).
+  defp apply_remap(state, snapshot) do
+    remap =
+      for {id, old_key} <- snapshot,
+          new = current_start(state.nodes, id),
+          new != nil and new != old_key,
+          into: %{},
+          do: {old_key, new}
+
+    if remap != %{}, do: DOM.Range.Adjust.on_remap(state.nodes, state.index, remap)
+  end
+
+  defp current_start(nodes, id) do
+    case :ets.lookup(nodes, id) do
+      [{^id, %{start: start}}] -> start
+      _ -> nil
+    end
+  end
+
+  defp apply_offset_rule(state, snapshot, {:insert, parent_id, at, count}) do
+    parent_key = Map.get(snapshot, parent_id) || current_start(state.nodes, parent_id)
+    DOM.Range.Adjust.on_insert(state.nodes, state.index, parent_key, at, count)
+  end
+
+  defp apply_offset_rule(state, snapshot, {:remove, parent_id, at, removed_keys}) do
+    parent_key = Map.get(snapshot, parent_id) || current_start(state.nodes, parent_id)
+    DOM.Range.Adjust.on_remove(state.nodes, state.index, parent_key, at, removed_keys)
+  end
 
   # Flatten a fragment's children onto `parent_id` (append), placing all of them in
   # one multispan-carved gap (snapshot the ordered children first — the bulk move
@@ -480,8 +539,11 @@ defmodule DOM do
         {:reply, :ok, state}
 
       :else ->
+        snapshot = range_snapshot(state)
+        at = child_index(state.nodes, parent_id, reference_child_id)
         Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
         resync_spans(state)
+        adjust_ranges(state, snapshot, {:insert, parent_id, at, 1})
         {:reply, :ok, state}
     end
   end
@@ -569,12 +631,30 @@ defmodule DOM do
 
   defp remove_child_impl(parent_id, child_id, _from, state) do
     if child_id in Table.children(state.nodes, parent_id) do
+      snapshot = range_snapshot(state)
+      at = child_index(state.nodes, parent_id, child_id)
+      removed_keys = removed_subtree_keys(state.nodes, child_id)
       Table.remove_child(state.nodes, parent_id, child_id)
       resync_spans(state)
+      adjust_ranges(state, snapshot, {:remove, parent_id, at, removed_keys})
       {:reply, :ok, state}
     else
       {:reply, {:error, :not_found}, state}
     end
+  end
+
+  # The index of `child_id` among `parent_id`'s children (document order).
+  defp child_index(nodes, parent_id, child_id) do
+    nodes |> Table.children(parent_id) |> Enum.find_index(&(&1 == child_id))
+  end
+
+  # The set of start keys of `id` and its descendants (a removed subtree's keys),
+  # for relocating boundaries that were inside it.
+  defp removed_subtree_keys(nodes, id) do
+    [id | Table.descendant_ids(nodes, id)]
+    |> Enum.map(&current_start(nodes, &1))
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
   end
 
   def _node_replace_child(

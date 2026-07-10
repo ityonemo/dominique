@@ -947,12 +947,34 @@ defmodule DOM.NodeData.Table do
     {id, %{start: ^extent_key}} -> id
   end
 
-  # Every range boundary row as `{kind, extent_key, ref, offset}` — for the checker.
-  defp range_rows(index), do: :ets.select(index, range_rows_spec())
+  @doc "Every range boundary row as `{kind, extent_key, ref, offset}`."
+  @spec range_all_rows(tid) :: [
+          {:range_start | :range_stop, binary(), reference(), non_neg_integer()}
+        ]
+  def range_all_rows(index), do: :ets.select(index, range_rows_spec())
 
   defmatchspecp range_rows_spec() do
     {{kind, key, ref}, offset} when kind == :range_start or kind == :range_stop ->
       {kind, key, ref, offset}
+  end
+
+  @doc """
+  Rewrite one range boundary row (identified by `kind`/`ref`) to a new
+  `{extent_key, offset}` — the primitive live-range adjustment uses to remap a
+  boundary onto a moved container's new key or a shifted offset.
+  """
+  @spec range_set_boundary(
+          tid,
+          :range_start | :range_stop,
+          reference(),
+          binary(),
+          non_neg_integer()
+        ) ::
+          :ok
+  def range_set_boundary(index, kind, ref, extent_key, offset) do
+    :ets.match_delete(index, {{kind, :_, ref}, :_})
+    :ets.insert(index, {{kind, extent_key, ref}, offset})
+    :ok
   end
 
   # ==========================================================================
@@ -994,7 +1016,7 @@ defmodule DOM.NodeData.Table do
   # text/comment. Range rows are primary state, so there is nothing to mirror-check.
   defp check_ranges!(rows, index) do
     by_start = Map.new(rows, fn {id, data} -> {Map.get(data, :start), {id, data}} end)
-    Enum.each(range_rows(index), &check_range_row!(&1, rows, by_start))
+    Enum.each(range_all_rows(index), &check_range_row!(&1, rows, by_start))
   end
 
   defp check_range_row!({kind, extent_key, ref, offset}, rows, by_start) do

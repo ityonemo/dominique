@@ -87,4 +87,53 @@ defmodule Integration.RangeTest do
       assert result == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/dom/ranges"
+
+    # Live-range mutation: boundaries adjust as the tree changes under a held range.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<ul id='u'><li id='a'>a</li><li id='b'>b</li><li id='c'>c</li></ul>",
+        "text/html");
+      const u = doc.getElementById("u");
+      const a = doc.getElementById("a");
+      const b = doc.getElementById("b");
+
+      // r: (u, 2)
+      const r = doc.createRange();
+      r.setStart(u, 2);
+      r.setEnd(u, 2);
+
+      // insert a new li before b (index 1) -> offset 2 -> 3
+      const nl = doc.createElement("li");
+      u.insertBefore(nl, b);
+      const after_insert = r.startOffset;
+
+      // remove a (index 0) -> offset 3 -> 2
+      a.remove();
+      const after_remove = r.startOffset;
+
+      return { after_insert, after_remove };
+    });
+    """
+
+    test "boundaries adjust under insert/remove like the browser", %{js: expected} do
+      doc = DOM.new("<ul id='u'><li id='a'>a</li><li id='b'>b</li><li id='c'>c</li></ul>")
+      u = DOM.query_selector(doc, "#u")
+      a = DOM.query_selector(doc, "#a")
+      b = DOM.query_selector(doc, "#b")
+
+      r = Range.create_range(doc) |> Range.set_start(u, 2) |> Range.set_end(u, 2)
+
+      Node.insert_before(u, DOM.create_element(doc, "li"), b)
+      after_insert = Range.start_offset(r)
+
+      Node.remove_child(u, a)
+      after_remove = Range.start_offset(r)
+
+      assert %{"after_insert" => after_insert, "after_remove" => after_remove} == expected
+    end
+  end
 end
