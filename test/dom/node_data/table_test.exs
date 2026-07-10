@@ -481,6 +481,74 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "extent-authoritative mutators (write start/stop as they build, nodes tid alone)" do
+    # A tree built via the mutators must be readable by extent order WITHOUT any
+    # span_build_all pass — the mutators assign start/stop live, so children_by_extent
+    # reflects the field order immediately. This is the tree-builder path (no index).
+    test "append_child assigns extents so children_by_extent matches the field", %{tid: tid} do
+      root = Table.create_document(tid)
+      ul = Table.create_element(tid, "ul")
+      a = Table.create_element(tid, "a")
+      b = Table.create_element(tid, "b")
+      c = Table.create_element(tid, "c")
+      Table.append_child(tid, root, ul)
+      Table.append_child(tid, ul, a)
+      Table.append_child(tid, ul, b)
+      Table.append_child(tid, b, c)
+
+      # No span_build_all — extents came from the mutators themselves.
+      assert Table.children_by_extent(tid, root) == [ul]
+      assert Table.children_by_extent(tid, ul) == [a, b]
+      assert Table.children_by_extent(tid, b) == [c]
+      # and each child's extent is strictly inside its parent's.
+      assert extent_inside?(tid, ul, root)
+      assert extent_inside?(tid, a, ul)
+      assert extent_inside?(tid, b, ul)
+      assert extent_inside?(tid, c, b)
+    end
+
+    test "insert_before assigns an extent between neighbors", %{tid: tid} do
+      p = Table.create_element(tid, "p")
+      a = Table.create_element(tid, "a")
+      b = Table.create_element(tid, "b")
+      x = Table.create_element(tid, "x")
+      Table.append_child(tid, p, a)
+      Table.append_child(tid, p, b)
+      Table.insert_before(tid, p, x, b)
+
+      assert Table.children_by_extent(tid, p) == [a, x, b]
+      assert extent_inside?(tid, x, p)
+    end
+
+    test "append_child MOVES an already-labeled subtree via graft", %{tid: tid} do
+      root = Table.create_document(tid)
+      old = Table.create_element(tid, "old")
+      new = Table.create_element(tid, "new")
+      c = Table.create_element(tid, "c")
+      gc = Table.create_element(tid, "gc")
+      Table.append_child(tid, root, old)
+      Table.append_child(tid, root, new)
+      Table.append_child(tid, old, c)
+      Table.append_child(tid, c, gc)
+
+      # move c (which has its own child gc) from old to new
+      Table.append_child(tid, new, c)
+
+      assert Table.children_by_extent(tid, old) == []
+      assert Table.children_by_extent(tid, new) == [c]
+      assert Table.children_by_extent(tid, c) == [gc]
+      assert extent_inside?(tid, c, new)
+      assert extent_inside?(tid, gc, c)
+    end
+  end
+
+  # Whether child's extent is strictly contained in parent's, from the records.
+  defp extent_inside?(tid, child, parent) do
+    c = Table.fetch!(tid, child)
+    p = Table.fetch!(tid, parent)
+    p.start < c.start and c.start < c.stop and c.stop < p.stop
+  end
+
   describe "children_by_extent (order from record extents, nodes tid alone)" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}

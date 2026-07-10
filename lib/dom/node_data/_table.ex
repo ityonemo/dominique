@@ -109,12 +109,19 @@ defmodule DOM.NodeData.Table do
   @doc """
   Append `child_id` to `parent_id`, detaching it from any current parent first
   (a move). The subtree rooted at `child_id` follows automatically.
+
+  Extent-authoritative: assigns `child_id` a fresh extent in the gap after
+  `parent_id`'s last child (a fresh node via `interval`, an already-labeled
+  subtree via `graft`), so the adjacency is readable by extent order (see
+  `children_by_extent/2`) with no separate carve pass. The `children` field is
+  dual-written until it is removed.
   """
   @spec append_child(tid, id, id) :: :ok
   def append_child(tid, parent_id, child_id) do
     detach(tid, child_id)
-    parent = fetch!(tid, parent_id)
-    put(tid, parent_id, %{parent | children: parent.children ++ [child_id]})
+    parent = ensure_extent(tid, parent_id)
+    place_child(tid, parent_id, child_id, extent_after_last(tid, parent))
+    put(tid, parent_id, %{fetch!(tid, parent_id) | children: parent.children ++ [child_id]})
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
@@ -122,9 +129,15 @@ defmodule DOM.NodeData.Table do
   @spec insert_before(tid, id, id, id) :: :ok
   def insert_before(tid, parent_id, child_id, reference_id) do
     detach(tid, child_id)
-    parent = fetch!(tid, parent_id)
+    parent = ensure_extent(tid, parent_id)
     {before, [reference | rest]} = Enum.split_while(parent.children, &(&1 != reference_id))
-    put(tid, parent_id, %{parent | children: before ++ [child_id, reference | rest]})
+    place_child(tid, parent_id, child_id, extent_before(tid, parent, before, reference))
+
+    put(tid, parent_id, %{
+      fetch!(tid, parent_id)
+      | children: before ++ [child_id, reference | rest]
+    })
+
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
@@ -134,6 +147,64 @@ defmodule DOM.NodeData.Table do
     parent = fetch!(tid, parent_id)
     put(tid, parent_id, %{parent | children: List.delete(parent.children, child_id)})
     put(tid, child_id, %{fetch!(tid, child_id) | parent: nil})
+  end
+
+  # Give `child_id` an extent in the `(gap_a, gap_b)` gap under `parent_id`'s tree,
+  # writing its `root`/`start`/`stop`. A fresh child (no extent yet) gets a single
+  # `interval`; an already-labeled subtree is relocated wholesale by `graft` (its
+  # descendants' relative keys preserved, `root` rewritten to the new tree).
+  defp place_child(tid, parent_id, child_id, {gap_a, gap_b}) do
+    root = ns_root(fetch!(tid, parent_id), parent_id)
+    child = fetch!(tid, child_id)
+
+    if child.start == nil do
+      {start, stop} = interval(gap_a, gap_b)
+      put(tid, child_id, %{child | root: root, start: start, stop: stop})
+    else
+      graft_subtree(tid, child_id, child, root, gap_a, gap_b)
+    end
+  end
+
+  # Relocate the already-labeled subtree rooted at `child_id` into `(gap_a, gap_b)`,
+  # rewriting every subtree node's extent (prefix-remap) and its `root`.
+  defp graft_subtree(tid, child_id, child, root, gap_a, gap_b) do
+    ids = subtree_ids(tid, child_id)
+    recs = Enum.map(ids, &fetch!(tid, &1))
+    grafted = graft(recs, child.start, child.stop, gap_a, gap_b)
+
+    Enum.zip(ids, grafted)
+    |> Enum.each(fn {id, rec} ->
+      put(tid, id, %{fetch!(tid, id) | root: root, start: rec.start, stop: rec.stop})
+    end)
+  end
+
+  # Ensure `id` carries an extent: a tree root (parent nil) with no extent yet is
+  # seeded with the fixed root window `<<0x00>>..<<0x80>>` (mirrors span_build).
+  # Returns the (possibly updated) record.
+  defp ensure_extent(tid, id) do
+    case fetch!(tid, id) do
+      %{start: nil} = data ->
+        seeded = %{data | root: id, start: <<0x00>>, stop: <<0x80>>}
+        put(tid, id, seeded)
+        seeded
+
+      data ->
+        data
+    end
+  end
+
+  # The gap after `parent`'s current last child: (last_child.stop, parent.stop), or
+  # (parent.start, parent.stop) when empty.
+  defp extent_after_last(tid, parent) do
+    a = if last = List.last(parent.children), do: fetch!(tid, last).stop, else: parent.start
+    {a, parent.stop}
+  end
+
+  # The gap for a node inserted before `reference`, given the `before` siblings:
+  # (prev.stop || parent.start, reference.start).
+  defp extent_before(tid, parent, before, reference) do
+    a = if prev = List.last(before), do: fetch!(tid, prev).stop, else: parent.start
+    {a, fetch!(tid, reference).start}
   end
 
   @doc """
