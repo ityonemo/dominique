@@ -1,12 +1,20 @@
 defmodule DOM.NodeData.Comment do
   @moduledoc "ETS record for a comment node."
 
-  defstruct [:value, parent: nil]
+  # `root`/`start`/`stop`: a comment is a positioned leaf, so it carries an extent
+  # under its parent. Dual-maintained with the parent's `children`.
+  defstruct [:value, parent: nil, root: nil, start: nil, stop: nil]
 
   use DOM.NodeData
   use DOM.HTML
 
-  @type t :: %__MODULE__{value: String.t() | nil, parent: reference() | nil}
+  @type t :: %__MODULE__{
+          value: String.t() | nil,
+          parent: reference() | nil,
+          root: reference() | nil,
+          start: binary() | nil,
+          stop: binary() | nil
+        }
 
   @impl DOM.NodeData
   def type(_comment), do: :comment

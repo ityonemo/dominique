@@ -2,7 +2,20 @@ defmodule DOM.NodeData.Element do
   @moduledoc "ETS record for an element node."
 
   @enforce_keys [:local_name]
-  defstruct [:local_name, :content, namespace: :html, parent: nil, children: [], attributes: []]
+  defstruct [
+    :local_name,
+    :content,
+    namespace: :html,
+    parent: nil,
+    children: [],
+    attributes: [],
+    # Nested-set extent: `root` is the tree root's id; `{start, stop}` are binary
+    # order-keys containing all descendants' extents. Dual-maintained with
+    # `children` during the adjacency migration; see DOM.NodeData.Table.
+    root: nil,
+    start: nil,
+    stop: nil
+  ]
 
   use DOM.NodeData
   use DOM.HTML
@@ -15,7 +28,10 @@ defmodule DOM.NodeData.Element do
           content: reference() | nil,
           parent: reference() | nil,
           children: [reference()],
-          attributes: [{String.t(), String.t()}]
+          attributes: [{String.t(), String.t()}],
+          root: reference() | nil,
+          start: binary() | nil,
+          stop: binary() | nil
         }
 
   @impl DOM.NodeData

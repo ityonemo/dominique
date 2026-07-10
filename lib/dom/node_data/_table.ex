@@ -282,6 +282,137 @@ defmodule DOM.NodeData.Table do
   end
 
   # ==========================================================================
+  # Extent allocation (nested-set interval labeling)
+  # ==========================================================================
+
+  @doc """
+    `interval(a, b)` allocates a fresh extent `{start, stop}` strictly between the
+    binary order-keys `a < b`: `a < start < stop < b`, with the middle left
+    subdividable (room for the node's own children) and room on each side for
+    siblings. Keys grow by length-extension, never renumber.
+
+    No guarantees are made about the distribution of the intervals, the algorithm
+    is selected for quickness and ease.
+
+    inputs: a and b must be binaries of at least one byte, and b must be greater
+    than a. OUT OF CONTRACT: `a` must not be a proper prefix of `b` (e.g.
+    `interval(<<5>>, <<5, 0>>)`). Real extent bounds are disjoint sibling gap keys
+    (prev.stop, next.start), which are never in a prefix relationship, so this case
+    never arises; the algorithm does not handle it and may return keys outside
+    `(a, b)`.
+  """
+  @spec interval(binary(), binary()) :: {binary(), binary()}
+  def interval(a, b), do: interval(a, b, [])
+
+  @spec interval(binary, binary, iodata) :: {binary, binary}
+  defp interval(<<a, rest1::binary>>, <<a, rest2::binary>>, so_far) do
+    interval(rest1, rest2, [so_far, a])
+  end
+
+  defp interval(<<a, rest1::binary>>, <<b, _rest2::binary>>, so_far) do
+    case b - a do
+      1 ->
+        interval(<<a, rest1::binary>>, <<a, 0xFF>>, so_far)
+
+      2 ->
+        build_interval(so_far, a + 1, <<a + 1, 0x80>>)
+
+      delta ->
+        # quartile formula is emperically proven over [0..255]
+        build_interval(so_far, a + div(delta, 4) + 1, a + div(3 * delta, 4))
+    end
+  end
+
+  # far corner cases, we don't want to check these on each iteration.
+  defp interval(<<>>, b, so_far), do: interval(<<0>>, b, so_far)
+  defp interval(any, <<>>, so_far), do: interval(any, <<0xFF>>, so_far)
+  # we might exhaust if a is ...0xFFFF, and b is ...0x00 (gets subbed as 0xFF)
+  defp interval(<<>>, <<>>, so_far), do: build_interval(so_far, [], 0x80)
+
+  defp build_interval(so_far, a, b) do
+    {IO.iodata_to_binary([so_far, a]), IO.iodata_to_binary([so_far, b])}
+  end
+
+  # ==========================================================================
+  # Grafting (relocate an already-labeled subtree by prefix substitution)
+  # ==========================================================================
+  #
+  # A subtree's node extents all share the byte-prefix of the subtree ROOT's own
+  # window (they were carved inside `(root.start, root.stop)`). To relocate the
+  # whole subtree into a destination gap `(gap_start, gap_stop)` we pick one anchor
+  # key `P` strictly inside the gap and rewrite every node's key by swapping the
+  # old shared prefix for `P` — preserving all RELATIVE ordering/containment, no
+  # per-node `interval`. O(nodes moved).
+
+  @doc """
+  Relocate a labeled subtree into `(gap_start, gap_stop)`. `nodes` is the subtree's
+  records (root first). `root_start`/`root_stop` are the subtree root's current
+  extent (its shared-prefix window). Returns the records with `start`/`stop`
+  prefix-remapped onto an anchor inside the gap. Callers overwrite `root` for a
+  cross-document move.
+  """
+  @spec graft([map()], binary(), binary(), binary(), binary()) :: [map()]
+  def graft(nodes, root_start, root_stop, gap_start, gap_stop) do
+    anchor = common_bytewise_prefix(gap_start, gap_stop, [])
+    prefix_len = common_prefix_len(root_start, root_stop, 0)
+    Enum.map(nodes, &regraft_node(&1, anchor, prefix_len))
+  end
+
+  defp regraft_node(node, anchor, prefix_len) do
+    %{
+      node
+      | start: reprefix(node.start, anchor, prefix_len),
+        stop: reprefix(node.stop, anchor, prefix_len)
+    }
+  end
+
+  # Swap the first `prefix_len` bytes of `key` for `anchor`.
+  defp reprefix(key, anchor, prefix_len) do
+    suffix = binary_part(key, prefix_len, byte_size(key) - prefix_len)
+    IO.iodata_to_binary([anchor, suffix])
+  end
+
+  @doc """
+  A single key strictly between the binary order-keys `start < stop` — the graft
+  destination anchor. `anything > anchor` that shares `anchor` as a prefix is still
+  `< stop`, so the whole relocated subtree fits under the gap's upper bound.
+  """
+  @spec common_bytewise_prefix(binary(), binary(), iodata()) :: binary()
+  def common_bytewise_prefix(<<a, rest1::binary>>, <<a, rest2::binary>>, so_far) do
+    common_bytewise_prefix(rest1, rest2, [so_far, a])
+  end
+
+  def common_bytewise_prefix(<<a, rest1::binary>>, <<b, _rest2::binary>>, so_far) do
+    case b - a do
+      1 ->
+        # adjacent bytes: no midpoint — descend into `start`'s tail (length-extend).
+        # 0xFF can't be the byte we increment: b would have wrapped, breaking a<b.
+        IO.iodata_to_binary([so_far, a, remainder_prefix(rest1, [])])
+
+      delta ->
+        IO.iodata_to_binary([so_far, a + div(delta, 2)])
+    end
+  end
+
+  # `start` exhausted while `stop` remains: treat the missing byte as 0 (mirrors
+  # `interval`), so the anchor lands just above the accumulated prefix.
+  def common_bytewise_prefix(<<>>, stop, so_far) do
+    common_bytewise_prefix(<<0>>, stop, so_far)
+  end
+
+  defp remainder_prefix(<<>>, so_far), do: so_far
+  defp remainder_prefix(<<255, rest::binary>>, so_far), do: remainder_prefix(rest, [so_far, 255])
+  defp remainder_prefix(<<c, _rest::binary>>, so_far), do: [so_far, c + 1]
+
+  @doc "Number of shared leading bytes of two keys."
+  @spec common_prefix_len(binary(), binary(), non_neg_integer()) :: non_neg_integer()
+  def common_prefix_len(<<a, rest1::binary>>, <<a, rest2::binary>>, count) do
+    common_prefix_len(rest1, rest2, count + 1)
+  end
+
+  def common_prefix_len(_, _, count), do: count
+
+  # ==========================================================================
   # id/class index (a separate :ordered_set tid)
   # ==========================================================================
   #
@@ -406,6 +537,59 @@ defmodule DOM.NodeData.Table do
   end
 
   # ==========================================================================
+  # Span rows (nested-set adjacency, in the index tid)
+  # ==========================================================================
+  #
+  # Each node contributes two rows encoding its extent under its parent:
+  #   {{:span, root, start, :start, parent}, node_id}
+  #   {{:span, root, stop,  :stop,  parent}, node_id}
+  # Keyed by `root` then the binary order-key, so one node's children — and one
+  # tree's whole extent — are contiguous ranges in the ordered_set. Reading a
+  # parent's ordered children is a bounded range scan (O(log n + m)).
+  #
+  # Dual-maintained with the `children` field during the adjacency migration; the
+  # consistency checker asserts the two agree.
+
+  @doc "Write the two span rows (`:start`/`:stop`) for `node_id`'s extent."
+  @spec span_put(tid, id, %{root: id, parent: id | nil, start: binary(), stop: binary()}) :: :ok
+  def span_put(index, node_id, %{root: root, parent: parent, start: start, stop: stop}) do
+    :ets.insert(index, {{:span, root, start, :start, parent}, node_id})
+    :ets.insert(index, {{:span, root, stop, :stop, parent}, node_id})
+    :ok
+  end
+
+  @doc "Delete `node_id`'s span rows (matched by node id, so extent need not be known)."
+  @spec span_retract(tid, id) :: :ok
+  def span_retract(index, node_id) do
+    :ets.match_delete(index, {{:span, :_, :_, :_, :_}, node_id})
+    :ok
+  end
+
+  @doc """
+  The ordered child ids of `parent_id` within tree `root`, read from the span
+  rows: the `:start` rows whose key falls strictly inside `(pstart, pstop)` and
+  whose parent is `parent_id`, in `start` order. A bounded range scan.
+  """
+  @spec span_children(tid, id, id, binary(), binary()) :: [id]
+  def span_children(index, root, parent_id, pstart, pstop) do
+    :ets.select(index, span_children_spec(root, parent_id, pstart, pstop))
+  end
+
+  defmatchspecp span_children_spec(root, parent_id, pstart, pstop) do
+    {{:span, ^root, s, :start, ^parent_id}, node_id} when s > pstart and s < pstop -> node_id
+  end
+
+  # Every span row as `{root, key, kind, parent, node_id}` — used by the checker.
+  @spec span_rows(tid) :: [{id, binary(), :start | :stop, id | nil, id}]
+  defp span_rows(index) do
+    :ets.select(index, span_rows_spec())
+  end
+
+  defmatchspecp span_rows_spec() do
+    {{:span, root, key, kind, parent}, node_id} -> {root, key, kind, parent, node_id}
+  end
+
+  # ==========================================================================
   # Consistency checking
   # ==========================================================================
 
@@ -437,9 +621,76 @@ defmodule DOM.NodeData.Table do
     end)
 
     check_parents_are_listed!(rows)
-    if index, do: check_index!(rows, index)
+
+    if index do
+      check_index!(rows, index)
+      check_spans!(rows, index)
+    end
+
     :ok
   end
+
+  # Span (extent) consistency, three ways:
+  #   * backward — every id referenced by a span row exists as a node row;
+  #   * forward  — walking each root's tree, each child's extent is contained in
+  #     its parent's and children are in start-key order;
+  #   * agreement — the span-derived ordered children equal the record `children`
+  #     field (the dual-write invariant, until the field is removed).
+  # Only runs once the tree has been extent-labeled (any node carries a `start`);
+  # before that (pure pre-migration trees) there are no span rows to check.
+  defp check_spans!(rows, index) do
+    node_ids = MapSet.new(rows, fn {id, _data} -> id end)
+    spans = span_rows(index)
+
+    if spans != [] do
+      check_spans_backward!(spans, node_ids)
+      by_id = Map.new(rows)
+      Enum.each(rows, fn {id, data} -> check_node_spans!(id, data, by_id, index) end)
+    end
+  end
+
+  # backward: no span row points at a node that isn't in the table.
+  defp check_spans_backward!(spans, node_ids) do
+    Enum.each(spans, fn {_root, _key, _kind, parent, node_id} ->
+      unless MapSet.member?(node_ids, node_id) do
+        raise "dangling span: node #{inspect(node_id)} not in the nodes table"
+      end
+
+      if parent != nil and not MapSet.member?(node_ids, parent) do
+        raise "dangling span: parent #{inspect(parent)} not in the nodes table"
+      end
+    end)
+  end
+
+  # forward + agreement, for one node's children.
+  defp check_node_spans!(id, data, by_id, index) do
+    {root, start, stop} = {ns_root(data, id), ns_start(data), ns_stop(data)}
+    span_kids = span_children(index, root, id, start, stop)
+
+    # agreement: span-derived children == the record children field (same order).
+    field_kids = NodeData.children(data)
+
+    if span_kids != field_kids do
+      raise "span/children disagree for #{inspect(id)}: " <>
+              "spans #{inspect(span_kids)} vs field #{inspect(field_kids)}"
+    end
+
+    # forward containment: each child's extent strictly inside this node's.
+    Enum.each(span_kids, fn kid ->
+      k = Map.fetch!(by_id, kid)
+
+      unless start < ns_start(k) and ns_start(k) < ns_stop(k) and ns_stop(k) < stop do
+        raise "extent containment violated: child #{inspect(kid)} " <>
+                "#{inspect({ns_start(k), ns_stop(k)})} not inside " <>
+                "#{inspect(id)} #{inspect({start, stop})}"
+      end
+    end)
+  end
+
+  # A root node (parent nil) is its own tree root; else read the stored root.
+  defp ns_root(data, id), do: Map.get(data, :root) || id
+  defp ns_start(data), do: Map.fetch!(data, :start)
+  defp ns_stop(data), do: Map.fetch!(data, :stop)
 
   # The index must equal, as a sorted list of {membership, node} pairs, the
   # memberships (tag/id/class/attr) of the element rows — no missing, stale,
@@ -451,8 +702,11 @@ defmodule DOM.NodeData.Table do
           membership <- memberships(element),
           do: {membership, node_id}
 
+    # Only membership rows (tag/id/class/attr); span rows are a separate concern.
     actual =
-      for {key, node_id} <- :ets.tab2list(index), do: {drop_ref(key), node_id}
+      for {key, node_id} <- :ets.tab2list(index),
+          elem(key, 0) in [:tag, :id, :class, :attr],
+          do: {drop_ref(key), node_id}
 
     if Enum.sort(expected) != Enum.sort(actual) do
       raise "inconsistent index: expected #{inspect(Enum.sort(expected))}, " <>
