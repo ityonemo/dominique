@@ -156,5 +156,29 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
       # the svg attribute is indexed too
       assert Table.index_lookup(index, :attr, "width", "10") == [svg]
     end
+
+    test "materializes a template's content fragment (linked via content, not children)",
+         %{tid: tid, index: index} do
+      # A template's contents live in its content DocumentFragment, reached through
+      # the `content` field — NOT the template's children. bulk_load must load that
+      # detached fragment (and its subtree) as its own root, else the parsed
+      # template contents never reach ETS.
+      {tree, doc} = Tree.new_document()
+      {tree, template, content} = Tree.create_template(tree, [])
+      {tree, inner} = Tree.create_element(tree, "span")
+      tree = tree |> Tree.append_child(doc, template) |> Tree.append_child(content, inner)
+
+      :ets.insert(tid, {doc, %NodeData.Document{}})
+      Tree.bulk_load(tree, tid, index, doc)
+
+      assert Table.check_consistency!(tid, index) == :ok
+      # the template is in the document; the fragment is a detached root carrying
+      # the parsed content; the fragment's child is materialized.
+      assert Table.children_by_extent(tid, doc) == [template]
+      assert Table.children_by_extent(tid, template) == []
+      assert Table.content(tid, template) == content
+      assert Table.children_by_extent(tid, content) == [inner]
+      assert Table.node_name(tid, inner) == "span"
+    end
   end
 end
