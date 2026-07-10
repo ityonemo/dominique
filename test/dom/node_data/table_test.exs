@@ -434,6 +434,88 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "span_build_all / span_build (bulk carve from the field)" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    # Build a field-only tree (children/parent set, NO extents) via the mutators.
+    defp field_tree(tid) do
+      root = Table.create_document(tid)
+      ul = Table.create_element(tid, "ul")
+      a = Table.create_element(tid, "a")
+      b = Table.create_element(tid, "b")
+      c = Table.create_element(tid, "c")
+      Table.append_child(tid, root, ul)
+      Table.append_child(tid, ul, a)
+      Table.append_child(tid, ul, b)
+      Table.append_child(tid, b, c)
+      %{root: root, ul: ul, a: a, b: b, c: c}
+    end
+
+    test "carves extents so check_consistency! passes and spans mirror the field",
+         %{tid: tid, index: index} do
+      ids = field_tree(tid)
+      # the real parse seam runs both: memberships (reindex) + extents (span_build_all)
+      Table.reindex(tid, index)
+      Table.span_build_all(tid, index)
+
+      assert Table.check_consistency!(tid, index) == :ok
+      # span-derived children equal the field, at every level
+      assert Table.span_children_of(tid, index, ids.root) == [ids.ul]
+      assert Table.span_children_of(tid, index, ids.ul) == [ids.a, ids.b]
+      assert Table.span_children_of(tid, index, ids.b) == [ids.c]
+    end
+
+    test "handles multiple roots (a detached second tree)", %{tid: tid, index: index} do
+      field_tree(tid)
+      # a second, detached root (parent nil) — e.g. a template content fragment
+      frag = Table.create_document(tid)
+      x = Table.create_element(tid, "x")
+      Table.append_child(tid, frag, x)
+
+      Table.reindex(tid, index)
+      Table.span_build_all(tid, index)
+      assert Table.check_consistency!(tid, index) == :ok
+      assert Table.span_children_of(tid, index, frag) == [x]
+    end
+  end
+
+  describe "span_graft (relocate a labeled subtree in ETS)" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "moving a subtree preserves consistency and its internal structure",
+         %{tid: tid, index: index} do
+      # root -> [ul -> [a, b -> [c]], target]; move `b`'s subtree under `target`.
+      root = Table.create_document(tid)
+      ul = Table.create_element(tid, "ul")
+      a = Table.create_element(tid, "a")
+      b = Table.create_element(tid, "b")
+      c = Table.create_element(tid, "c")
+      target = Table.create_element(tid, "target")
+      Table.append_child(tid, root, ul)
+      Table.append_child(tid, ul, a)
+      Table.append_child(tid, ul, b)
+      Table.append_child(tid, b, c)
+      Table.append_child(tid, root, target)
+      Table.reindex(tid, index)
+      Table.span_build_all(tid, index)
+
+      # field move: b from ul to target
+      Table.remove_child(tid, ul, b)
+      Table.append_child(tid, target, b)
+      # span move: graft b's subtree ([b, c]) into target's (empty) child gap
+      Table.span_graft(tid, index, b, target)
+
+      assert Table.check_consistency!(tid, index) == :ok
+      assert Table.span_children_of(tid, index, target) == [b]
+      assert Table.span_children_of(tid, index, b) == [c]
+      assert Table.span_children_of(tid, index, ul) == [a]
+    end
+  end
+
   describe "mutation" do
     test "append_child links parent and child both ways", %{tid: tid} do
       p = Table.create_element(tid, "ul")

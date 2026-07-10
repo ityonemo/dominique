@@ -589,6 +589,100 @@ defmodule DOM.NodeData.Table do
     {{:span, root, key, kind, parent}, node_id} -> {root, key, kind, parent, node_id}
   end
 
+  @doc "Ordered child ids of `node_id`, read from its record's extent + span rows."
+  @spec span_children_of(tid, tid, id) :: [id]
+  def span_children_of(nodes, index, node_id) do
+    node = fetch!(nodes, node_id)
+    span_children(index, ns_root(node, node_id), node_id, node.start, node.stop)
+  end
+
+  # ==========================================================================
+  # Span construction (bulk carve) and grafting (relocation) over the ETS tables
+  # ==========================================================================
+
+  @doc """
+  (Re)build span rows + record extents for EVERY tree root (`parent == nil`) from
+  the current `children` field — the bulk allocator run at the post-parse/clone
+  seam. Multi-root: the document, template `content` fragments, fragment/clone
+  roots all appear. O(n).
+  """
+  @spec span_build_all(tid, tid) :: :ok
+  def span_build_all(nodes, index) do
+    for {id, data} <- :ets.tab2list(nodes), NodeData.parent(data) == nil do
+      span_build(nodes, index, id)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Carve `root_id`'s subtree (from the `children` field) into fresh extents rooted
+  at the fixed `<<0x00>>..<<0x80>>` window, writing each record's `root/start/stop`
+  and its span rows. Retracts the subtree's old spans first.
+  """
+  @spec span_build(tid, tid, id) :: :ok
+  def span_build(nodes, index, root_id) do
+    Enum.each(subtree_ids(nodes, root_id), &span_retract(index, &1))
+    span_carve(nodes, index, root_id, root_id, nil, <<0x00>>, <<0x80>>)
+    :ok
+  end
+
+  # Assign `id` the extent `(start, stop)` under `parent` in tree `root`, write its
+  # span rows, then carve its children left-to-right within `(start, stop)`.
+  defp span_carve(nodes, index, id, root, parent, start, stop) do
+    put(nodes, id, %{fetch!(nodes, id) | root: root, parent: parent, start: start, stop: stop})
+    span_put(index, id, %{root: root, parent: parent, start: start, stop: stop})
+
+    fetch!(nodes, id)
+    |> NodeData.children()
+    |> Enum.reduce(start, fn child, prev ->
+      {cstart, cstop} = interval(prev, stop)
+      span_carve(nodes, index, child, root, id, cstart, cstop)
+      cstop
+    end)
+  end
+
+  @doc """
+  Relocate an already-labeled subtree (root `subtree_id`, currently detached in the
+  `children` field under `new_parent_id`) into `new_parent_id`'s child order via
+  grafting: prefix-remap every subtree node's extent onto an anchor in the
+  destination gap, rewriting records + span rows (delete-old + insert-new, since the
+  extent is in the span key). The subtree's new `root` becomes `new_parent`'s root.
+  """
+  @spec span_graft(tid, tid, id, id) :: :ok
+  def span_graft(nodes, index, subtree_id, new_parent_id) do
+    parent = fetch!(nodes, new_parent_id)
+    proot = ns_root(parent, new_parent_id)
+    old = fetch!(nodes, subtree_id)
+    {gap_a, gap_b} = child_gap(nodes, index, new_parent_id, parent, proot, subtree_id)
+
+    ids = subtree_ids(nodes, subtree_id)
+    recs = Enum.map(ids, &fetch!(nodes, &1))
+    grafted = graft(recs, old.start, old.stop, gap_a, gap_b)
+
+    Enum.zip(ids, grafted)
+    |> Enum.each(fn {id, rec} ->
+      span_retract(index, id)
+      new = %{fetch!(nodes, id) | root: proot, start: rec.start, stop: rec.stop}
+      put(nodes, id, new)
+      span_put(index, id, %{root: proot, parent: new.parent, start: rec.start, stop: rec.stop})
+    end)
+
+    :ok
+  end
+
+  # The (a, b) bounds for placing `child_id` among `parent`'s current children (in
+  # the field), skipping `child_id` itself: gap between the sibling before it and
+  # the sibling after it (or the parent's own start/stop at the ends).
+  defp child_gap(nodes, _index, _parent_id, parent, _proot, child_id) do
+    kids = NodeData.children(parent)
+    {before, after_} = Enum.split_while(kids, &(&1 != child_id))
+    after_ = tl(after_)
+    a = if prev = List.last(before), do: fetch!(nodes, prev).stop, else: parent.start
+    b = if next = List.first(after_), do: fetch!(nodes, next).start, else: parent.stop
+    {a, b}
+  end
+
   # ==========================================================================
   # Consistency checking
   # ==========================================================================
