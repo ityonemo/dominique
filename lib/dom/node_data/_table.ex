@@ -862,6 +862,100 @@ defmodule DOM.NodeData.Table do
   end
 
   # ==========================================================================
+  # Range boundary rows (in the index tid) — PRIMARY state, not derived
+  # ==========================================================================
+  #
+  # A Range's two boundaries are stored as:
+  #   {{:range_start, extent_key, ref}, offset}
+  #   {{:range_stop,  extent_key, ref}, offset}
+  # where `extent_key` is the boundary CONTAINER node's own `start` key (so range
+  # boundaries live in the same ordered coordinate space as node extents), `ref` is
+  # the range identity (the owner's monitor ref — disambiguates same-position
+  # boundaries and enables by-ref delete), and `offset` is the raw WHATWG offset
+  # (child index for element/document/fragment, char index for text/comment).
+  #
+  # These rows are NOT derived from records; `span_index_all` and the span/index
+  # checker passes leave them alone (check_index! already filters to tag/id/class/
+  # attr; span checks read only `:span` rows).
+
+  @doc "Write (replacing) a range's two boundary rows under `ref`."
+  @spec range_put(tid, reference(), {binary(), non_neg_integer()}, {binary(), non_neg_integer()}) ::
+          :ok
+  def range_put(index, ref, {start_key, start_off}, {stop_key, stop_off}) do
+    range_delete(index, ref)
+    :ets.insert(index, {{:range_start, start_key, ref}, start_off})
+    :ets.insert(index, {{:range_stop, stop_key, ref}, stop_off})
+    :ok
+  end
+
+  @doc "Delete a range's boundary rows (matched by `ref`)."
+  @spec range_delete(tid, reference()) :: :ok
+  def range_delete(index, ref) do
+    :ets.match_delete(index, {{:range_start, :_, ref}, :_})
+    :ets.match_delete(index, {{:range_stop, :_, ref}, :_})
+    :ok
+  end
+
+  @doc """
+  A range's boundaries as `{{start_key, start_off}, {stop_key, stop_off}}`, or
+  `nil` if the range is not present (detached / evicted).
+  """
+  @spec range_boundaries(tid, reference()) ::
+          {{binary(), non_neg_integer()}, {binary(), non_neg_integer()}} | nil
+  def range_boundaries(index, ref) do
+    with [{start_key, start_off}] <- :ets.select(index, range_boundary_spec(:range_start, ref)),
+         [{stop_key, stop_off}] <- :ets.select(index, range_boundary_spec(:range_stop, ref)) do
+      {{start_key, start_off}, {stop_key, stop_off}}
+    else
+      _ -> nil
+    end
+  end
+
+  defmatchspecp range_boundary_spec(kind, ref) do
+    {{^kind, key, ^ref}, offset} -> {key, offset}
+  end
+
+  @doc "Whether a range `ref` currently has boundary rows in the index."
+  @spec range_present?(tid, reference()) :: boolean()
+  def range_present?(index, ref), do: range_boundaries(index, ref) != nil
+
+  @doc """
+  The maximum valid Range boundary offset for `node_id`: the child count for an
+  element/document/fragment container, the value length for text/comment.
+  """
+  @spec max_boundary_offset(tid, id) :: non_neg_integer()
+  def max_boundary_offset(nodes, node_id) do
+    case fetch!(nodes, node_id) do
+      %{value: value} when is_binary(value) -> String.length(value)
+      _ -> length(children_by_extent(nodes, node_id))
+    end
+  end
+
+  @doc """
+  The id of the node whose extent `start` key equals `extent_key` (the container a
+  range boundary pins to), or `nil`. Reverse of the boundary normalization.
+  """
+  @spec node_at_start_key(tid, binary()) :: id | nil
+  def node_at_start_key(nodes, extent_key) do
+    case :ets.select(nodes, node_at_start_key_spec(extent_key)) do
+      [id | _] -> id
+      [] -> nil
+    end
+  end
+
+  defmatchspecp node_at_start_key_spec(extent_key) do
+    {id, %{start: ^extent_key}} -> id
+  end
+
+  # Every range boundary row as `{kind, extent_key, ref, offset}` — for the checker.
+  defp range_rows(index), do: :ets.select(index, range_rows_spec())
+
+  defmatchspecp range_rows_spec() do
+    {{kind, key, ref}, offset} when kind == :range_start or kind == :range_stop ->
+      {kind, key, ref, offset}
+  end
+
+  # ==========================================================================
   # Consistency checking
   # ==========================================================================
 
@@ -888,9 +982,44 @@ defmodule DOM.NodeData.Table do
     if index do
       check_index!(rows, index)
       check_spans!(rows, index)
+      check_ranges!(rows, index)
     end
 
     :ok
+  end
+
+  # Range boundary consistency: every :range_* row must pin to a live container node
+  # (its extent_key equals some node's `start`), and its offset must be within the
+  # container's bounds — child_count for element/document/fragment, value length for
+  # text/comment. Range rows are primary state, so there is nothing to mirror-check.
+  defp check_ranges!(rows, index) do
+    by_start = Map.new(rows, fn {id, data} -> {Map.get(data, :start), {id, data}} end)
+    Enum.each(range_rows(index), &check_range_row!(&1, rows, by_start))
+  end
+
+  defp check_range_row!({kind, extent_key, ref, offset}, rows, by_start) do
+    case Map.get(by_start, extent_key) do
+      nil ->
+        raise "dangling range boundary: #{kind} of #{inspect(ref)} at " <>
+                "#{inspect(extent_key)} pins to no live node"
+
+      {id, data} ->
+        max = check_max_offset(rows, id, data)
+
+        unless offset >= 0 and offset <= max do
+          raise "range offset out of bounds: #{kind} of #{inspect(ref)} " <>
+                  "offset #{offset} > max #{max} for #{inspect(id)}"
+        end
+    end
+  end
+
+  # The maximum valid boundary offset for a container, computed from the row list
+  # (the checker already holds all rows, so it counts children without an ETS hit).
+  defp check_max_offset(_rows, _id, %{value: value}) when is_binary(value),
+    do: String.length(value)
+
+  defp check_max_offset(rows, id, _data) do
+    Enum.count(rows, fn {_cid, cdata} -> Map.get(cdata, :parent) == id end)
   end
 
   # Span (extent) consistency, three ways, all field-free:

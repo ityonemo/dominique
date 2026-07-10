@@ -293,6 +293,46 @@ defmodule DOM do
     {:reply, op.(state.nodes, state.index), state}
   end
 
+  # ==========================================================================
+  # Ranges
+  # ==========================================================================
+
+  @doc false
+  # Create a range collapsed at (document, 0); monitor `owner` for cleanup. The
+  # returned ref (the monitor ref) is the range's identity. Owner == this server
+  # is illegal (a range must be owned by an external process).
+  def _range_create(server, document_id, owner) do
+    GenServer.call(server, {:range_create, document_id, owner})
+  end
+
+  defp range_create_impl(document_id, owner, _from, state) do
+    if owner == self() do
+      raise ArgumentError, "a range may not be owned by the document server process"
+    end
+
+    ref = Process.monitor(owner)
+    key = Table.fetch!(state.nodes, document_id).start
+    Table.range_put(state.index, ref, {key, 0}, {key, 0})
+    {:reply, ref, state}
+  end
+
+  @doc false
+  def _range_detach(server, range_id) do
+    GenServer.call(server, {:range_detach, range_id})
+  end
+
+  defp range_detach_impl(range_id, _from, state) do
+    Process.demonitor(range_id, [:flush])
+    Table.range_delete(state.index, range_id)
+    {:reply, :ok, state}
+  end
+
+  # An owner process died: drop all of its ranges (the :DOWN ref IS the range id).
+  defp range_cleanup_impl(range_id, state) do
+    Table.range_delete(state.index, range_id)
+    {:noreply, state}
+  end
+
   @doc """
   Assert the document's ETS invariants (see `DOM.NodeData.Table.check_consistency!/1`),
   raising on violation. Test-only; wired into an `on_exit` hook by `DOM.Case`.
@@ -1131,6 +1171,12 @@ defmodule DOM do
     fragment_impl(tokens, context, state)
   end
 
+  # An owner process monitored for a range died — the monitor ref is the range id.
+  @impl true
+  def handle_info({:DOWN, range_id, :process, _pid, _reason}, state) do
+    range_cleanup_impl(range_id, state)
+  end
+
   @impl true
   def handle_call(:fragment_root, from, state) do
     fragment_root_impl(from, state)
@@ -1162,6 +1208,14 @@ defmodule DOM do
 
   def handle_call(:check_index_consistency, from, state) do
     check_index_consistency_impl(from, state)
+  end
+
+  def handle_call({:range_create, document_id, owner}, from, state) do
+    range_create_impl(document_id, owner, from, state)
+  end
+
+  def handle_call({:range_detach, range_id}, from, state) do
+    range_detach_impl(range_id, from, state)
   end
 
   @impl true
