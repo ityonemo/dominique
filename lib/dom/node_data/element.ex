@@ -44,13 +44,14 @@ defmodule DOM.NodeData.Element do
   def node_name(%{local_name: local_name}), do: local_name
 
   @impl DOM.HTML
-  def serialize(%__MODULE__{local_name: name} = element, nodes) do
+  def serialize(%__MODULE__{local_name: name} = element, node_id, nodes) do
     start_tag = DOM.HTML.start_tag(name, element.attributes)
 
     if DOM.HTML.void?(name) do
       start_tag
     else
-      [start_tag, DOM.HTML.children(name, element.children, nodes), "</", name | ">"]
+      child_ids = DOM.NodeData.Table.children_by_extent(nodes, node_id)
+      [start_tag, DOM.HTML.children(name, child_ids, nodes), "</", name | ">"]
     end
   end
 end

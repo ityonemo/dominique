@@ -481,6 +481,38 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
+  describe "children_by_extent (order from record extents, nodes tid alone)" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    test "returns children in start-key order, reading only the nodes tid",
+         %{tid: tid, index: index} do
+      ids = field_tree(tid)
+      Table.reindex(tid, index)
+      Table.span_build_all(tid, index)
+
+      # Same document order as the span-index read, but derived from the record
+      # `start` keys on the nodes tid — no index consulted.
+      assert Table.children_by_extent(tid, ids.root) == [ids.ul]
+      assert Table.children_by_extent(tid, ids.ul) == [ids.a, ids.b]
+      assert Table.children_by_extent(tid, ids.b) == [ids.c]
+      assert Table.children_by_extent(tid, ids.a) == []
+    end
+
+    test "agrees with span_children_of and the children field for every node",
+         %{tid: tid, index: index} do
+      ids = field_tree(tid)
+      Table.reindex(tid, index)
+      Table.span_build_all(tid, index)
+
+      for id <- Map.values(ids) do
+        assert Table.children_by_extent(tid, id) == Table.span_children_of(tid, index, id)
+        assert Table.children_by_extent(tid, id) == Table.children(tid, id)
+      end
+    end
+  end
+
   describe "span_graft (relocate a labeled subtree in ETS)" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}

@@ -596,6 +596,25 @@ defmodule DOM.NodeData.Table do
     span_children(index, ns_root(node, node_id), node_id, node.start, node.stop)
   end
 
+  @doc """
+  Ordered child ids of `node_id`, derived purely from the record extents on the
+  nodes tid (children are the rows whose `parent` is `node_id`, in `start` order)
+  — the index-free adjacency read the tree builder uses while it has no index in
+  scope. O(n) scan; the span-row read (`span_children_of/3`) is the O(log n + m)
+  path where an index is available.
+  """
+  @spec children_by_extent(tid, id) :: [id]
+  def children_by_extent(nodes, node_id) do
+    nodes
+    |> :ets.select(children_by_extent_spec(node_id))
+    |> Enum.sort()
+    |> Enum.map(&elem(&1, 1))
+  end
+
+  defmatchspecp children_by_extent_spec(node_id) do
+    {id, %{parent: ^node_id, start: start}} -> {start, id}
+  end
+
   # ==========================================================================
   # Span construction (bulk carve) and grafting (relocation) over the ETS tables
   # ==========================================================================

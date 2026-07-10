@@ -14,10 +14,13 @@ defprotocol DOM.HTML do
   """
 
   @doc """
-  Serializes a node and its subtree (its `outerHTML`) as **iodata**. The caller
-  materializes it once with `IO.iodata_to_binary/1` at the GenServer boundary.
+  Serializes a node and its subtree (its `outerHTML`) as **iodata**. `node_id` is
+  the node's own id, so container kinds can read their ordered children from the
+  record extents (`DOM.NodeData.Table.children_by_extent/2`) rather than an inline
+  field. The caller materializes it once with `IO.iodata_to_binary/1` at the
+  GenServer boundary.
   """
-  def serialize(node_data, nodes)
+  def serialize(node_data, node_id, nodes)
 after
   @doc """
   Tokenizes an HTML string into a list of `DOM.HTML.Token.*` structs
@@ -112,7 +115,7 @@ after
     if raw? and is_struct(child_data, DOM.NodeData.Text) do
       child_data.value
     else
-      DOM.HTML.serialize(child_data, nodes)
+      DOM.HTML.serialize(child_data, child_id, nodes)
     end
   end
 

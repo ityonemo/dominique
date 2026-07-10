@@ -26,5 +26,5 @@ defmodule DOM.NodeData.Text do
   def node_name(_text), do: "#text"
 
   @impl DOM.HTML
-  def serialize(%__MODULE__{value: value}, _nodes), do: DOM.HTML.escape_text(value)
+  def serialize(%__MODULE__{value: value}, _node_id, _nodes), do: DOM.HTML.escape_text(value)
 end

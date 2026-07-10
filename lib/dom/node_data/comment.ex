@@ -26,5 +26,5 @@ defmodule DOM.NodeData.Comment do
   def node_name(_comment), do: "#comment"
 
   @impl DOM.HTML
-  def serialize(%__MODULE__{value: value}, _nodes), do: ["<!--", value | "-->"]
+  def serialize(%__MODULE__{value: value}, _node_id, _nodes), do: ["<!--", value | "-->"]
 end

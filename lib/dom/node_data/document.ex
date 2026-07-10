@@ -27,7 +27,7 @@ defmodule DOM.NodeData.Document do
   def node_name(_document), do: "#document"
 
   @impl DOM.HTML
-  def serialize(%__MODULE__{children: children}, nodes) do
-    DOM.HTML.children("", children, nodes)
+  def serialize(%__MODULE__{}, node_id, nodes) do
+    DOM.HTML.children("", DOM.NodeData.Table.children_by_extent(nodes, node_id), nodes)
   end
 end
