@@ -300,16 +300,29 @@ defmodule DOM.NodeData.Table do
   # Deep/shallow clone and descendant queries
   # ==========================================================================
 
-  @doc "Clone the node (deep when `deep?`) as a detached subtree; returns the new id."
+  @doc """
+  Clone the node (deep when `deep?`) as a detached subtree; returns the new id.
+  The clone is a fully extent-labeled tree in its own right (root window
+  `<<0x00>>..<<0x80>>`, descendants carved inside), so appending it later grafts
+  the whole subtree.
+  """
   @spec clone(tid, id, boolean()) :: id
   def clone(tid, id, deep?) do
+    clone_id = clone_records(tid, id, deep?)
+    clone_carve(tid, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
+    clone_id
+  end
+
+  # Copy the record (deep: recurse into children), linking parent pointers, but
+  # WITHOUT extents — clone_carve assigns those in a second pass.
+  defp clone_records(tid, id, deep?) do
     data = fetch!(tid, id)
     clone_id = make_ref()
 
     children =
       if deep? do
         Enum.map(NodeData.children(data), fn child_id ->
-          child_clone = clone(tid, child_id, true)
+          child_clone = clone_records(tid, child_id, true)
           put(tid, child_clone, %{fetch!(tid, child_clone) | parent: clone_id})
           child_clone
         end)
@@ -321,10 +334,22 @@ defmodule DOM.NodeData.Table do
     clone_id
   end
 
-  # A clone is a detached subtree with no extent yet — its `root`/`start`/`stop`
-  # are cleared so the placement seam (append via the extent mutators, or the
-  # clone-seam carve) assigns fresh ones. Copying the source's extents would alias
-  # a stale window from another tree.
+  # Carve the cloned subtree into fresh extents (mirrors span_carve, nodes tid
+  # only — the clone is detached, no index/span rows yet).
+  defp clone_carve(tid, id, root, parent, start, stop) do
+    put(tid, id, %{fetch!(tid, id) | root: root, parent: parent, start: start, stop: stop})
+
+    fetch!(tid, id)
+    |> NodeData.children()
+    |> Enum.reduce(start, fn child, prev ->
+      {cstart, cstop} = interval(prev, stop)
+      clone_carve(tid, child, root, id, cstart, cstop)
+      cstop
+    end)
+  end
+
+  # A clone is a detached subtree; its `root`/`start`/`stop` start nil and are set
+  # by clone_carve. Copying the source's extents would alias a stale window.
   defp clone_data(%{children: _} = data, children) do
     %{data | parent: nil, children: children, root: nil, start: nil, stop: nil}
   end

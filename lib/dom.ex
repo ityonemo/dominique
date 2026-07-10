@@ -224,14 +224,14 @@ defmodule DOM do
   defp parse_impl(tokens, state) do
     TreeBuilder.build_into(state.nodes, state.document_id, tokens)
     Table.reindex(state.nodes, state.index)
-    Table.span_build_all(state.nodes, state.index)
+    Table.span_index_all(state.nodes, state.index)
     {:noreply, state}
   end
 
   defp fragment_impl(tokens, context, state) do
     root_id = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
     Table.reindex(state.nodes, state.index)
-    Table.span_build_all(state.nodes, state.index)
+    Table.span_index_all(state.nodes, state.index)
     {:noreply, %{state | fragment_root: root_id}}
   end
 
@@ -786,7 +786,7 @@ defmodule DOM do
   defp clone_node_impl(node_id, deep?, _from, state) do
     clone_id = Table.clone(state.nodes, node_id, deep?)
     Table.reindex(state.nodes, state.index)
-    Table.span_build_all(state.nodes, state.index)
+    Table.span_index_all(state.nodes, state.index)
     {:reply, node_handle(state.nodes, clone_id), state}
   end
 
@@ -861,7 +861,7 @@ defmodule DOM do
     tokens = DOM.HTML.fragment_tokens(html, context.name)
     root = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
     Table.reindex(state.nodes, state.index)
-    Table.span_build_all(state.nodes, state.index)
+    Table.span_index_all(state.nodes, state.index)
     root
   end
 
