@@ -50,28 +50,28 @@ defmodule DOM.CSS.PseudoClass do
     Enum.filter(candidates, &Query.root?(nodes, &1))
   end
 
-  def match(%{name: "empty"}, %{nodes: nodes}, candidates) do
-    Enum.filter(candidates, &Query.empty?(nodes, &1))
+  def match(%{name: "empty"}, context, candidates) do
+    Enum.filter(candidates, &Query.empty?(context, &1))
   end
 
-  def match(%{name: "first-child"}, %{nodes: nodes}, candidates),
-    do: nth(nodes, candidates, {0, 1}, :forward)
+  def match(%{name: "first-child"}, context, candidates),
+    do: nth(context, candidates, {0, 1}, :forward)
 
-  def match(%{name: "last-child"}, %{nodes: nodes}, candidates),
-    do: nth(nodes, candidates, {0, 1}, :backward)
+  def match(%{name: "last-child"}, context, candidates),
+    do: nth(context, candidates, {0, 1}, :backward)
 
-  def match(%{name: "only-child"}, %{nodes: nodes}, candidates) do
-    Enum.filter(candidates, &(Query.element_siblings(nodes, &1) == [&1]))
+  def match(%{name: "only-child"}, context, candidates) do
+    Enum.filter(candidates, &(Query.element_siblings(context, &1) == [&1]))
   end
 
-  def match(%{name: "nth-child", arg: {a, b}}, %{nodes: nodes}, candidates)
+  def match(%{name: "nth-child", arg: {a, b}}, context, candidates)
       when is_integer(a) and is_integer(b) do
-    nth(nodes, candidates, {a, b}, :forward)
+    nth(context, candidates, {a, b}, :forward)
   end
 
-  def match(%{name: "nth-last-child", arg: {a, b}}, %{nodes: nodes}, candidates)
+  def match(%{name: "nth-last-child", arg: {a, b}}, context, candidates)
       when is_integer(a) and is_integer(b) do
-    nth(nodes, candidates, {a, b}, :backward)
+    nth(context, candidates, {a, b}, :backward)
   end
 
   def match(%{name: name, arg: {a, b, list}}, context, candidates)
@@ -82,24 +82,24 @@ defmodule DOM.CSS.PseudoClass do
 
   # of-type pseudo-classes: like the child variants but counting only siblings of
   # the SAME element type (same local_name + namespace).
-  def match(%{name: "first-of-type"}, %{nodes: nodes}, candidates),
-    do: nth_type(nodes, candidates, {0, 1}, :forward)
+  def match(%{name: "first-of-type"}, context, candidates),
+    do: nth_type(context, candidates, {0, 1}, :forward)
 
-  def match(%{name: "last-of-type"}, %{nodes: nodes}, candidates),
-    do: nth_type(nodes, candidates, {0, 1}, :backward)
+  def match(%{name: "last-of-type"}, context, candidates),
+    do: nth_type(context, candidates, {0, 1}, :backward)
 
-  def match(%{name: "only-of-type"}, %{nodes: nodes}, candidates) do
-    Enum.filter(candidates, &(Query.same_type_siblings(nodes, &1) == [&1]))
+  def match(%{name: "only-of-type"}, context, candidates) do
+    Enum.filter(candidates, &(Query.same_type_siblings(context, &1) == [&1]))
   end
 
-  def match(%{name: "nth-of-type", arg: {a, b}}, %{nodes: nodes}, candidates)
+  def match(%{name: "nth-of-type", arg: {a, b}}, context, candidates)
       when is_integer(a) and is_integer(b) do
-    nth_type(nodes, candidates, {a, b}, :forward)
+    nth_type(context, candidates, {a, b}, :forward)
   end
 
-  def match(%{name: "nth-last-of-type", arg: {a, b}}, %{nodes: nodes}, candidates)
+  def match(%{name: "nth-last-of-type", arg: {a, b}}, context, candidates)
       when is_integer(a) and is_integer(b) do
-    nth_type(nodes, candidates, {a, b}, :backward)
+    nth_type(context, candidates, {a, b}, :backward)
   end
 
   # :scope — the scoping root of the query. `query_ids`/`matches` bind the
@@ -145,13 +145,13 @@ defmodule DOM.CSS.PseudoClass do
 
   # An+B position test among element siblings, counting from the start
   # (:forward) or end (:backward).
-  defp nth(nodes, candidates, {a, b}, direction) do
-    nth_among(candidates, direction, {a, b}, &Query.element_siblings(nodes, &1))
+  defp nth(context, candidates, {a, b}, direction) do
+    nth_among(candidates, direction, {a, b}, &Query.element_siblings(context, &1))
   end
 
   # An+B among same-type element siblings (the *-of-type variants).
-  defp nth_type(nodes, candidates, {a, b}, direction) do
-    nth_among(candidates, direction, {a, b}, &Query.same_type_siblings(nodes, &1))
+  defp nth_type(context, candidates, {a, b}, direction) do
+    nth_among(candidates, direction, {a, b}, &Query.same_type_siblings(context, &1))
   end
 
   # Keep each candidate whose 1-based position, within the sibling set produced by
@@ -166,9 +166,9 @@ defmodule DOM.CSS.PseudoClass do
   end
 
   # :nth-*(An+B of S) — index among siblings that also match the selector list S.
-  defp nth_of(%{nodes: nodes} = context, candidates, {a, b}, list, direction) do
+  defp nth_of(context, candidates, {a, b}, list, direction) do
     Enum.filter(candidates, fn id ->
-      siblings = Query.element_siblings(nodes, id)
+      siblings = Query.element_siblings(context, id)
       matching = match_list(list, context, siblings)
       matching = Enum.filter(siblings, &(&1 in matching))
       matching = if direction == :backward, do: Enum.reverse(matching), else: matching

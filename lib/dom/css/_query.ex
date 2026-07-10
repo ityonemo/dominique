@@ -102,24 +102,27 @@ defmodule DOM.CSS.Query do
     end
   end
 
+  @doc "All child ids of `node_id`, in document order (span-backed range scan)."
+  @spec children_ids(DOM.CSS.context(), reference()) :: [reference()]
+  def children_ids(%{nodes: nodes, index: index}, node_id) do
+    Table.span_children_of(nodes, index, node_id)
+  end
+
   @doc "Element children of `node_id`, in document order."
-  @spec element_children(:ets.tid(), reference()) :: [reference()]
-  def element_children(nodes, node_id) do
-    case select(nodes, children_spec(node_id)) do
-      [children] -> Enum.filter(children, &element?(nodes, &1))
-      [] -> []
-    end
+  @spec element_children(DOM.CSS.context(), reference()) :: [reference()]
+  def element_children(%{nodes: nodes} = context, node_id) do
+    context |> children_ids(node_id) |> Enum.filter(&element?(nodes, &1))
   end
 
   @doc "Preceding element siblings of `node_id`, nearest first."
-  @spec prev_element_siblings(:ets.tid(), reference()) :: [reference()]
-  def prev_element_siblings(nodes, node_id) do
+  @spec prev_element_siblings(DOM.CSS.context(), reference()) :: [reference()]
+  def prev_element_siblings(%{nodes: nodes} = context, node_id) do
     case parent(nodes, node_id) do
       nil ->
         []
 
       parent_id ->
-        nodes
+        context
         |> element_children(parent_id)
         |> Enum.take_while(&(&1 != node_id))
         |> Enum.reverse()
@@ -127,11 +130,11 @@ defmodule DOM.CSS.Query do
   end
 
   @doc "Element siblings of `node_id` (including itself), in document order."
-  @spec element_siblings(:ets.tid(), reference()) :: [reference()]
-  def element_siblings(nodes, node_id) do
+  @spec element_siblings(DOM.CSS.context(), reference()) :: [reference()]
+  def element_siblings(%{nodes: nodes} = context, node_id) do
     case parent(nodes, node_id) do
       nil -> [node_id]
-      parent_id -> element_children(nodes, parent_id)
+      parent_id -> element_children(context, parent_id)
     end
   end
 
@@ -140,11 +143,11 @@ defmodule DOM.CSS.Query do
   the SAME element type — same `local_name` AND `namespace` (an SVG `<title>` and
   an HTML `<title>` are different types). Used by the `*-of-type` pseudo-classes.
   """
-  @spec same_type_siblings(:ets.tid(), reference()) :: [reference()]
-  def same_type_siblings(nodes, node_id) do
+  @spec same_type_siblings(DOM.CSS.context(), reference()) :: [reference()]
+  def same_type_siblings(%{nodes: nodes} = context, node_id) do
     {name, namespace} = element_type(nodes, node_id)
 
-    nodes
+    context
     |> element_siblings(node_id)
     |> Enum.filter(&(element_type(nodes, &1) == {name, namespace}))
   end
@@ -181,12 +184,9 @@ defmodule DOM.CSS.Query do
   end
 
   @doc "Whether `node_id` is an element with no child element or text nodes."
-  @spec empty?(:ets.tid(), reference()) :: boolean()
-  def empty?(nodes, node_id) do
-    case select(nodes, children_spec(node_id)) do
-      [children] -> not Enum.any?(children, &content?(nodes, &1))
-      [] -> false
-    end
+  @spec empty?(DOM.CSS.context(), reference()) :: boolean()
+  def empty?(%{nodes: nodes} = context, node_id) do
+    context |> children_ids(node_id) |> Enum.all?(&(not content?(nodes, &1)))
   end
 
   @doc "Whether `node_id`'s parent is not an element (the document root element)."
@@ -211,56 +211,49 @@ defmodule DOM.CSS.Query do
 
   # Descendant ids of `node_id` in document order (all types; matching filters
   # to elements as needed).
-  @spec descendants(:ets.tid(), reference()) :: [reference()]
-  def descendants(nodes, node_id) do
-    nodes
-    |> element_children_and_others(node_id)
-    |> Enum.flat_map(fn child -> [child | descendants(nodes, child)] end)
-  end
-
-  defp element_children_and_others(nodes, node_id) do
-    case select(nodes, children_spec(node_id)) do
-      [children] -> children
-      [] -> []
-    end
+  @spec descendants(DOM.CSS.context(), reference()) :: [reference()]
+  def descendants(context, node_id) do
+    context
+    |> children_ids(node_id)
+    |> Enum.flat_map(fn child -> [child | descendants(context, child)] end)
   end
 
   # A relative complex (from :has): split off the leading combinator, compute the
   # scope set relative to scope_id, then match the remaining complex over it.
   defp relative_match?(
          %DOM.CSS.Complex{parts: [combinator | rest]},
-         %{nodes: nodes} = context,
+         context,
          scope_id
        )
        when is_atom(combinator) do
-    scope = relative_scope(nodes, combinator, scope_id)
+    scope = relative_scope(context, combinator, scope_id)
     remainder_matches?(rest, context, scope)
   end
 
   # No leading combinator: an implicit descendant relative selector.
-  defp relative_match?(compound_or_complex, %{nodes: nodes} = context, scope_id) do
-    scope = relative_scope(nodes, :descendant, scope_id)
+  defp relative_match?(compound_or_complex, context, scope_id) do
+    scope = relative_scope(context, :descendant, scope_id)
     remainder_matches?([compound_or_complex], context, scope)
   end
 
-  defp relative_scope(nodes, :child, scope_id), do: element_children(nodes, scope_id)
-  defp relative_scope(nodes, :descendant, scope_id), do: descendants(nodes, scope_id)
+  defp relative_scope(context, :child, scope_id), do: element_children(context, scope_id)
+  defp relative_scope(context, :descendant, scope_id), do: descendants(context, scope_id)
 
-  defp relative_scope(nodes, :next_sibling, scope_id) do
-    nodes |> next_element_siblings(scope_id) |> Enum.take(1)
+  defp relative_scope(context, :next_sibling, scope_id) do
+    context |> next_element_siblings(scope_id) |> Enum.take(1)
   end
 
-  defp relative_scope(nodes, :subsequent_sibling, scope_id) do
-    next_element_siblings(nodes, scope_id)
+  defp relative_scope(context, :subsequent_sibling, scope_id) do
+    next_element_siblings(context, scope_id)
   end
 
-  defp next_element_siblings(nodes, node_id) do
+  defp next_element_siblings(%{nodes: nodes} = context, node_id) do
     case parent(nodes, node_id) do
       nil ->
         []
 
       parent_id ->
-        nodes
+        context
         |> element_children(parent_id)
         |> Enum.drop_while(&(&1 != node_id))
         |> Enum.drop(1)
@@ -298,10 +291,6 @@ defmodule DOM.CSS.Query do
 
   defmatchspecp parent_spec(node_id) do
     {^node_id, %{parent: parent}} -> parent
-  end
-
-  defmatchspecp children_spec(node_id) do
-    {^node_id, %{children: children}} -> children
   end
 
   defmatchspecp is_element_spec(node_id) do

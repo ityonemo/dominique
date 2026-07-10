@@ -54,6 +54,7 @@ defmodule CSSTable do
     index = :ets.new(:css_index, [:ordered_set, :public])
     {_next, ids} = insert(table, root, nil, 0, %{})
     Table.reindex(table, index)
+    Table.span_build_all(table, index)
     {%{nodes: table, index: index}, ids}
   end
 

@@ -30,29 +30,29 @@ defmodule DOM.CSS.Complex do
   # the compound matches and from which the remaining chain also holds.
   defp chain?([], _node_id, _context), do: true
 
-  defp chain?([combinator, compound | rest], node_id, %{nodes: nodes} = context) do
-    nodes
+  defp chain?([combinator, compound | rest], node_id, context) do
+    context
     |> related(combinator, node_id)
     |> Enum.any?(fn related_id ->
       DOM.CSS.match(compound, context, [related_id]) != [] and chain?(rest, related_id, context)
     end)
   end
 
-  defp related(nodes, :child, node_id) do
+  defp related(%{nodes: nodes}, :child, node_id) do
     case Query.parent(nodes, node_id) do
       nil -> []
       parent_id -> [parent_id]
     end
   end
 
-  defp related(nodes, :descendant, node_id), do: Query.ancestors(nodes, node_id)
+  defp related(%{nodes: nodes}, :descendant, node_id), do: Query.ancestors(nodes, node_id)
 
-  defp related(nodes, :next_sibling, node_id) do
-    nodes |> Query.prev_element_siblings(node_id) |> Enum.take(1)
+  defp related(context, :next_sibling, node_id) do
+    context |> Query.prev_element_siblings(node_id) |> Enum.take(1)
   end
 
-  defp related(nodes, :subsequent_sibling, node_id) do
-    Query.prev_element_siblings(nodes, node_id)
+  defp related(context, :subsequent_sibling, node_id) do
+    Query.prev_element_siblings(context, node_id)
   end
 
   defimpl String.Chars do
