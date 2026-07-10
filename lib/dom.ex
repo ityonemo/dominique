@@ -224,12 +224,14 @@ defmodule DOM do
   defp parse_impl(tokens, state) do
     TreeBuilder.build_into(state.nodes, state.document_id, tokens)
     Table.reindex(state.nodes, state.index)
+    Table.span_build_all(state.nodes, state.index)
     {:noreply, state}
   end
 
   defp fragment_impl(tokens, context, state) do
     root_id = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
     Table.reindex(state.nodes, state.index)
+    Table.span_build_all(state.nodes, state.index)
     {:noreply, %{state | fragment_root: root_id}}
   end
 
@@ -330,13 +332,21 @@ defmodule DOM do
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
         append_fragment(state.nodes, parent_id, child_id, child_data)
+        resync_spans(state)
         {:reply, :ok, state}
 
       :else ->
         Table.append_child(state.nodes, parent_id, child_id)
+        resync_spans(state)
         {:reply, :ok, state}
     end
   end
+
+  # Re-derive spans from the (now-consistent) `children` field after an incremental
+  # mutation, keeping the span index in agreement with the field (the dual-write
+  # guard). span_build_all is idempotent and re-carves every root; the trees a
+  # single op touches are small, so this stays cheap on the mutation path.
+  defp resync_spans(state), do: Table.span_build_all(state.nodes, state.index)
 
   defp append_fragment(nodes, parent_id, fragment_id, fragment) do
     parent = fetch_node!(nodes, parent_id)
@@ -432,10 +442,12 @@ defmodule DOM do
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
         insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
+        resync_spans(state)
         {:reply, :ok, state}
 
       :else ->
         Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
+        resync_spans(state)
         {:reply, :ok, state}
     end
   end
@@ -469,6 +481,7 @@ defmodule DOM do
         put_node(state.nodes, child_id, %{child_data | parent: parent_id})
       end
 
+      resync_spans(state)
       {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
     end
   end
@@ -510,6 +523,7 @@ defmodule DOM do
           put_node(state.nodes, child_id, %{child_data | parent: parent_id})
         end
 
+        resync_spans(state)
         {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
     end
   end
@@ -537,6 +551,7 @@ defmodule DOM do
 
     if child_id in parent_data.children do
       Table.remove_child(state.nodes, parent_id, child_id)
+      resync_spans(state)
       {:reply, :ok, state}
     else
       {:reply, {:error, :not_found}, state}
@@ -656,6 +671,7 @@ defmodule DOM do
           end
 
         put_node(state.nodes, parent_id, %{parent | children: before ++ replacement ++ rest})
+        resync_spans(state)
         {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
     end
   end
@@ -685,6 +701,7 @@ defmodule DOM do
     node_data = fetch_node!(state.nodes, node_id)
     detach_from_parent(state.nodes, node_id, node_data)
     delete_subtree(state.nodes, state.index, node_id)
+    resync_spans(state)
     {:reply, :ok, state}
   end
 
@@ -811,6 +828,7 @@ defmodule DOM do
   defp clone_node_impl(node_id, deep?, _from, state) do
     clone_id = Table.clone(state.nodes, node_id, deep?)
     Table.reindex(state.nodes, state.index)
+    Table.span_build_all(state.nodes, state.index)
     {:reply, node_handle(state.nodes, clone_id), state}
   end
 
@@ -840,6 +858,7 @@ defmodule DOM do
     Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
     Enum.each(Table.children(state.nodes, root), &Table.append_child(state.nodes, node_id, &1))
 
+    resync_spans(state)
     {:reply, :ok, state}
   end
 
@@ -870,6 +889,7 @@ defmodule DOM do
       )
 
       Table.remove_child(state.nodes, parent_id, node_id)
+      resync_spans(state)
       {:reply, :ok, state}
     end
   end
@@ -882,6 +902,7 @@ defmodule DOM do
     tokens = DOM.HTML.fragment_tokens(html, context.name)
     root = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
     Table.reindex(state.nodes, state.index)
+    Table.span_build_all(state.nodes, state.index)
     root
   end
 
@@ -1031,15 +1052,17 @@ defmodule DOM do
     Enum.each(node.children, &delete_subtree(state.nodes, state.index, &1))
     children = if value == "", do: [], else: [new_text(state.nodes, node_id, value)]
     put_node(state.nodes, node_id, %{node | children: children})
+    resync_spans(state)
     {:reply, :ok, state}
   end
 
-  # Delete a subtree from the node table and retract each element's index rows.
+  # Delete a subtree from the node table and retract each node's index + span rows.
   defp delete_subtree(nodes, index, node_id) do
     nodes
     |> subtree(node_id)
     |> Enum.each(fn {id, _node_data} ->
       Table.index_retract(index, id)
+      Table.span_retract(index, id)
       :ets.delete(nodes, id)
     end)
   end
