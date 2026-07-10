@@ -104,51 +104,19 @@ defmodule DOM.Node do
   def child_nodes(%__MODULE__{type: type}) when type in @leaf, do: []
 
   def child_nodes(%__MODULE__{} = node) do
-    # One hit selects the parent row (for its ordered `children` id list) and all
-    # child rows (as handles), then reorders the handles by that list — set-table
-    # select is unordered, so the parent's list is the ordering authority.
-    node.server
-    |> DOM._select(child_nodes_spec(node.server, node.node_id))
-    |> sort_parent_children()
+    # The span index yields the ordered child ids in one range scan; map each to
+    # its handle. Both reads run in one atomic op so the tree can't mutate between.
+    server = node.server
+
+    DOM._atomic_ets_op(server, fn nodes, index ->
+      nodes
+      |> DOM.NodeData.Table.span_children_of(index, node.node_id)
+      |> Enum.map(fn child_id ->
+        [handle] = :ets.select(nodes, handle_spec(server, child_id))
+        handle
+      end)
+    end)
   end
-
-  defmatchspecp child_nodes_spec(server, node_id) do
-    {^node_id, %{children: children}} ->
-      {:order, children}
-
-    {child_id, %{__struct__: NodeData.Element, parent: ^node_id}} ->
-      %DOM.Node{server: server, node_id: child_id, type: :element}
-
-    {child_id, %{__struct__: NodeData.Text, parent: ^node_id}} ->
-      %DOM.Node{server: server, node_id: child_id, type: :text}
-
-    {child_id, %{__struct__: NodeData.Comment, parent: ^node_id}} ->
-      %DOM.Node{server: server, node_id: child_id, type: :comment}
-
-    {child_id, %{__struct__: NodeData.DocumentType, parent: ^node_id}} ->
-      %DOM.Node{server: server, node_id: child_id, type: :document_type}
-  end
-
-  # The select returns the parent's ordered child-id list as `{:order, ids}` plus
-  # each child handle in arbitrary order; re-sort the handles into list order.
-  defp sort_parent_children(rows, children_so_far \\ %{})
-
-  defp sort_parent_children([{:order, children_order} | rest], children_so_far) do
-    rest
-    |> Map.new(&{&1.node_id, &1})
-    |> Map.merge(children_so_far)
-    |> re_sort_children(children_order, [])
-  end
-
-  defp sort_parent_children([other | rest], children_so_far) do
-    sort_parent_children(rest, Map.put(children_so_far, other.node_id, other))
-  end
-
-  defp re_sort_children(children_map, [top | rest], children) do
-    re_sort_children(children_map, rest, [Map.fetch!(children_map, top) | children])
-  end
-
-  defp re_sort_children(_children_map, [], children), do: Enum.reverse(children)
 
   @doc "The node's parent, or `nil`."
   @spec parent_node(t()) :: t() | nil
