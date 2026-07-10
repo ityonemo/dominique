@@ -169,8 +169,9 @@ defmodule DOM.CSS.Query do
     |> Enum.find_value(fn id -> own_attribute(nodes, id, name) end)
   end
 
-  # The value of attribute `name` set directly on `node_id`, or nil.
-  defp own_attribute(nodes, node_id, name) do
+  @doc "The value of attribute `name` set directly on `node_id`, or nil."
+  @spec own_attribute(:ets.tid(), reference(), String.t()) :: String.t() | nil
+  def own_attribute(nodes, node_id, name) do
     case select(nodes, attributes_of_spec(node_id)) do
       [attributes] ->
         case List.keyfind(attributes, name, 0) do
@@ -181,6 +182,82 @@ defmodule DOM.CSS.Query do
       [] ->
         nil
     end
+  end
+
+  @doc "Whether `node_id` has attribute `name` set directly (any value)."
+  @spec has_own_attribute?(:ets.tid(), reference(), String.t()) :: boolean()
+  def has_own_attribute?(nodes, node_id, name), do: own_attribute(nodes, node_id, name) != nil
+
+  @doc "The HTML local name of `node_id` (nil if it is not an element)."
+  @spec local_name(:ets.tid(), reference()) :: String.t() | nil
+  def local_name(nodes, node_id) do
+    case select(nodes, element_type_spec(node_id)) do
+      [{name, _namespace}] -> name
+      [] -> nil
+    end
+  end
+
+  # Form-associated elements the disabled/enabled pseudo-classes apply to.
+  @form_controls ~w(button input select textarea optgroup option fieldset)
+
+  @doc """
+  Whether `node_id` is a form control matched by `:disabled` (§ "actually
+  disabled"): its own `disabled` attribute; or — for the control subset, not
+  option/optgroup — a descendant of a `fieldset[disabled]`, EXCEPT when it is
+  inside that fieldset's first `<legend>` child. `option` additionally inherits
+  from an ancestor `optgroup[disabled]`.
+  """
+  @spec actually_disabled?(:ets.tid(), reference()) :: boolean()
+  def actually_disabled?(nodes, node_id) do
+    name = local_name(nodes, node_id)
+
+    cond do
+      name not in @form_controls -> false
+      has_own_attribute?(nodes, node_id, "disabled") -> true
+      name == "option" -> option_group_disabled?(nodes, node_id)
+      name in ~w(optgroup) -> false
+      :else -> disabled_by_fieldset?(nodes, node_id)
+    end
+  end
+
+  # An option is disabled if an ancestor optgroup carries `disabled`.
+  defp option_group_disabled?(nodes, node_id) do
+    nodes
+    |> ancestors(node_id)
+    |> Enum.any?(
+      &(local_name(nodes, &1) == "optgroup" and has_own_attribute?(nodes, &1, "disabled"))
+    )
+  end
+
+  # A control is disabled by a fieldset[disabled] ancestor unless it sits inside
+  # that fieldset's first <legend> child.
+  defp disabled_by_fieldset?(nodes, node_id) do
+    node_id
+    |> ancestor_pairs(nodes)
+    |> Enum.any?(fn {fieldset, child_toward_node} ->
+      local_name(nodes, fieldset) == "fieldset" and
+        has_own_attribute?(nodes, fieldset, "disabled") and
+        child_toward_node != first_legend(nodes, fieldset)
+    end)
+  end
+
+  # Each ancestor paired with the child of that ancestor that leads toward node_id
+  # (so we can tell whether node_id descends through the fieldset's first legend).
+  defp ancestor_pairs(node_id, nodes) do
+    node_id
+    |> ancestor_chain(nodes)
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.map(fn [child, ancestor] -> {ancestor, child} end)
+  end
+
+  # node_id, its parent, grandparent, … up to the root (inclusive of node_id).
+  defp ancestor_chain(node_id, nodes), do: [node_id | ancestors(nodes, node_id)]
+
+  # The first <legend> child of `fieldset`, or nil.
+  defp first_legend(nodes, fieldset) do
+    nodes
+    |> Table.children(fieldset)
+    |> Enum.find(&(local_name(nodes, &1) == "legend"))
   end
 
   @doc "Whether `node_id` is an element with no child element or text nodes."

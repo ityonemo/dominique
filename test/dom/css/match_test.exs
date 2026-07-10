@@ -380,6 +380,158 @@ defmodule DOM.CSS.MatchTest do
     end
   end
 
+  describe "form-state pseudo-classes (:enabled/:disabled/:required/:optional)" do
+    setup do
+      # A form with: a plain input, a disabled input, a required select, a
+      # fieldset[disabled] wrapping an input (inherited-disabled) whose first
+      # <legend> holds an input that stays enabled.
+      {table, ids} =
+        build(
+          element(
+            "form",
+            [],
+            [
+              element("input", [{"type", "text"}], [], as: :plain),
+              element("input", [{"type", "text"}, {"disabled", ""}], [], as: :own_disabled),
+              element("select", [{"required", ""}], [], as: :req_select),
+              element("input", [{"type", "text"}, {"required", ""}], [], as: :req_input),
+              element(
+                "fieldset",
+                [{"disabled", ""}],
+                [
+                  element("legend", [], [
+                    element("input", [{"type", "text"}], [], as: :in_legend)
+                  ]),
+                  element("input", [{"type", "text"}], [], as: :in_fieldset)
+                ],
+                as: :fs
+              )
+            ],
+            as: :form
+          )
+        )
+
+      all = Map.values(ids)
+      %{table: table, ids: ids, all: all}
+    end
+
+    test ":disabled matches own disabled attribute", ctx do
+      assert ctx.ids[:own_disabled] in matched(ctx.table, pc(":disabled"), ctx.all)
+    end
+
+    test ":disabled is inherited from an ancestor fieldset[disabled]", ctx do
+      assert ctx.ids[:in_fieldset] in matched(ctx.table, pc("input:disabled"), ctx.all)
+    end
+
+    test ":disabled does NOT reach a control in the fieldset's first <legend>", ctx do
+      refute ctx.ids[:in_legend] in matched(ctx.table, pc(":disabled"), ctx.all)
+    end
+
+    test ":enabled is the complement for form controls", ctx do
+      enabled = matched(ctx.table, pc("input:enabled"), ctx.all)
+      assert ctx.ids[:plain] in enabled
+      assert ctx.ids[:in_legend] in enabled
+      refute ctx.ids[:own_disabled] in enabled
+      refute ctx.ids[:in_fieldset] in enabled
+    end
+
+    test ":required matches input/select/textarea with the attribute", ctx do
+      req = matched(ctx.table, pc(":required"), ctx.all)
+      assert req == MapSet.new([ctx.ids[:req_select], ctx.ids[:req_input]])
+    end
+
+    test ":optional is form controls without required", ctx do
+      opt = matched(ctx.table, pc("input:optional"), ctx.all)
+      assert ctx.ids[:plain] in opt
+      refute ctx.ids[:req_input] in opt
+    end
+  end
+
+  describe "checked / default / link pseudo-classes (attribute-derived)" do
+    setup do
+      {table, ids} =
+        build(
+          element(
+            "div",
+            [],
+            [
+              element("input", [{"type", "checkbox"}, {"checked", ""}], [], as: :cb),
+              element("input", [{"type", "radio"}], [], as: :radio_off),
+              element(
+                "select",
+                [],
+                [
+                  element("option", [{"selected", ""}], [], as: :opt_sel),
+                  element("option", [], [], as: :opt_off)
+                ],
+                as: :sel
+              ),
+              element("a", [{"href", "/x"}], [], as: :link),
+              element("a", [], [], as: :anchor_nohref)
+            ],
+            as: :div
+          )
+        )
+
+      %{table: table, ids: ids, all: Map.values(ids)}
+    end
+
+    test ":checked matches a checked checkbox and a selected option", ctx do
+      chk = matched(ctx.table, pc(":checked"), ctx.all)
+      assert chk == MapSet.new([ctx.ids[:cb], ctx.ids[:opt_sel]])
+    end
+
+    test ":default matches the checked input and selected option", ctx do
+      def_ = matched(ctx.table, pc(":default"), ctx.all)
+      assert ctx.ids[:cb] in def_
+      assert ctx.ids[:opt_sel] in def_
+    end
+
+    test ":link matches a/area with href only", ctx do
+      lnk = matched(ctx.table, pc(":link"), ctx.all)
+      assert lnk == MapSet.new([ctx.ids[:link]])
+    end
+  end
+
+  describe "read-write / read-only pseudo-classes" do
+    setup do
+      {table, ids} =
+        build(
+          element(
+            "div",
+            [],
+            [
+              element("input", [{"type", "text"}], [], as: :in_rw),
+              element("input", [{"type", "text"}, {"readonly", ""}], [], as: :in_ro),
+              element("textarea", [], [], as: :ta_rw),
+              element("p", [{"contenteditable", ""}], [], as: :editable),
+              element("p", [], [], as: :plain_p)
+            ],
+            as: :div
+          )
+        )
+
+      %{table: table, ids: ids, all: Map.values(ids)}
+    end
+
+    test ":read-write matches mutable inputs/textarea and contenteditable", ctx do
+      rw = matched(ctx.table, pc(":read-write"), ctx.all)
+      assert ctx.ids[:in_rw] in rw
+      assert ctx.ids[:ta_rw] in rw
+      assert ctx.ids[:editable] in rw
+      refute ctx.ids[:in_ro] in rw
+      refute ctx.ids[:plain_p] in rw
+    end
+
+    test ":read-only matches everything not :read-write", ctx do
+      ro = matched(ctx.table, pc(":read-only"), ctx.all)
+      assert ctx.ids[:in_ro] in ro
+      assert ctx.ids[:plain_p] in ro
+      refute ctx.ids[:in_rw] in ro
+      refute ctx.ids[:editable] in ro
+    end
+  end
+
   describe "namespaces" do
     setup do
       # An HTML div next to an SVG rect. `:none` (null namespace) matches neither,

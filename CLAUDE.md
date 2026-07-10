@@ -210,18 +210,27 @@ CALLER's process (`DOM.query_selector*`/`matches`), so the document server never
 crashes on a bad selector. `*|`/bare match any namespace; `|` (`:none`, the null
 namespace) matches nothing, since every parsed element is `:html`/`:svg`/`:mathml`.
 
+**Implemented — derivable UI/state pseudo-classes** (element name + attributes +
+ancestry, no runtime state; `DOM.CSS.PseudoClass` + `DOM.CSS.Query`): `:enabled`/
+`:disabled` (own `disabled`, `fieldset[disabled]` inheritance with the first-
+`<legend>` exception, `optgroup[disabled]` for options), `:required`/`:optional`,
+`:checked` (the `checked`/`selected` attribute), `:default` (checked input /
+selected option), `:link` (`a`/`area` with `href`), `:read-write`/`:read-only`.
+Verified against the Chromium+Firefox oracle (`query_selector_test.exs`).
+
 **Deferred — intended to be implemented:**
 
 - **`:dir(auto)`** — needs bidi resolution of element text, which `NodeData` does
   not model; stays match-nothing.
-- **UI / state / navigation pseudo-classes** — `:hover`, `:focus`, `:active`,
-  `:focus-visible`, `:focus-within`, `:checked`, `:disabled`, `:enabled`,
-  `:required`, `:valid`, `:indeterminate`, `:read-only`, `:visited`, `:link`,
-  `:target`, `:current`, … These depend on input/focus state, HTML element
-  semantics + their state machines, or navigation/history — **none of which
+- **Interaction/navigation-state pseudo-classes** — `:hover`, `:focus`, `:active`,
+  `:focus-visible`, `:focus-within`, user-toggled `:checked`, `:indeterminate`,
+  `:valid`, `:visited`, `:target`, `:current`, … These depend on input/focus
+  state, HTML element state machines, or navigation/history — **none of which
   `NodeData` models today**. **We DO want to support these**, which will require
   modeling that state (an input/focus model, HTML element interfaces, a
-  navigation/URL model). Until then they are unmatchable.
+  navigation/URL model — downstream of Events / a state layer). Until then they
+  are unmatchable. (Also deferred within `:default`: the "default submit button"
+  case, which needs a form-tree walk.)
 - **Policy for unmodelable pseudo-classes** (decide when building `match/3`):
   prefer **match-nothing** over raising — that mirrors browser `querySelector`,
   where e.g. `:hover` simply returns no elements rather than erroring.

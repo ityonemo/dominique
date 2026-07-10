@@ -280,6 +280,98 @@ defmodule Integration.QuerySelectorTest do
     end
   end
 
+  playwright do
+    @link "https://html.spec.whatwg.org/multipage/semantics-other.html#pseudo-classes"
+
+    # Derivable UI/state pseudo-classes (no interaction state): :enabled/:disabled
+    # (incl. fieldset[disabled] inheritance + first-<legend> exception), :required/
+    # :optional, :checked (attr), :default, :link, :read-write/:read-only. Parsed
+    # from identical HTML so both sides build the same tree; diffed by id.
+    @form_html "<form id='f'>" <>
+                 "<input id='plain' type='text'>" <>
+                 "<input id='disabledInput' type='text' disabled>" <>
+                 "<input id='reqInput' type='text' required>" <>
+                 "<input id='readonlyInput' type='text' readonly>" <>
+                 "<input id='checkbox' type='checkbox' checked>" <>
+                 "<select id='reqSelect' required>" <>
+                 "<option id='optSel' selected>x</option>" <>
+                 "<option id='optOff'>y</option>" <>
+                 "</select>" <>
+                 "<textarea id='ta'></textarea>" <>
+                 "<fieldset id='fs' disabled>" <>
+                 "<legend id='lg'><input id='inLegend' type='text'></legend>" <>
+                 "<input id='inFieldset' type='text'>" <>
+                 "</fieldset>" <>
+                 "<a id='link' href='/x'>l</a>" <>
+                 "<a id='anchor'>a</a>" <>
+                 "<p id='editable' contenteditable>e</p>" <>
+                 "</form>"
+
+    @form_selectors [
+      ":disabled",
+      "input:disabled",
+      "input:enabled",
+      ":required",
+      "input:optional",
+      ":checked",
+      ":default",
+      ":link",
+      ":read-write",
+      "input:read-only"
+    ]
+
+    @js """
+    return await page.evaluate(() => {
+      const html = "<form id='f'>" +
+        "<input id='plain' type='text'>" +
+        "<input id='disabledInput' type='text' disabled>" +
+        "<input id='reqInput' type='text' required>" +
+        "<input id='readonlyInput' type='text' readonly>" +
+        "<input id='checkbox' type='checkbox' checked>" +
+        "<select id='reqSelect' required>" +
+        "<option id='optSel' selected>x</option>" +
+        "<option id='optOff'>y</option>" +
+        "</select>" +
+        "<textarea id='ta'></textarea>" +
+        "<fieldset id='fs' disabled>" +
+        "<legend id='lg'><input id='inLegend' type='text'></legend>" +
+        "<input id='inFieldset' type='text'>" +
+        "</fieldset>" +
+        "<a id='link' href='/x'>l</a>" +
+        "<a id='anchor'>a</a>" +
+        "<p id='editable' contenteditable>e</p>" +
+        "</form>";
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const selectors = [
+        ":disabled", "input:disabled", "input:enabled", ":required",
+        "input:optional", ":checked", ":default", ":link", ":read-write",
+        "input:read-only"
+      ];
+      const results = {};
+      for (const sel of selectors) {
+        results[sel] = Array.from(doc.querySelectorAll(sel), n => n.getAttribute("id"));
+      }
+      return results;
+    });
+    """
+
+    test "derivable form-state pseudo-classes match the browser", %{js: expected} do
+      document = DOM.new(@form_html)
+
+      results =
+        Map.new(@form_selectors, fn selector ->
+          ids =
+            document
+            |> DOM.query_selector_all(selector)
+            |> Enum.map(&Element.get_attribute(&1, "id"))
+
+          {selector, ids}
+        end)
+
+      assert results == expected
+    end
+  end
+
   # The same tree as the @js battery, with matching explicit ids.
   defp build(document) do
     el(document, "section", "section", [], [
