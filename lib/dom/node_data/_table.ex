@@ -135,6 +135,65 @@ defmodule DOM.NodeData.Table do
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
+  @doc """
+  Append `child_ids` (in order) to `parent_id` in one shot: carve the whole
+  append gap into N windows with a single `multispan/3` (one `interval/2` for a
+  lone child) and place each child into its window. Equivalent to N
+  `append_child/3` calls but with one extent partition instead of N successive
+  ones. Each child is detached from any current parent first.
+  """
+  @spec append_children(tid, id, [id]) :: :ok
+  def append_children(_tid, _parent_id, []), do: :ok
+
+  def append_children(tid, parent_id, child_ids) do
+    Enum.each(child_ids, &detach(tid, &1))
+    parent = ensure_extent(tid, parent_id)
+    {gap_a, gap_b} = extent_after_last(tid, parent_id, parent)
+    place_children(tid, parent_id, child_ids, gap_a, gap_b)
+  end
+
+  @doc """
+  Insert `child_ids` (in order) immediately before `reference_id` under
+  `parent_id`, carving the single gap `(prev_sibling.stop || parent.start,
+  reference.start)` into N windows with one `multispan/3`.
+  """
+  @spec insert_children_before(tid, id, [id], id) :: :ok
+  def insert_children_before(_tid, _parent_id, [], _reference_id), do: :ok
+
+  def insert_children_before(tid, parent_id, child_ids, reference_id) do
+    Enum.each(child_ids, &detach(tid, &1))
+    parent = ensure_extent(tid, parent_id)
+    {gap_a, gap_b} = extent_before(tid, parent_id, parent, reference_id)
+    place_children(tid, parent_id, child_ids, gap_a, gap_b)
+  end
+
+  # Partition `(gap_a, gap_b)` into one window per child (multispan; interval for a
+  # lone child) and place each child at its window: a fresh node takes the window as
+  # its extent directly; an already-labeled subtree is grafted into it (window as
+  # the destination gap). Then link the child's parent pointer.
+  defp place_children(tid, parent_id, child_ids, gap_a, gap_b) do
+    root = ns_root(fetch!(tid, parent_id), parent_id)
+
+    child_ids
+    |> carve_windows(gap_a, gap_b)
+    |> Enum.each(fn {child_id, {wstart, wstop}} ->
+      child = fetch!(tid, child_id)
+
+      if child.start == nil do
+        put(tid, child_id, %{child | root: root, start: wstart, stop: wstop, parent: parent_id})
+      else
+        graft_subtree(tid, child_id, child, root, wstart, wstop)
+        put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
+      end
+    end)
+  end
+
+  # Pair each child id with its extent window: none for [], a single interval for
+  # one child, a multispan partition for many.
+  defp carve_windows([], _a, _b), do: []
+  defp carve_windows([only], a, b), do: [{only, interval(a, b)}]
+  defp carve_windows(ids, a, b), do: Enum.zip(ids, multispan(a, b, length(ids)))
+
   @doc "Remove `child_id` from `parent_id` (child keeps its own subtree, parent nil)."
   @spec remove_child(tid, id, id) :: :ok
   def remove_child(tid, _parent_id, child_id) do

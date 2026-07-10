@@ -486,6 +486,63 @@ defmodule DOM.NodeData.TableTest do
       assert extent_inside?(tid, c, new)
       assert extent_inside?(tid, gc, c)
     end
+
+    test "append_children places N siblings in one multispan-carved gap", %{tid: tid} do
+      p = Table.create_element(tid, "p")
+      a = Table.create_element(tid, "a")
+      kids = for i <- 1..6, do: Table.create_element(tid, "k#{i}")
+      Table.append_child(tid, p, a)
+
+      # bulk-append all six after the existing child `a`
+      Table.append_children(tid, p, kids)
+
+      assert Table.children_by_extent(tid, p) == [a | kids]
+      Enum.each(kids, &assert(extent_inside?(tid, &1, p)))
+    end
+
+    test "append_children moves already-labeled subtrees (graft per window)", %{tid: tid} do
+      root = Table.create_document(tid)
+      frag = Table.create_element(tid, "frag")
+      dest = Table.create_element(tid, "dest")
+      Table.append_child(tid, root, frag)
+      Table.append_child(tid, root, dest)
+
+      # frag has three labeled subtrees, each with a child
+      subs =
+        for i <- 1..3 do
+          s = Table.create_element(tid, "s#{i}")
+          gc = Table.create_element(tid, "g#{i}")
+          Table.append_child(tid, frag, s)
+          Table.append_child(tid, s, gc)
+          {s, gc}
+        end
+
+      ids = Enum.map(subs, &elem(&1, 0))
+      Table.append_children(tid, dest, ids)
+
+      assert Table.children_by_extent(tid, frag) == []
+      assert Table.children_by_extent(tid, dest) == ids
+
+      Enum.each(subs, fn {s, gc} ->
+        assert extent_inside?(tid, s, dest)
+        assert Table.children_by_extent(tid, s) == [gc]
+        assert extent_inside?(tid, gc, s)
+      end)
+    end
+
+    test "insert_children_before splices N siblings before a reference", %{tid: tid} do
+      p = Table.create_element(tid, "p")
+      a = Table.create_element(tid, "a")
+      z = Table.create_element(tid, "z")
+      Table.append_child(tid, p, a)
+      Table.append_child(tid, p, z)
+
+      kids = for i <- 1..4, do: Table.create_element(tid, "k#{i}")
+      Table.insert_children_before(tid, p, kids, z)
+
+      assert Table.children_by_extent(tid, p) == [a | kids] ++ [z]
+      Enum.each(kids, &assert(extent_inside?(tid, &1, p)))
+    end
   end
 
   # Whether child's extent is strictly contained in parent's, from the records.

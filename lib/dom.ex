@@ -354,19 +354,22 @@ defmodule DOM do
   # `children` field.
   defp resync_spans(state), do: Table.span_index_all(state.nodes, state.index)
 
-  # Flatten a fragment's children onto `parent_id` (append). Snapshot the children
-  # by extent order first (each append re-parents a child, so the live set shrinks),
-  # then move each via the extent-authoritative mutator.
+  # Flatten a fragment's children onto `parent_id` (append), placing all of them in
+  # one multispan-carved gap (snapshot the ordered children first — the bulk move
+  # re-parents them, emptying the fragment).
   defp append_fragment(nodes, parent_id, fragment_id, _fragment) do
-    for child <- Table.children(nodes, fragment_id),
-        do: Table.append_child(nodes, parent_id, child)
+    Table.append_children(nodes, parent_id, Table.children(nodes, fragment_id))
   end
 
   # Flatten a fragment's children into `parent_id` before `reference_child_id`, in
-  # order, each via the extent-authoritative insert_before mutator.
+  # order, in one multispan-carved gap.
   defp insert_fragment(nodes, parent_id, fragment_id, _fragment, reference_child_id) do
-    for child <- Table.children(nodes, fragment_id),
-        do: Table.insert_before(nodes, parent_id, child, reference_child_id)
+    Table.insert_children_before(
+      nodes,
+      parent_id,
+      Table.children(nodes, fragment_id),
+      reference_child_id
+    )
   end
 
   def _node_insert_before(server, parent_id, child, nil) do
@@ -837,7 +840,7 @@ defmodule DOM do
     root = fragment_root_for(html, context, state)
 
     Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
-    Enum.each(Table.children(state.nodes, root), &Table.append_child(state.nodes, node_id, &1))
+    Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
 
     resync_spans(state)
     {:reply, :ok, state}
@@ -864,9 +867,11 @@ defmodule DOM do
       context = %{name: parent.local_name, namespace: parent.namespace}
       root = fragment_root_for(html, context, state)
 
-      Enum.each(
+      Table.insert_children_before(
+        state.nodes,
+        parent_id,
         Table.children(state.nodes, root),
-        &Table.insert_before(state.nodes, parent_id, &1, node_id)
+        node_id
       )
 
       Table.remove_child(state.nodes, parent_id, node_id)
