@@ -234,7 +234,10 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   end
 
   # Write `id`'s record with extent {start, stop} under `parent` in tree `root`,
-  # index it, then carve + recurse into its children.
+  # index it, then carve + recurse into its children. A template element's content
+  # DocumentFragment is a DETACHED subtree (linked via `content`, not `children`),
+  # so it is materialized as its own root (parent nil, full window) after the
+  # element itself.
   defp load_node(tree, tid, index, id, root, parent, start, stop) do
     write_record(tree, tid, index, id, root, parent, start, stop)
 
@@ -244,6 +247,10 @@ defmodule DOM.HTML.TreeBuilder.Tree do
     |> Enum.each(fn {kid, {cstart, cstop}} ->
       load_node(tree, tid, index, kid, root, id, cstart, cstop)
     end)
+
+    if content = content(tree, id) do
+      load_node(tree, tid, index, content, content, nil, <<0x00>>, <<0x80>>)
+    end
   end
 
   # Pair each child with its extent window inside (start, stop): none for [], a

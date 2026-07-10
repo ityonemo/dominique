@@ -222,15 +222,21 @@ defmodule DOM do
   # DOM.NodeData.Table — no GenServer round-trips), before it serves any request.
   # handle_continue impls take no `from`.
   defp parse_impl(tokens, state) do
-    TreeBuilder.build_into(state.nodes, state.document_id, tokens)
-    Table.reindex(state.nodes, state.index)
+    TreeBuilder.build_into(state.nodes, state.index, state.document_id, tokens)
     Table.span_index_all(state.nodes, state.index)
     {:noreply, state}
   end
 
   defp fragment_impl(tokens, context, state) do
-    root_id = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
-    Table.reindex(state.nodes, state.index)
+    root_id =
+      TreeBuilder.build_fragment_into(
+        state.nodes,
+        state.index,
+        state.document_id,
+        tokens,
+        context
+      )
+
     Table.span_index_all(state.nodes, state.index)
     {:noreply, %{state | fragment_root: root_id}}
   end
@@ -870,13 +876,21 @@ defmodule DOM do
   end
 
   # Fragment-parse `html` in `context` into this document's table; return the
-  # synthetic fragment-root id (whose children are the parsed nodes). The parsed
-  # elements are indexed via a reindex pass (index_put is idempotent, so
-  # re-touching already-indexed nodes is harmless).
+  # synthetic fragment-root id (whose children are the parsed nodes). build_into's
+  # bulk-load indexes the parsed elements; span_index_all mirrors the fresh extents
+  # into the span rows.
   defp fragment_root_for(html, context, state) do
     tokens = DOM.HTML.fragment_tokens(html, context.name)
-    root = TreeBuilder.build_fragment_into(state.nodes, state.document_id, tokens, context)
-    Table.reindex(state.nodes, state.index)
+
+    root =
+      TreeBuilder.build_fragment_into(
+        state.nodes,
+        state.index,
+        state.document_id,
+        tokens,
+        context
+      )
+
     Table.span_index_all(state.nodes, state.index)
     root
   end
