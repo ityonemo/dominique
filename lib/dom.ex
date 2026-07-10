@@ -348,19 +348,19 @@ defmodule DOM do
   # `children` field.
   defp resync_spans(state), do: Table.span_index_all(state.nodes, state.index)
 
-  # Flatten a fragment's children onto `parent_id` (append). Each child moves via
-  # the extent-authoritative mutator, so its extent is placed as it is spliced; the
-  # now-empty fragment record keeps a nil child list.
-  defp append_fragment(nodes, parent_id, fragment_id, fragment) do
-    Enum.each(fragment.children, &Table.append_child(nodes, parent_id, &1))
-    put_node(nodes, fragment_id, %{fetch_node!(nodes, fragment_id) | children: []})
+  # Flatten a fragment's children onto `parent_id` (append). Snapshot the children
+  # by extent order first (each append re-parents a child, so the live set shrinks),
+  # then move each via the extent-authoritative mutator.
+  defp append_fragment(nodes, parent_id, fragment_id, _fragment) do
+    for child <- Table.children(nodes, fragment_id),
+        do: Table.append_child(nodes, parent_id, child)
   end
 
   # Flatten a fragment's children into `parent_id` before `reference_child_id`, in
   # order, each via the extent-authoritative insert_before mutator.
-  defp insert_fragment(nodes, parent_id, fragment_id, fragment, reference_child_id) do
-    Enum.each(fragment.children, &Table.insert_before(nodes, parent_id, &1, reference_child_id))
-    put_node(nodes, fragment_id, %{fetch_node!(nodes, fragment_id) | children: []})
+  defp insert_fragment(nodes, parent_id, fragment_id, _fragment, reference_child_id) do
+    for child <- Table.children(nodes, fragment_id),
+        do: Table.insert_before(nodes, parent_id, child, reference_child_id)
   end
 
   def _node_insert_before(server, parent_id, child, nil) do
@@ -408,7 +408,7 @@ defmodule DOM do
       inclusive_ancestor?(state.nodes, child_id, parent_id) ->
         {:reply, {:error, :hierarchy_request}, state}
 
-      reference_child_id not in parent_data.children ->
+      reference_child_id not in Table.children(state.nodes, parent_id) ->
         {:reply, {:error, :not_found}, state}
 
       invalid_hierarchy?(
@@ -472,7 +472,7 @@ defmodule DOM do
     parent_data = fetch_node!(state.nodes, parent_id)
 
     cond do
-      reference_child_id not in parent_data.children ->
+      reference_child_id not in Table.children(state.nodes, parent_id) ->
         {:reply, {:error, :not_found}, state}
 
       invalid_hierarchy?(
@@ -519,9 +519,7 @@ defmodule DOM do
   end
 
   defp remove_child_impl(parent_id, child_id, _from, state) do
-    parent_data = fetch_node!(state.nodes, parent_id)
-
-    if child_id in parent_data.children do
+    if child_id in Table.children(state.nodes, parent_id) do
       Table.remove_child(state.nodes, parent_id, child_id)
       resync_spans(state)
       {:reply, :ok, state}
@@ -609,7 +607,7 @@ defmodule DOM do
          state
        ) do
     cond do
-      old_child_id not in parent_data.children ->
+      old_child_id not in Table.children(state.nodes, parent_id) ->
         {:reply, {:error, :not_found}, state}
 
       new_child_id == old_child_id ->
@@ -666,67 +664,71 @@ defmodule DOM do
   defp invalid_hierarchy?(nodes, parent, parent_id, child, child_id, reference_child_id, subtree) do
     inclusive_ancestor?(nodes, child_id, parent_id) or
       (match?(%NodeData.Document{}, parent) and
-         invalid_document_child?(nodes, parent, child, child_id, reference_child_id, subtree))
+         invalid_document_child?(nodes, parent_id, child, child_id, reference_child_id, subtree))
   end
 
+  # `document_id` is the document (parent) being inserted into; its ordered children
+  # come from the extent index (Table.children), not a record field.
   defp invalid_document_child?(
          nodes,
-         document,
+         document_id,
          %NodeData.Element{},
          child_id,
          reference_child_id,
          _sub
        ) do
-    document_has_kind?(nodes, document, NodeData.Element, child_id) or
-      doctype_at_or_after?(nodes, document, reference_child_id)
+    document_has_kind?(nodes, document_id, NodeData.Element, child_id) or
+      doctype_at_or_after?(nodes, document_id, reference_child_id)
   end
 
   defp invalid_document_child?(
          nodes,
-         document,
+         document_id,
          %NodeData.DocumentType{},
          child_id,
          reference_id,
          _sub
        ) do
-    document_has_kind?(nodes, document, NodeData.DocumentType, child_id) or
-      element_before?(nodes, document, reference_id)
+    document_has_kind?(nodes, document_id, NodeData.DocumentType, child_id) or
+      element_before?(nodes, document_id, reference_id)
   end
 
   defp invalid_document_child?(
          nodes,
-         document,
-         %NodeData.DocumentFragment{} = fragment,
-         _child_id,
+         document_id,
+         %NodeData.DocumentFragment{},
+         fragment_id,
          _reference_child_id,
          subtree
        ) do
-    invalid_document_fragment?(nodes, document, fragment, subtree)
+    invalid_document_fragment?(nodes, document_id, fragment_id, subtree)
   end
 
-  defp invalid_document_child?(_nodes, _document, _child, _child_id, _reference_child_id, _sub) do
+  defp invalid_document_child?(_nodes, _document_id, _child, _child_id, _reference_child_id, _sub) do
     false
   end
 
   # An element precedes the insertion point: with a nil reference (append), any
   # element counts; otherwise only elements before the reference child.
-  defp element_before?(nodes, document, reference_child_id) do
-    document.children
+  defp element_before?(nodes, document_id, reference_child_id) do
+    nodes
+    |> Table.children(document_id)
     |> Enum.take_while(&(&1 != reference_child_id))
     |> Enum.any?(&match?(%NodeData.Element{}, fetch_node!(nodes, &1)))
   end
 
   # A doctype sits at or after the insertion point: with a nil reference
   # (append), any doctype counts; otherwise doctypes from the reference child on.
-  defp doctype_at_or_after?(nodes, document, reference_child_id) do
-    document.children
+  defp doctype_at_or_after?(nodes, document_id, reference_child_id) do
+    nodes
+    |> Table.children(document_id)
     |> Enum.drop_while(&(&1 != reference_child_id))
     |> Enum.any?(&match?(%NodeData.DocumentType{}, fetch_node!(nodes, &1)))
   end
 
-  defp invalid_document_fragment?(nodes, document, fragment, subtree_nodes) do
+  defp invalid_document_fragment?(nodes, document_id, fragment_id, subtree_nodes) do
     kinds =
-      Enum.map(fragment.children, fn child_id ->
+      Enum.map(fragment_children(nodes, fragment_id, subtree_nodes), fn child_id ->
         node_kind(nodes, child_id, subtree_nodes)
       end)
 
@@ -734,7 +736,19 @@ defmodule DOM do
 
     NodeData.Text in kinds or
       element_count > 1 or
-      (element_count == 1 and document_has_kind?(nodes, document, NodeData.Element, nil))
+      (element_count == 1 and document_has_kind?(nodes, document_id, NodeData.Element, nil))
+  end
+
+  # A fragment's children: from the live extents (same-doc), else from the
+  # transported subtree map — derived by parent pointer + extent order, since the
+  # records carry `parent`/`start`, not a `children` field.
+  defp fragment_children(nodes, fragment_id, nil), do: Table.children(nodes, fragment_id)
+
+  defp fragment_children(_nodes, fragment_id, subtree_nodes) do
+    subtree_nodes
+    |> Enum.filter(fn {_id, data} -> data.parent == fragment_id end)
+    |> Enum.sort_by(fn {_id, data} -> data.start end)
+    |> Enum.map(fn {id, _data} -> id end)
   end
 
   # The NodeData struct MODULE of a node (used as a kind discriminator).
@@ -743,8 +757,10 @@ defmodule DOM do
   defp node_kind(_nodes, node_id, subtree_nodes),
     do: Map.fetch!(subtree_nodes, node_id).__struct__
 
-  defp document_has_kind?(nodes, document, kind, except_id) do
-    Enum.any?(document.children, fn node_id ->
+  defp document_has_kind?(nodes, document_id, kind, except_id) do
+    nodes
+    |> Table.children(document_id)
+    |> Enum.any?(fn node_id ->
       node_id != except_id and fetch_node!(nodes, node_id).__struct__ == kind
     end)
   end
@@ -1007,9 +1023,9 @@ defmodule DOM do
 
   # Replace all children with a single Text node (none when value is empty).
   defp set_text_content_impl(node_id, value, _from, state) do
-    node = fetch_node!(state.nodes, node_id)
-    Enum.each(node.children, &delete_subtree(state.nodes, state.index, &1))
-    put_node(state.nodes, node_id, %{fetch_node!(state.nodes, node_id) | children: []})
+    state.nodes
+    |> Table.children(node_id)
+    |> Enum.each(&delete_subtree(state.nodes, state.index, &1))
 
     if value != "" do
       # append via the extent-authoritative mutator so the new text node is placed
@@ -1059,8 +1075,7 @@ defmodule DOM do
 
   defp descendant_entries(nodes, node_id) do
     nodes
-    |> fetch_node!(node_id)
-    |> NodeData.children()
+    |> Table.children(node_id)
     |> Enum.flat_map(&subtree(nodes, &1))
   end
 
@@ -1081,7 +1096,7 @@ defmodule DOM do
     node_data = fetch_node!(nodes, node_id)
 
     [{node_id, node_data}] ++
-      Enum.flat_map(NodeData.children(node_data), &subtree(nodes, &1))
+      Enum.flat_map(Table.children(nodes, node_id), &subtree(nodes, &1))
   end
 
   # ==========================================================================

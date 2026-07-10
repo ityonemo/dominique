@@ -120,8 +120,7 @@ defmodule DOM.NodeData.Table do
   def append_child(tid, parent_id, child_id) do
     detach(tid, child_id)
     parent = ensure_extent(tid, parent_id)
-    place_child(tid, parent_id, child_id, extent_after_last(tid, parent))
-    put(tid, parent_id, %{fetch!(tid, parent_id) | children: parent.children ++ [child_id]})
+    place_child(tid, parent_id, child_id, extent_after_last(tid, parent_id, parent))
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
@@ -130,22 +129,13 @@ defmodule DOM.NodeData.Table do
   def insert_before(tid, parent_id, child_id, reference_id) do
     detach(tid, child_id)
     parent = ensure_extent(tid, parent_id)
-    {before, [reference | rest]} = Enum.split_while(parent.children, &(&1 != reference_id))
-    place_child(tid, parent_id, child_id, extent_before(tid, parent, before, reference))
-
-    put(tid, parent_id, %{
-      fetch!(tid, parent_id)
-      | children: before ++ [child_id, reference | rest]
-    })
-
+    place_child(tid, parent_id, child_id, extent_before(tid, parent_id, parent, reference_id))
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
   @doc "Remove `child_id` from `parent_id` (child keeps its own subtree, parent nil)."
   @spec remove_child(tid, id, id) :: :ok
-  def remove_child(tid, parent_id, child_id) do
-    parent = fetch!(tid, parent_id)
-    put(tid, parent_id, %{parent | children: List.delete(parent.children, child_id)})
+  def remove_child(tid, _parent_id, child_id) do
     put(tid, child_id, %{fetch!(tid, child_id) | parent: nil})
   end
 
@@ -194,33 +184,38 @@ defmodule DOM.NodeData.Table do
   end
 
   # The gap after `parent`'s current last child: (last_child.stop, parent.stop), or
-  # (parent.start, parent.stop) when empty.
-  defp extent_after_last(tid, parent) do
-    a = if last = List.last(parent.children), do: fetch!(tid, last).stop, else: parent.start
-    {a, parent.stop}
+  # (parent.start, parent.stop) when empty. Order comes from the record extents.
+  defp extent_after_last(tid, parent_id, parent_data) do
+    a =
+      case List.last(children_by_extent(tid, parent_id)) do
+        nil -> parent_data.start
+        last -> fetch!(tid, last).stop
+      end
+
+    {a, parent_data.stop}
   end
 
-  # The gap for a node inserted before `reference`, given the `before` siblings:
-  # (prev.stop || parent.start, reference.start).
-  defp extent_before(tid, parent, before, reference) do
-    a = if prev = List.last(before), do: fetch!(tid, prev).stop, else: parent.start
-    {a, fetch!(tid, reference).start}
+  # The gap for a node inserted before `reference_id`: (prev_sibling.stop ||
+  # parent.start, reference.start), with the previous sibling found by extent order.
+  defp extent_before(tid, parent_id, parent_data, reference_id) do
+    before =
+      tid
+      |> children_by_extent(parent_id)
+      |> Enum.take_while(&(&1 != reference_id))
+
+    a = if prev = List.last(before), do: fetch!(tid, prev).stop, else: parent_data.start
+    {a, fetch!(tid, reference_id).start}
   end
 
   @doc """
-  Detach `id` from its current parent's child list (no-op when already detached).
-  Only edits the parent — the node's own `parent` field is left as-is (the caller
-  overwrites it on re-attach, or `remove_child` nils it).
+  Detach `id` from its current parent (no-op when already detached). Adjacency is
+  the child's `parent` pointer + its extent, so detaching is just nilling `parent`
+  — the extent-order children scan (`children_by_extent/2`) then no longer sees it.
+  The caller overwrites `parent` on re-attach.
   """
   @spec detach(tid, id) :: :ok
   def detach(tid, id) do
-    child = fetch!(tid, id)
-
-    if parent_id = child.parent do
-      parent = fetch!(tid, parent_id)
-      put(tid, parent_id, %{parent | children: List.delete(parent.children, id)})
-    end
-
+    put(tid, id, %{fetch!(tid, id) | parent: nil})
     :ok
   end
 
@@ -238,7 +233,7 @@ defmodule DOM.NodeData.Table do
   def parent(tid, id), do: tid |> fetch!(id) |> NodeData.parent()
 
   @spec children(tid, id) :: [id]
-  def children(tid, id), do: tid |> fetch!(id) |> NodeData.children()
+  def children(tid, id), do: children_by_extent(tid, id)
 
   @doc "A Text/Comment node's value."
   @spec value(tid, id) :: String.t()
@@ -303,65 +298,45 @@ defmodule DOM.NodeData.Table do
   @doc """
   Clone the node (deep when `deep?`) as a detached subtree; returns the new id.
   The clone is a fully extent-labeled tree in its own right (root window
-  `<<0x00>>..<<0x80>>`, descendants carved inside), so appending it later grafts
-  the whole subtree.
+  `<<0x00>>..<<0x80>>`, descendants carved inside from the SOURCE's extent order),
+  so appending it later grafts the whole subtree.
   """
   @spec clone(tid, id, boolean()) :: id
   def clone(tid, id, deep?) do
-    clone_id = clone_records(tid, id, deep?)
-    clone_carve(tid, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
-    clone_id
-  end
-
-  # Copy the record (deep: recurse into children), linking parent pointers, but
-  # WITHOUT extents — clone_carve assigns those in a second pass.
-  defp clone_records(tid, id, deep?) do
-    data = fetch!(tid, id)
     clone_id = make_ref()
-
-    children =
-      if deep? do
-        Enum.map(NodeData.children(data), fn child_id ->
-          child_clone = clone_records(tid, child_id, true)
-          put(tid, child_clone, %{fetch!(tid, child_clone) | parent: clone_id})
-          child_clone
-        end)
-      else
-        []
-      end
-
-    put(tid, clone_id, clone_data(data, children))
+    clone_subtree(tid, id, deep?, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
     clone_id
   end
 
-  # Carve the cloned subtree into fresh extents (mirrors span_carve, nodes tid
-  # only — the clone is detached, no index/span rows yet).
-  defp clone_carve(tid, id, root, parent, start, stop) do
-    put(tid, id, %{fetch!(tid, id) | root: root, parent: parent, start: start, stop: stop})
+  # Copy `src_id`'s record onto `clone_id` with the given extent (tree `root`,
+  # `parent`), then (deep) clone its source children in extent order, carving each
+  # into a fresh sub-interval. Single pass: order from the source's extents,
+  # adjacency from parent pointers — no `children` field.
+  defp clone_subtree(tid, src_id, deep?, clone_id, root, parent, start, stop) do
+    data = %{fetch!(tid, src_id) | parent: parent, root: root, start: start, stop: stop}
+    put(tid, clone_id, clone_reset(data))
 
-    fetch!(tid, id)
-    |> NodeData.children()
-    |> Enum.reduce(start, fn child, prev ->
-      {cstart, cstop} = interval(prev, stop)
-      clone_carve(tid, child, root, id, cstart, cstop)
-      cstop
-    end)
+    if deep? do
+      tid
+      |> children_by_extent(src_id)
+      |> Enum.reduce(start, fn src_child, prev ->
+        {cstart, cstop} = interval(prev, stop)
+        clone_subtree(tid, src_child, true, make_ref(), root, clone_id, cstart, cstop)
+        cstop
+      end)
+    end
   end
 
-  # A clone is a detached subtree; its `root`/`start`/`stop` start nil and are set
-  # by clone_carve. Copying the source's extents would alias a stale window.
-  defp clone_data(%{children: _} = data, children) do
-    %{data | parent: nil, children: children, root: nil, start: nil, stop: nil}
-  end
-
-  defp clone_data(data, _children), do: %{data | parent: nil, root: nil, start: nil, stop: nil}
+  # Clear the transient `children` field on kinds that still carry it (removed once
+  # the field is gone); extents/parent already set by the caller.
+  defp clone_reset(%{children: _} = data), do: %{data | children: []}
+  defp clone_reset(data), do: data
 
   @doc "Descendant ids of `root_id` in tree (document) order — excludes `root_id`."
   @spec descendant_ids(tid, id) :: [id]
   def descendant_ids(tid, root_id) do
     tid
-    |> fetch!(root_id)
-    |> NodeData.children()
+    |> children_by_extent(root_id)
     |> Enum.flat_map(&subtree_ids(tid, &1))
   end
 
@@ -374,7 +349,7 @@ defmodule DOM.NodeData.Table do
   end
 
   defp subtree_ids(tid, id) do
-    [id | tid |> fetch!(id) |> NodeData.children() |> Enum.flat_map(&subtree_ids(tid, &1))]
+    [id | tid |> children_by_extent(id) |> Enum.flat_map(&subtree_ids(tid, &1))]
   end
 
   defp tag_name_match?(tid, id, name) do
@@ -719,23 +694,8 @@ defmodule DOM.NodeData.Table do
   end
 
   # ==========================================================================
-  # Span construction (bulk carve) and grafting (relocation) over the ETS tables
+  # Span rows over the index (mirror of the record extents)
   # ==========================================================================
-
-  @doc """
-  (Re)build span rows + record extents for EVERY tree root (`parent == nil`) from
-  the current `children` field — the bulk allocator run at the post-parse/clone
-  seam. Multi-root: the document, template `content` fragments, fragment/clone
-  roots all appear. O(n).
-  """
-  @spec span_build_all(tid, tid) :: :ok
-  def span_build_all(nodes, index) do
-    for {id, data} <- :ets.tab2list(nodes), NodeData.parent(data) == nil do
-      span_build(nodes, index, id)
-    end
-
-    :ok
-  end
 
   @doc """
   (Re)build the span rows for every labeled node straight from its record extent
@@ -759,74 +719,6 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
-  @doc """
-  Carve `root_id`'s subtree (from the `children` field) into fresh extents rooted
-  at the fixed `<<0x00>>..<<0x80>>` window, writing each record's `root/start/stop`
-  and its span rows. Retracts the subtree's old spans first.
-  """
-  @spec span_build(tid, tid, id) :: :ok
-  def span_build(nodes, index, root_id) do
-    Enum.each(subtree_ids(nodes, root_id), &span_retract(index, &1))
-    span_carve(nodes, index, root_id, root_id, nil, <<0x00>>, <<0x80>>)
-    :ok
-  end
-
-  # Assign `id` the extent `(start, stop)` under `parent` in tree `root`, write its
-  # span rows, then carve its children left-to-right within `(start, stop)`.
-  defp span_carve(nodes, index, id, root, parent, start, stop) do
-    put(nodes, id, %{fetch!(nodes, id) | root: root, parent: parent, start: start, stop: stop})
-    span_put(index, id, %{root: root, parent: parent, start: start, stop: stop})
-
-    fetch!(nodes, id)
-    |> NodeData.children()
-    |> Enum.reduce(start, fn child, prev ->
-      {cstart, cstop} = interval(prev, stop)
-      span_carve(nodes, index, child, root, id, cstart, cstop)
-      cstop
-    end)
-  end
-
-  @doc """
-  Relocate an already-labeled subtree (root `subtree_id`, currently detached in the
-  `children` field under `new_parent_id`) into `new_parent_id`'s child order via
-  grafting: prefix-remap every subtree node's extent onto an anchor in the
-  destination gap, rewriting records + span rows (delete-old + insert-new, since the
-  extent is in the span key). The subtree's new `root` becomes `new_parent`'s root.
-  """
-  @spec span_graft(tid, tid, id, id) :: :ok
-  def span_graft(nodes, index, subtree_id, new_parent_id) do
-    parent = fetch!(nodes, new_parent_id)
-    proot = ns_root(parent, new_parent_id)
-    old = fetch!(nodes, subtree_id)
-    {gap_a, gap_b} = child_gap(nodes, index, new_parent_id, parent, proot, subtree_id)
-
-    ids = subtree_ids(nodes, subtree_id)
-    recs = Enum.map(ids, &fetch!(nodes, &1))
-    grafted = graft(recs, old.start, old.stop, gap_a, gap_b)
-
-    Enum.zip(ids, grafted)
-    |> Enum.each(fn {id, rec} ->
-      span_retract(index, id)
-      new = %{fetch!(nodes, id) | root: proot, start: rec.start, stop: rec.stop}
-      put(nodes, id, new)
-      span_put(index, id, %{root: proot, parent: new.parent, start: rec.start, stop: rec.stop})
-    end)
-
-    :ok
-  end
-
-  # The (a, b) bounds for placing `child_id` among `parent`'s current children (in
-  # the field), skipping `child_id` itself: gap between the sibling before it and
-  # the sibling after it (or the parent's own start/stop at the ends).
-  defp child_gap(nodes, _index, _parent_id, parent, _proot, child_id) do
-    kids = NodeData.children(parent)
-    {before, after_} = Enum.split_while(kids, &(&1 != child_id))
-    after_ = tl(after_)
-    a = if prev = List.last(before), do: fetch!(nodes, prev).stop, else: parent.start
-    b = if next = List.first(after_), do: fetch!(nodes, next).start, else: parent.stop
-    {a, b}
-  end
-
   # ==========================================================================
   # Consistency checking
   # ==========================================================================
@@ -834,31 +726,22 @@ defmodule DOM.NodeData.Table do
   @doc """
   Assert the document's ETS invariants, returning `:ok` or raising:
 
-    * **adjacency integrity** — `parent`/`children` pointers agree bidirectionally
-      (see below);
-    * **id index agreement** (when an `index` tid is given) — the id index exactly
-      mirrors the id attributes of every element row.
+    * **adjacency integrity** — the nested-set extents are a valid tree: every
+      labeled node's extent is strictly contained in its parent's, and the span
+      rows in `index` exactly mirror the record extents (see below);
+    * **id index agreement** (when an `index` tid is given) — the id/class/tag/attr
+      index exactly mirrors the memberships of every element row.
 
-  Adjacency, for every node: each child in `children` appears exactly once and
-  points back (`child.parent == node`); and every node whose non-nil `parent` is
-  `node` appears in `node`'s `children`. A legitimately detached subtree (its
-  root's `parent` is `nil`, internal edges agreeing) passes; a `detach`-and-forgot
-  leak or a dangling pointer fails. Meant to run between operations (e.g. an
-  `on_exit` hook), never mid-operation.
+  Adjacency is now extent-borne (no `children` field): a child's `parent` pointer
+  plus its `(start, stop)` window inside the parent's is the edge. A legitimately
+  detached subtree (root `parent` nil) passes; a stale parent pointer or a span row
+  that disagrees with the record extent fails. Meant to run between operations
+  (e.g. an `on_exit` hook), never mid-operation.
   """
   @spec check_consistency!(tid) :: :ok
   @spec check_consistency!(tid, tid) :: :ok
   def check_consistency!(tid, index \\ nil) do
     rows = :ets.tab2list(tid)
-    parents = Map.new(rows, fn {id, data} -> {id, NodeData.parent(data)} end)
-
-    Enum.each(rows, fn {id, data} ->
-      children = NodeData.children(data)
-      check_no_duplicate_children!(id, children)
-      check_children_point_back!(id, children, parents)
-    end)
-
-    check_parents_are_listed!(rows)
 
     if index do
       check_index!(rows, index)
@@ -868,22 +751,22 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
-  # Span (extent) consistency, three ways:
+  # Span (extent) consistency, three ways, all field-free:
   #   * backward — every id referenced by a span row exists as a node row;
-  #   * forward  — walking each root's tree, each child's extent is contained in
-  #     its parent's and children are in start-key order;
-  #   * agreement — the span-derived ordered children equal the record `children`
-  #     field (the dual-write invariant, until the field is removed).
-  # Only runs once the tree has been extent-labeled (any node carries a `start`);
-  # before that (pure pre-migration trees) there are no span rows to check.
+  #   * containment — each labeled node's extent is strictly inside its parent's,
+  #     and children are in start-key order (implied by the span range scan);
+  #   * mirror — the span rows equal, exactly, the record extents (span_index_all's
+  #     output for the current records).
+  # Only runs once the tree has been extent-labeled (any node carries a `start`).
   defp check_spans!(rows, index) do
     node_ids = MapSet.new(rows, fn {id, _data} -> id end)
     spans = span_rows(index)
 
     if spans != [] do
       check_spans_backward!(spans, node_ids)
+      check_spans_mirror!(rows, spans)
       by_id = Map.new(rows)
-      Enum.each(rows, fn {id, data} -> check_node_spans!(id, data, by_id, index) end)
+      Enum.each(rows, fn {id, data} -> check_node_containment!(id, data, by_id) end)
     end
   end
 
@@ -900,29 +783,34 @@ defmodule DOM.NodeData.Table do
     end)
   end
 
-  # forward + agreement, for one node's children.
-  defp check_node_spans!(id, data, by_id, index) do
-    {root, start, stop} = {ns_root(data, id), ns_start(data), ns_stop(data)}
-    span_kids = span_children(index, root, id, start, stop)
+  # mirror: the span rows are exactly the two rows per labeled record extent — no
+  # missing, stale, or extra span row. This is the invariant span_index_all keeps.
+  defp check_spans_mirror!(rows, spans) do
+    expected =
+      for {id, %{start: start} = data} <- rows,
+          start != nil,
+          kind_key <- [{start, :start}, {ns_stop(data), :stop}] do
+        {key, kind} = kind_key
+        {ns_root(data, id), key, kind, data.parent, id}
+      end
 
-    # agreement: span-derived children == the record children field (same order).
-    field_kids = NodeData.children(data)
-
-    if span_kids != field_kids do
-      raise "span/children disagree for #{inspect(id)}: " <>
-              "spans #{inspect(span_kids)} vs field #{inspect(field_kids)}"
+    if Enum.sort(expected) != Enum.sort(spans) do
+      raise "span rows disagree with record extents: " <>
+              "expected #{inspect(Enum.sort(expected))}, got #{inspect(Enum.sort(spans))}"
     end
+  end
 
-    # forward containment: each child's extent strictly inside this node's.
-    Enum.each(span_kids, fn kid ->
-      k = Map.fetch!(by_id, kid)
+  # containment: each of `id`'s extent-children sits strictly inside its window.
+  defp check_node_containment!(id, data, by_id) do
+    {start, stop} = {ns_start(data), ns_stop(data)}
 
+    for {kid, k} <- by_id, k.parent == id do
       unless start < ns_start(k) and ns_start(k) < ns_stop(k) and ns_stop(k) < stop do
         raise "extent containment violated: child #{inspect(kid)} " <>
                 "#{inspect({ns_start(k), ns_stop(k)})} not inside " <>
                 "#{inspect(id)} #{inspect({start, stop})}"
       end
-    end)
+    end
   end
 
   # A root node (parent nil) is its own tree root; else read the stored root.
@@ -955,33 +843,5 @@ defmodule DOM.NodeData.Table do
   # An index row key minus its trailing membership ref (its {kind, value…} head).
   defp drop_ref(key) do
     key |> Tuple.to_list() |> Enum.drop(-1) |> List.to_tuple()
-  end
-
-  defp check_no_duplicate_children!(id, children) do
-    if children != Enum.uniq(children) do
-      raise "inconsistent tree: #{inspect(id)} lists a child more than once"
-    end
-  end
-
-  defp check_children_point_back!(id, children, parents) do
-    Enum.each(children, fn child_id ->
-      if Map.get(parents, child_id) != id do
-        raise "inconsistent tree: #{inspect(id)} lists child #{inspect(child_id)}, " <>
-                "but the child's parent is #{inspect(Map.get(parents, child_id))}"
-      end
-    end)
-  end
-
-  defp check_parents_are_listed!(rows) do
-    children_of = Map.new(rows, fn {id, data} -> {id, NodeData.children(data)} end)
-
-    Enum.each(rows, fn {id, data} ->
-      parent_id = NodeData.parent(data)
-
-      if parent_id != nil and id not in Map.get(children_of, parent_id, []) do
-        raise "inconsistent tree: #{inspect(id)} has parent #{inspect(parent_id)}, " <>
-                "but that parent does not list it as a child"
-      end
-    end)
   end
 end

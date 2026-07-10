@@ -52,8 +52,14 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
-  describe "check_consistency! — adjacency integrity" do
-    test "passes for a well-formed tree built through the primitives", %{tid: tid} do
+  describe "check_consistency! — adjacency integrity (extent/span borne)" do
+    setup do
+      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
+    end
+
+    # Adjacency is now the nested-set extents mirrored into span rows; the checker
+    # needs the index. Build via the extent-authoritative mutators, sync spans.
+    defp synced_tree(tid, index) do
       doc = Table.create_document(tid)
       ul = Table.create_element(tid, "ul")
       a = Table.create_element(tid, "a")
@@ -61,56 +67,69 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, doc, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
-
-      assert Table.check_consistency!(tid) == :ok
+      Table.reindex(tid, index)
+      Table.span_index_all(tid, index)
+      %{doc: doc, ul: ul, a: a, b: b}
     end
 
-    test "passes for a legitimately detached subtree (nil-rooted, self-consistent)", %{tid: tid} do
-      # A detached fragment: its root has parent: nil, its internal edges agree.
+    test "passes for a well-formed extent-labeled tree", %{tid: tid, index: index} do
+      synced_tree(tid, index)
+      assert Table.check_consistency!(tid, index) == :ok
+    end
+
+    test "passes for a legitimately detached subtree (nil-rooted, self-consistent)",
+         %{tid: tid, index: index} do
       frag = Table.create_element(tid, "section")
       child = Table.create_element(tid, "p")
       Table.append_child(tid, frag, child)
+      Table.reindex(tid, index)
+      Table.span_index_all(tid, index)
 
-      assert Table.check_consistency!(tid) == :ok
+      assert Table.check_consistency!(tid, index) == :ok
     end
 
-    test "passes for a template's content fragment (linked via content, parent nil)", %{tid: tid} do
-      {_template, content} = Table.create_template(tid, [{"id", "x"}])
-      inner = Table.create_element(tid, "span")
-      Table.append_child(tid, content, inner)
+    test "raises when a span row is stale (extent moved but span not resynced)",
+         %{tid: tid, index: index} do
+      ids = synced_tree(tid, index)
+      # Corrupt: shift b's extent on the record without re-mirroring the span rows.
+      b = Table.fetch!(tid, ids.b)
+      Table.put(tid, ids.b, %{b | start: <<0x7A>>, stop: <<0x7B>>})
 
-      assert Table.check_consistency!(tid) == :ok
+      assert_raise RuntimeError, ~r/span rows disagree/i, fn ->
+        Table.check_consistency!(tid, index)
+      end
     end
 
-    test "raises when a child's parent field is stale (in parent.children but points elsewhere)",
-         %{tid: tid} do
-      p = Table.create_element(tid, "ul")
-      c = Table.create_element(tid, "li")
-      Table.append_child(tid, p, c)
-      # Corrupt: c is listed under p, but c.parent points at nil.
-      Table.put(tid, c, %{Table.fetch!(tid, c) | parent: nil})
+    test "raises on extent containment violation (child extent outside parent's)",
+         %{tid: tid, index: index} do
+      ids = synced_tree(tid, index)
+      # Corrupt: push a's extent outside ul's window, and resync spans so the mirror
+      # check passes and the containment check is the one that fires.
+      a = Table.fetch!(tid, ids.a)
+      Table.put(tid, ids.a, %{a | start: <<0x7E>>, stop: <<0x7F>>})
+      Table.span_index_all(tid, index)
 
-      assert_raise RuntimeError, ~r/consisten/i, fn -> Table.check_consistency!(tid) end
+      assert_raise RuntimeError, ~r/containment/i, fn ->
+        Table.check_consistency!(tid, index)
+      end
     end
 
-    test "raises when a node's parent lists it nowhere (detach-and-forgot leak)", %{tid: tid} do
-      p = Table.create_element(tid, "ul")
-      c = Table.create_element(tid, "li")
-      Table.append_child(tid, p, c)
-      # Corrupt: drop c from p.children but leave c.parent == p (a stale detach).
-      Table.put(tid, p, %{Table.fetch!(tid, p) | children: []})
+    test "raises on a dangling span row (points at a non-existent node)",
+         %{tid: tid, index: index} do
+      ids = synced_tree(tid, index)
+      ghost = make_ref()
+      # A span row whose node_id has no nodes-table row (index membership untouched,
+      # so the span-backward check is what fires).
+      Table.span_put(index, ghost, %{
+        root: ids.doc,
+        parent: ids.ul,
+        start: <<0x50>>,
+        stop: <<0x60>>
+      })
 
-      assert_raise RuntimeError, ~r/consisten/i, fn -> Table.check_consistency!(tid) end
-    end
-
-    test "raises when a child appears twice in parent.children", %{tid: tid} do
-      p = Table.create_element(tid, "ul")
-      c = Table.create_element(tid, "li")
-      Table.append_child(tid, p, c)
-      # Corrupt: duplicate the child in the list.
-      Table.put(tid, p, %{Table.fetch!(tid, p) | children: [c, c]})
-
-      assert_raise RuntimeError, ~r/consisten/i, fn -> Table.check_consistency!(tid) end
+      assert_raise RuntimeError, ~r/dangling span/i, fn ->
+        Table.check_consistency!(tid, index)
+      end
     end
   end
 
@@ -361,85 +380,13 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
-  describe "check_consistency!/2 — span (extent) agreement" do
+  describe "span_index_all + span_children_of (spans mirror the extents the mutators wrote)" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
     end
 
-    # Build a root with two children, extent-labeling every node and writing its
-    # span rows + keeping the `children` field in sync. Root extent is the fixed
-    # <<0x00>>..<<0x80>>; children get nested extents inside it.
-    defp extent_tree(tid, index) do
-      root = Table.create_document(tid)
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-
-      label = fn id, parent, root_id, start, stop, kids ->
-        rec = Table.fetch!(tid, id)
-        rec = %{rec | parent: parent, root: root_id, start: start, stop: stop, children: kids}
-        Table.put(tid, id, rec)
-        Table.span_put(index, id, %{root: root_id, parent: parent, start: start, stop: stop})
-        id
-      end
-
-      label.(root, nil, root, <<0x00>>, <<0x80>>, [a, b])
-      label.(a, root, root, <<0x10>>, <<0x20>>, [])
-      label.(b, root, root, <<0x30>>, <<0x40>>, [])
-      # register the element membership rows too (a real tree has both)
-      Table.index_put(index, a, Table.fetch!(tid, a))
-      Table.index_put(index, b, Table.fetch!(tid, b))
-      %{root: root, a: a, b: b}
-    end
-
-    test "passes for a well-formed extent-labeled tree", %{tid: tid, index: index} do
-      extent_tree(tid, index)
-      assert Table.check_consistency!(tid, index) == :ok
-    end
-
-    test "raises when a child's extent is not contained in its parent's",
-         %{tid: tid, index: index} do
-      %{a: a} = extent_tree(tid, index)
-      # push a's stop past the root's stop (0x80) — containment broken
-      rec = Table.fetch!(tid, a)
-      Table.span_retract(index, a)
-      rec = %{rec | stop: <<0x90>>}
-      Table.put(tid, a, rec)
-      Table.span_put(index, a, Map.take(rec, [:root, :parent, :start, :stop]))
-
-      assert_raise RuntimeError, ~r/containment/i, fn -> Table.check_consistency!(tid, index) end
-    end
-
-    test "raises when span-derived children disagree with the children field",
-         %{tid: tid, index: index} do
-      %{b: b} = extent_tree(tid, index)
-      # drop b's span row but keep it in the field + its node row (parent intact),
-      # so field adjacency still holds but the span-derived child list is missing b
-      Table.span_retract(index, b)
-
-      assert_raise RuntimeError, ~r/disagree/i, fn ->
-        Table.check_consistency!(tid, index)
-      end
-    end
-
-    test "raises on a dangling span row (points at a non-existent node)",
-         %{tid: tid, index: index} do
-      %{root: root} = extent_tree(tid, index)
-      ghost = make_ref()
-      # a span row whose node_id has no nodes-table row; field adjacency untouched
-      Table.span_put(index, ghost, %{root: root, parent: root, start: <<0x50>>, stop: <<0x60>>})
-
-      assert_raise RuntimeError, ~r/dangling span/i, fn ->
-        Table.check_consistency!(tid, index)
-      end
-    end
-  end
-
-  describe "span_build_all / span_build (bulk carve from the field)" do
-    setup do
-      {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
-    end
-
-    # Build a field-only tree (children/parent set, NO extents) via the mutators.
+    # Build a tree via the extent-authoritative mutators (which write start/stop
+    # live), no index yet.
     defp field_tree(tid) do
       root = Table.create_document(tid)
       ul = Table.create_element(tid, "ul")
@@ -453,15 +400,14 @@ defmodule DOM.NodeData.TableTest do
       %{root: root, ul: ul, a: a, b: b, c: c}
     end
 
-    test "carves extents so check_consistency! passes and spans mirror the field",
+    test "mirrors extents so check_consistency! passes and span reads match",
          %{tid: tid, index: index} do
       ids = field_tree(tid)
-      # the real parse seam runs both: memberships (reindex) + extents (span_build_all)
+      # the real parse seam runs both: memberships (reindex) + span rows (span_index_all)
       Table.reindex(tid, index)
-      Table.span_build_all(tid, index)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
-      # span-derived children equal the field, at every level
       assert Table.span_children_of(tid, index, ids.root) == [ids.ul]
       assert Table.span_children_of(tid, index, ids.ul) == [ids.a, ids.b]
       assert Table.span_children_of(tid, index, ids.b) == [ids.c]
@@ -475,7 +421,7 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, frag, x)
 
       Table.reindex(tid, index)
-      Table.span_build_all(tid, index)
+      Table.span_index_all(tid, index)
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, frag) == [x]
     end
@@ -596,7 +542,7 @@ defmodule DOM.NodeData.TableTest do
          %{tid: tid, index: index} do
       ids = field_tree(tid)
       Table.reindex(tid, index)
-      Table.span_build_all(tid, index)
+      Table.span_index_all(tid, index)
 
       # Same document order as the span-index read, but derived from the record
       # `start` keys on the nodes tid — no index consulted.
@@ -610,7 +556,7 @@ defmodule DOM.NodeData.TableTest do
          %{tid: tid, index: index} do
       ids = field_tree(tid)
       Table.reindex(tid, index)
-      Table.span_build_all(tid, index)
+      Table.span_index_all(tid, index)
 
       for id <- Map.values(ids) do
         assert Table.children_by_extent(tid, id) == Table.span_children_of(tid, index, id)
@@ -619,7 +565,7 @@ defmodule DOM.NodeData.TableTest do
     end
   end
 
-  describe "span_graft (relocate a labeled subtree in ETS)" do
+  describe "append_child grafts an already-labeled subtree on move" do
     setup do
       {:ok, index: :ets.new(:test_index, [:ordered_set, :private])}
     end
@@ -638,14 +584,12 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, ul, b)
       Table.append_child(tid, b, c)
       Table.append_child(tid, root, target)
-      Table.reindex(tid, index)
-      Table.span_build_all(tid, index)
 
-      # field move: b from ul to target
-      Table.remove_child(tid, ul, b)
+      # append_child(target, b) grafts b's whole ([b, c]) subtree into target,
+      # writing the new extents live — no separate graft/carve step.
       Table.append_child(tid, target, b)
-      # span move: graft b's subtree ([b, c]) into target's (empty) child gap
-      Table.span_graft(tid, index, b, target)
+      Table.reindex(tid, index)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, target) == [b]

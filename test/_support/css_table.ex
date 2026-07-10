@@ -53,8 +53,11 @@ defmodule CSSTable do
     table = :ets.new(:css_table, [:set, :public])
     index = :ets.new(:css_index, [:ordered_set, :public])
     {_next, ids} = insert(table, root, nil, 0, %{})
+    # Carve nested-set extents over the built tree, then mirror them into span rows
+    # (the adjacency the matcher reads) — the shape DOM.CSS.match/3 expects.
+    carve_extents(table, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
     Table.reindex(table, index)
-    Table.span_build_all(table, index)
+    Table.span_index_all(table, index)
     {%{nodes: table, index: index}, ids}
   end
 
@@ -95,5 +98,19 @@ defmodule CSSTable do
       end)
 
     {child_ids, next_index, ids}
+  end
+
+  # Carve nested-set extents over the tree from the (still-present) children field,
+  # mirroring the tree builder's live extent assignment.
+  defp carve_extents(table, id, root, parent, start, stop) do
+    [{^id, data}] = :ets.lookup(table, id)
+    :ets.insert(table, {id, %{data | root: root, parent: parent, start: start, stop: stop}})
+
+    data.children
+    |> Enum.reduce(start, fn child, prev ->
+      {cstart, cstop} = Table.interval(prev, stop)
+      carve_extents(table, child, root, id, cstart, cstop)
+      cstop
+    end)
   end
 end
