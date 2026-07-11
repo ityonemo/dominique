@@ -1351,6 +1351,40 @@ defmodule DOM do
   end
 
   @doc false
+  # `node` contains `other` iff `other` is `node` or a descendant of it.
+  def _node_contains(server, node_id, other_id) do
+    _atomic_ets_op(server, fn nodes, _index ->
+      other_id == node_id or other_id in Table.descendant_ids(nodes, node_id)
+    end)
+  end
+
+  @doc false
+  def _node_is_equal(node_server, node_id, other_server, other_id) do
+    # Structural equality can span two servers; snapshot the other subtree and
+    # compare against this one's live table.
+    other_snapshot = Map.new(_export_subtree(other_server, other_id))
+
+    _atomic_ets_op(node_server, fn nodes, _index ->
+      equal_node?(nodes, node_id, other_snapshot, other_id)
+    end)
+  end
+
+  @doc false
+  # DOCUMENT_POSITION_* bitmask relating `other` to `node`. Same-server only for a
+  # meaningful order; different servers are DISCONNECTED.
+  def _node_compare_document_position(node_server, _node_id, other_server, _other_id)
+      when node_server != other_server do
+    # DISCONNECTED (1) + IMPLEMENTATION_SPECIFIC (32) + a stable direction (PRECEDING 2)
+    1 + 32 + 2
+  end
+
+  def _node_compare_document_position(server, node_id, _other_server, other_id) do
+    _atomic_ets_op(server, fn nodes, _index ->
+      compare_document_position(nodes, node_id, other_id)
+    end)
+  end
+
+  @doc false
   # Registering the same (type, fn, capture) twice is a no-op (DOM semantics):
   # retract any existing match first, then insert.
   def _node_add_event_listener(server, node_id, %DOM.Listener{} = listener) do
@@ -1761,6 +1795,89 @@ defmodule DOM do
 
     [{node_id, node_data}] ++
       Enum.flat_map(Table.children(nodes, node_id), &subtree(nodes, &1))
+  end
+
+  # Structural equality: `a_id` (live in `nodes`) vs `b_id` (a snapshot map from a
+  # possibly-other server). Compares the equality-relevant fields per kind, then
+  # children pairwise in order.
+  defp equal_node?(nodes, a_id, b_snapshot, b_id) do
+    a = fetch_node!(nodes, a_id)
+    b = Map.fetch!(b_snapshot, b_id)
+
+    equal_fields?(a, b) and
+      equal_children?(
+        nodes,
+        Table.children(nodes, a_id),
+        b_snapshot,
+        snapshot_children(b_snapshot, b_id)
+      )
+  end
+
+  # The equality-relevant fields of a record, by struct kind (DOM "equals" §).
+  # Mismatched kinds never share a clause, so they fall to the catch-all.
+  defp equal_fields?(%NodeData.Element{} = a, %NodeData.Element{} = b) do
+    a.namespace == b.namespace and a.local_name == b.local_name and
+      Enum.sort(a.attributes) == Enum.sort(b.attributes)
+  end
+
+  defp equal_fields?(%NodeData.Text{value: v}, %NodeData.Text{value: v}), do: true
+  defp equal_fields?(%NodeData.Comment{value: v}, %NodeData.Comment{value: v}), do: true
+
+  defp equal_fields?(%NodeData.DocumentType{} = a, %NodeData.DocumentType{} = b) do
+    a.name == b.name and a.public_id == b.public_id and a.system_id == b.system_id
+  end
+
+  # Document / DocumentFragment / ShadowRoot: no own fields (children compared
+  # separately). Everything else — mismatched kinds, value mismatches — is unequal.
+  defp equal_fields?(%mod{}, %mod{})
+       when mod in [NodeData.Document, NodeData.DocumentFragment, NodeData.ShadowRoot],
+       do: true
+
+  defp equal_fields?(_a, _b), do: false
+
+  defp equal_children?(nodes, a_children, b_snapshot, b_children) do
+    length(a_children) == length(b_children) and
+      a_children
+      |> Enum.zip(b_children)
+      |> Enum.all?(fn {ac, bc} -> equal_node?(nodes, ac, b_snapshot, bc) end)
+  end
+
+  # A snapshot record's child ids in document order (the snapshot is a flat id->rec
+  # map from _export_subtree; reconstruct children from parent pointers + extents).
+  defp snapshot_children(snapshot, parent_id) do
+    snapshot
+    |> Enum.filter(fn {_id, rec} -> Map.get(rec, :parent) == parent_id end)
+    |> Enum.sort_by(fn {_id, rec} -> rec.start end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  # DOCUMENT_POSITION_* bitmask relating `other_id` to `node_id`, both in `nodes`.
+  defp compare_document_position(_nodes, node_id, node_id), do: 0
+
+  defp compare_document_position(nodes, node_id, other_id) do
+    cond do
+      # different trees (detached subtrees have distinct roots): DISCONNECTED (1) +
+      # IMPLEMENTATION_SPECIFIC (32) + a stable direction (PRECEDING 2).
+      tree_root_of(nodes, node_id) != tree_root_of(nodes, other_id) -> 1 + 32 + 2
+      # other is contained by node: CONTAINED_BY (16) + FOLLOWING (4)
+      other_id in Table.descendant_ids(nodes, node_id) -> 16 + 4
+      # node is contained by other: CONTAINS (8) + PRECEDING (2)
+      node_id in Table.descendant_ids(nodes, other_id) -> 8 + 2
+      # otherwise pure document order via extent start keys
+      doc_order_precedes?(nodes, node_id, other_id) -> 4
+      true -> 2
+    end
+  end
+
+  defp tree_root_of(nodes, node_id) do
+    case Table.parent(nodes, node_id) do
+      nil -> node_id
+      parent_id -> tree_root_of(nodes, parent_id)
+    end
+  end
+
+  defp doc_order_precedes?(nodes, a_id, b_id) do
+    fetch_node!(nodes, a_id).start < fetch_node!(nodes, b_id).start
   end
 
   # ==========================================================================

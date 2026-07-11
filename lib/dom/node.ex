@@ -331,6 +331,66 @@ defmodule DOM.Node do
   defp coerce_one(document, text) when is_binary(text), do: DOM.create_text_node(document, text)
 
   # ==========================================================================
+  # Comparison
+  # ==========================================================================
+
+  @doc "Whether `other` is an inclusive descendant of `node` (`node contains other`)."
+  @spec contains(t(), t() | nil) :: boolean()
+  def contains(%__MODULE__{}, nil), do: false
+
+  def contains(%__MODULE__{server: server} = node, %__MODULE__{server: server} = other) do
+    DOM._node_contains(server, node.node_id, other.node_id)
+  end
+
+  def contains(%__MODULE__{}, %__MODULE__{}), do: false
+
+  @doc "Whether `node` has any child nodes."
+  @spec has_child_nodes(t()) :: boolean()
+  def has_child_nodes(%__MODULE__{} = node), do: child_nodes(node) != []
+
+  # DOM method names (isConnected/isSameNode/isEqualNode) keep the `is_` prefix for
+  # spec fidelity; the credo predicate-naming check is disabled for them.
+
+  @doc "Whether `node` is connected — its shadow-including root is a document."
+  @spec is_connected(t()) :: boolean()
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_connected(%__MODULE__{} = node), do: get_root_node(node, true).type == :document
+
+  @doc "Whether `node` and `other` are the same node (identity)."
+  @spec is_same_node(t(), t() | nil) :: boolean()
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_same_node(%__MODULE__{} = node, %__MODULE__{} = other),
+    do: node.server == other.server and node.node_id == other.node_id
+
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_same_node(%__MODULE__{}, nil), do: false
+
+  @doc """
+  Whether `node` and `other` are structurally equal — same kind, name, attributes
+  (order-insensitive), character-data value, and, recursively, equal children in
+  order. Identity is not required.
+  """
+  @spec is_equal_node(t(), t() | nil) :: boolean()
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{}, nil), do: false
+
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{} = node, %__MODULE__{} = other) do
+    DOM._node_is_equal(node.server, node.node_id, other.server, other.node_id)
+  end
+
+  @doc """
+  A `Node.compareDocumentPosition` bitmask relating `other` to `node`:
+  `DISCONNECTED (1)`, `PRECEDING (2)`, `FOLLOWING (4)`, `CONTAINS (8)`,
+  `CONTAINED_BY (16)`, `IMPLEMENTATION_SPECIFIC (32)`. Disconnected nodes get a
+  stable but implementation-specific direction.
+  """
+  @spec compare_document_position(t(), t()) :: non_neg_integer()
+  def compare_document_position(%__MODULE__{} = node, %__MODULE__{} = other) do
+    DOM._node_compare_document_position(node.server, node.node_id, other.server, other.node_id)
+  end
+
+  # ==========================================================================
   # Inspection
   # ==========================================================================
 
