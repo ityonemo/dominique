@@ -202,7 +202,9 @@ tree. Implemented: type/universal/id/class; attribute (all 6 operators + `i`/`s`
 flags); compound + all 4 combinators; selector lists; `:not`/`:is`/`:where`/`:has`;
 `:root`/`:empty`; `:first/last/only-child`, `:nth-*child(An+B [of S])`; the
 `*-of-type` family; `:lang`/`:dir(ltr|rtl)` (inherited via the ancestor walk);
-`:scope` (bound to the query root in `lib/dom.ex`; `DOM.CSS.bind_scope/2`).
+`:scope` (bound to the query root in `lib/dom.ex`; `DOM.CSS.bind_scope/2`); the
+shadow selectors `:host`/`:host()`/`:host-context()`/`::slotted()` (see the Shadow
+DOM section below).
 
 **Namespaces** (query context, no declared prefixes): a **string** prefix
 (`svg|rect`) raises `ArgumentError` — parse + `DOM.CSS.validate!/1` run in the
@@ -234,6 +236,47 @@ Verified against the Chromium+Firefox oracle (`query_selector_test.exs`).
 - **Policy for unmodelable pseudo-classes** (decide when building `match/3`):
   prefer **match-nothing** over raising — that mirrors browser `querySelector`,
   where e.g. `:hover` simply returns no elements rather than erroring.
+
+## Shadow DOM (structural, Event-free)
+
+A **ShadowRoot is a detached root tree** (`DOM.NodeData.ShadowRoot`: `host`, `mode`,
++ extent fields — `parent: nil`, own extent window, `root == self`) hosted by an
+element, modeled on template `content`. `nodeType` 11 / `nodeName`
+`"#document-fragment"`; only `type/1` (`:shadow_root`) distinguishes it from a
+fragment. The host element carries a `shadow_root` field (parallel to `content`).
+Because the serializer reads `children_by_extent` and never `shadow_root`, the host's
+`outerHTML` **excludes the shadow tree for free**; scoped `query_selector(shadow, …)`
+scopes to the shadow subtree for free via `descendant_ids`.
+
+- **`Element.attach_shadow(el, mode)`** / **`Element.shadow_root(el)`** (closed → nil);
+  attach-twice or a non-host element raises `DOM.NotSupportedError`. Host eligibility
+  = the HTML host-name list + hyphenated custom-element names.
+- **`DOM.ShadowRoot`** — `inner_html`/`set_inner_html` (reuses the fragment path),
+  `host`, `mode`. **`DOM.Slot`** — `assigned_nodes`/`assigned_elements`.
+  **`DOM.Node.get_root_node(node, composed? \\ false)`** (composed jumps shadow→host
+  across nested boundaries) and **`DOM.Node.assigned_slot(node)`**.
+- **Slot assignment is MAINTAINED on mutation** (`DOM.NodeData.Slots`, file
+  `lib/dom/node_data/_slots.ex`), stored as `:slot`/`:assigned`/`:assigned_host` index
+  rows (the established row-family pattern), recomputed at append/insert/remove/
+  `set_attribute`/`set_inner_html`/`attach_shadow` for the affected host, and verified
+  by `check_slots!` in `check_consistency!`. First slot per name wins, host light-tree
+  order; unassigned ⇒ `[]` (fallback content is not "assigned"). This is where
+  `slotchange` would fire — we recompute silently (no event).
+- **Shadow CSS.** The CSS `context` carries `scope_host` (nil outside a shadow scope).
+  `:host`/`:host()`/`:host-context()` match the host (host-context crosses into the
+  light tree via the ancestor walk); combinators cross the shadow boundary via
+  `Query.shadow_parent`/`shadow_ancestors` so `:host p` reaches the shadow tree.
+  **Browser-faithful query boundaries (verified against the oracle):** a shadow-scoped
+  `querySelectorAll` returns ONLY the shadow root's descendants — the host and slotted
+  light-DOM nodes are never candidates. `:host`/`:host()` therefore return nothing from
+  `querySelectorAll` (only interrogable via `matches/2`); `::slotted(…)` matches nothing
+  through the DOM query APIs at all (a pseudo-element, like `::before`) — it only needs
+  to *parse*. `:host-context()` is Chromium-only (Firefox throws), so it is unit-tested
+  via `matches/2`, not against the browser oracle.
+
+**Deferred (Events-coupled):** event retargeting, the composed event path,
+`slotchange`, and imperative `slot.assign()` — all need the Events / manual-slotting
+layer that `NodeData` does not model yet.
 
 ## Before finishing any change
 
