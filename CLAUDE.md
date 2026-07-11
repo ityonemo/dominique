@@ -274,9 +274,26 @@ scopes to the shadow subtree for free via `descendant_ids`.
   to *parse*. `:host-context()` is Chromium-only (Firefox throws), so it is unit-tested
   via `matches/2`, not against the browser oracle.
 
-**Deferred (Events-coupled):** event retargeting, the composed event path,
-`slotchange`, and imperative `slot.assign()` — all need the Events / manual-slotting
-layer that `NodeData` does not model yet.
+**Events (implemented — light DOM + shadow):** the event system is built.
+`DOM.Node.add_event_listener`/`remove_event_listener`/`dispatch_event`,
+`DOM.Event` (`new/2`, `prevent_default`, `stop_propagation`,
+`stop_immediate_propagation`), full capture→target→bubble propagation with
+`eventPhase`/`bubbles`/`cancelable`, `{capture, once, passive}`, and shadow
+**retargeting + composed path** (`composed_path/2`). Listeners are lambdas stored
+as `:listener` index rows (reachable in-server during dispatch via the re-entrancy
+fork); an in-flight event's mutable state lives in a ref-keyed `:active_event` row
+(so nested/re-entrant dispatch coexist). Dispatch runs in `DOM.Events`
+(`lib/dom/_events.ex`). Verified against the Chromium+Firefox oracle
+(`test/integration/event_test.exs`).
+
+**Deferred (need a microtask/event-loop model):** `slotchange` is dispatched
+**asynchronously as a microtask** (verified against both browsers — it fires *after*
+the mutation, not during), so it is blocked on a scheduling layer Dominique does not
+model yet. The same layer is the natural home for `MutationObserver` and
+custom-element reactions. Also still deferred: imperative `slot.assign()`
+(manual slotting), and default actions / interaction & navigation state (`:hover`,
+`:focus`, form submission, checkbox toggle, `preventDefault` actually suppressing
+anything — `preventDefault` currently only sets the flag `dispatchEvent` returns).
 
 ## Before finishing any change
 
