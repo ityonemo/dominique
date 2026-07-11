@@ -136,4 +136,71 @@ defmodule Integration.RangeTest do
       assert %{"after_insert" => after_insert, "after_remove" => after_remove} == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/dom/ranges"
+
+    # cloneContents: the fragment's serialized innerHTML matches the browser across
+    # same-text, whole-child, and partial-both-ends ranges.
+    @js """
+    return await page.evaluate(() => {
+      const html =
+        "<div id='d'><p id='p1'>hello</p><p id='p2'>world</p><p id='p3'>!</p></div>";
+      const frag = (setup) => {
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const wrap = doc.createElement("div");
+        wrap.appendChild(setup(doc).cloneContents());
+        return wrap.innerHTML;
+      };
+
+      return {
+        same_text: frag((doc) => {
+          const t = doc.getElementById("p1").firstChild;
+          const r = doc.createRange(); r.setStart(t, 1); r.setEnd(t, 4); return r;
+        }),
+        whole_children: frag((doc) => {
+          const d = doc.getElementById("d");
+          const r = doc.createRange(); r.setStart(d, 1); r.setEnd(d, 3); return r;
+        }),
+        partial_both: frag((doc) => {
+          const t1 = doc.getElementById("p1").firstChild;
+          const t2 = doc.getElementById("p2").firstChild;
+          const r = doc.createRange(); r.setStart(t1, 2); r.setEnd(t2, 3); return r;
+        })
+      };
+    });
+    """
+
+    test "cloneContents matches the browser", %{js: expected} do
+      html = "<div id='d'><p id='p1'>hello</p><p id='p2'>world</p><p id='p3'>!</p></div>"
+
+      frag = fn setup ->
+        doc = DOM.new(html)
+        wrap = DOM.create_element(doc, "div")
+        Node.append_child(wrap, Range.clone_contents(setup.(doc)))
+        DOM.Element.inner_html(wrap)
+      end
+
+      result = %{
+        "same_text" =>
+          frag.(fn doc ->
+            [t] = Node.child_nodes(DOM.query_selector(doc, "#p1"))
+            Range.create_range(doc) |> Range.set_start(t, 1) |> Range.set_end(t, 4)
+          end),
+        "whole_children" =>
+          frag.(fn doc ->
+            d = DOM.query_selector(doc, "#d")
+            Range.create_range(doc) |> Range.set_start(d, 1) |> Range.set_end(d, 3)
+          end),
+        "partial_both" =>
+          frag.(fn doc ->
+            [t1] = Node.child_nodes(DOM.query_selector(doc, "#p1"))
+            [t2] = Node.child_nodes(DOM.query_selector(doc, "#p2"))
+            Range.create_range(doc) |> Range.set_start(t1, 2) |> Range.set_end(t2, 3)
+          end)
+      }
+
+      assert result == expected
+    end
+  end
 end

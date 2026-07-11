@@ -366,6 +366,31 @@ defmodule DOM do
     end
   end
 
+  @doc false
+  def _range_clone_contents(server, range_id) do
+    GenServer.call(server, {:range_clone_contents, range_id})
+  end
+
+  defp range_clone_contents_impl(range_id, _from, state) do
+    {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
+    clones = DOM.Range.Contents.clone(state.nodes, sc, so, ec, eo)
+
+    fragment_id = make_ref()
+    Table.put(state.nodes, fragment_id, %NodeData.DocumentFragment{})
+    Table.append_children(state.nodes, fragment_id, clones)
+    Table.reindex(state.nodes, state.index)
+    resync_spans(state)
+
+    {:reply, node_handle(state.nodes, fragment_id), state}
+  end
+
+  # Resolve a range's stored boundaries into `{start_container_id, start_offset,
+  # end_container_id, end_offset}` via the extent-key reverse lookup.
+  defp range_endpoints!(nodes, index, range_id) do
+    {{start_key, so}, {stop_key, eo}} = Table.range_boundaries(index, range_id)
+    {Table.node_at_start_key(nodes, start_key), so, Table.node_at_start_key(nodes, stop_key), eo}
+  end
+
   # Insert `new_id` immediately after `ref_id` under `parent_id` (append if last).
   defp insert_after(nodes, parent_id, new_id, ref_id) do
     kids = Table.children(nodes, parent_id)
@@ -1356,6 +1381,10 @@ defmodule DOM do
 
   def handle_call({:text_split, node_id, offset}, from, state) do
     text_split_impl(node_id, offset, from, state)
+  end
+
+  def handle_call({:range_clone_contents, range_id}, from, state) do
+    range_clone_contents_impl(range_id, from, state)
   end
 
   @impl true

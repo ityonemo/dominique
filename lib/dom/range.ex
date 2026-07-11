@@ -206,6 +206,19 @@ defmodule DOM.Range do
     end
   end
 
+  # ==========================================================================
+  # Content operations
+  # ==========================================================================
+
+  @doc """
+  Return a DocumentFragment holding a COPY of the range's contents (the source
+  tree is untouched). A collapsed range yields an empty fragment.
+  """
+  @spec clone_contents(t()) :: Node.t()
+  def clone_contents(%__MODULE__{} = range) do
+    DOM._range_clone_contents(range.server, range.range_id)
+  end
+
   # -1 if point is before the range, 1 if after, 0 if within (inclusive).
   defp point_vs_range(point, start, stop) do
     cond do

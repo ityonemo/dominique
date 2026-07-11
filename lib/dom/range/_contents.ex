@@ -1,0 +1,183 @@
+defmodule DOM.Range.Contents do
+  @moduledoc false
+
+  # The WHATWG Range "clone the contents" / "extract" algorithms, over the nodes
+  # ETS tid. Boundaries are `{container_id, offset}` (offset = child index for
+  # element/document/fragment, char index for text/comment). `clone/5` builds a
+  # detached fragment of copies; the fragment's children are returned as a list of
+  # freshly-cloned node ids (the caller appends them to a DocumentFragment).
+  #
+  # Every produced clone is a detached, fully extent-labeled tree (via Table.clone
+  # or a fresh Text node), ready to be placed under the fragment.
+
+  alias DOM.NodeData
+  alias DOM.NodeData.Table
+
+  @doc """
+  Clone the contents of the range `[(sc, so), (ec, eo)]` into a list of detached
+  node ids (document order) to append to a fragment. Pure copy — the source tree
+  is untouched.
+  """
+  @spec clone(Table.tid(), Table.id(), non_neg_integer(), Table.id(), non_neg_integer()) ::
+          [Table.id()]
+  def clone(tid, sc, so, ec, eo) do
+    cond do
+      # collapsed
+      sc == ec and so == eo ->
+        []
+
+      # both boundaries in the same character-data node: one clone of the substring
+      sc == ec and character_data?(tid, sc) ->
+        [clone_char_slice(tid, sc, so, eo)]
+
+      :else ->
+        clone_spanning(tid, sc, so, ec, eo)
+    end
+  end
+
+  # The general case: start container, fully-contained middle children, end
+  # container — relative to their common ancestor.
+  defp clone_spanning(tid, sc, so, ec, eo) do
+    common = common_ancestor(tid, sc, ec)
+
+    start_clone = clone_start_side(tid, common, sc, so, ec, eo)
+    middle = clone_contained_children(tid, common, sc, so, ec, eo)
+    end_clone = clone_end_side(tid, common, sc, ec, eo)
+
+    start_clone ++ middle ++ end_clone
+  end
+
+  # Clone for the start boundary side: the partially-contained start node (the
+  # child of `common` on the path to sc), unless sc IS `common` (no partial start).
+  # If that node is character data (sc itself), clone its tail slice; if it is an
+  # element, shallow-clone it and recurse into the sub-range from (sc, so) to the
+  # end of the node.
+  defp clone_start_side(tid, common, sc, so, _ec, _eo) do
+    if sc == common do
+      []
+    else
+      child = child_on_path(tid, common, sc)
+
+      if child == sc and character_data?(tid, sc) do
+        [clone_char_slice(tid, sc, so, char_len(tid, sc))]
+      else
+        clone = shallow_clone(tid, child)
+        sub = clone(tid, sc, so, child, max_offset(tid, child))
+        append_all(tid, clone, sub)
+        [clone]
+      end
+    end
+  end
+
+  # Clone for the end boundary side, mirror of the start side: from the start of
+  # the end path node to (ec, eo).
+  defp clone_end_side(tid, common, _sc, ec, eo) do
+    if ec == common do
+      []
+    else
+      child = child_on_path(tid, common, ec)
+
+      if child == ec and character_data?(tid, ec) do
+        [clone_char_slice(tid, ec, 0, eo)]
+      else
+        clone = shallow_clone(tid, child)
+        sub = clone(tid, child, 0, ec, eo)
+        append_all(tid, clone, sub)
+        [clone]
+      end
+    end
+  end
+
+  # Deep-clone every child of `common` fully contained in the range. A child is
+  # contained when it is strictly after the start boundary and strictly before the
+  # end boundary. The boundaries are expressed as child indices of `common`: when a
+  # boundary's container IS `common`, its offset is the index directly; otherwise
+  # the boundary sits inside the path child (partially contained, handled by the
+  # start/end sides), so contained children begin just after / end just before it.
+  defp clone_contained_children(tid, common, sc, so, ec, eo) do
+    kids = Table.children_by_extent(tid, common)
+    from = contained_lo(tid, common, sc, so, kids)
+    to = contained_hi(tid, common, ec, eo, kids)
+
+    kids
+    |> Enum.slice(from, max(to - from, 0))
+    |> Enum.map(&Table.clone(tid, &1, true))
+  end
+
+  # First fully-contained child index: `so` when sc is common (the boundary is a
+  # child index), else index-after the partially-contained start path child.
+  defp contained_lo(tid, common, sc, so, kids) do
+    if sc == common, do: so, else: index_of(kids, child_on_path(tid, common, sc)) + 1
+  end
+
+  # One-past the last fully-contained child index: `eo` when ec is common, else the
+  # index of the partially-contained end path child (which is not fully contained).
+  defp contained_hi(tid, common, ec, eo, kids) do
+    if ec == common, do: eo, else: index_of(kids, child_on_path(tid, common, ec))
+  end
+
+  defp index_of(list, elem), do: Enum.find_index(list, &(&1 == elem))
+
+  # ==========================================================================
+  # Path / containment helpers (via extents)
+  # ==========================================================================
+
+  # The child of `ancestor` on the path down to `node` (node itself if it is a
+  # direct child; nil if node == ancestor).
+  defp child_on_path(_tid, ancestor, ancestor), do: nil
+
+  defp child_on_path(tid, ancestor, node) do
+    case Table.parent(tid, node) do
+      ^ancestor -> node
+      nil -> nil
+      parent -> child_on_path(tid, ancestor, parent)
+    end
+  end
+
+  # The common ancestor of two nodes (deepest node containing both).
+  defp common_ancestor(tid, a, b) do
+    a_chain = ancestor_chain(tid, a)
+    b_set = MapSet.new(ancestor_chain(tid, b))
+    Enum.find(a_chain, &MapSet.member?(b_set, &1))
+  end
+
+  defp ancestor_chain(tid, id) do
+    case Table.parent(tid, id) do
+      nil -> [id]
+      parent -> [id | ancestor_chain(tid, parent)]
+    end
+  end
+
+  # ==========================================================================
+  # Clone primitives
+  # ==========================================================================
+
+  # A fresh Text/Comment node holding `value[from..to]` (a slice of char data).
+  defp clone_char_slice(tid, id, from, to) do
+    data = Table.fetch!(tid, id)
+    slice = String.slice(data.value, from, to - from)
+    new_char_node(tid, data, slice)
+  end
+
+  defp new_char_node(tid, %NodeData.Text{}, value), do: Table.create_text(tid, value)
+  defp new_char_node(tid, %NodeData.Comment{}, value), do: Table.create_comment(tid, value)
+
+  defp shallow_clone(tid, id), do: Table.clone(tid, id, false)
+
+  defp append_all(tid, parent, ids), do: Enum.each(ids, &Table.append_child(tid, parent, &1))
+
+  # ==========================================================================
+  # Small reads
+  # ==========================================================================
+
+  defp character_data?(tid, id) do
+    case Table.fetch!(tid, id) do
+      %NodeData.Text{} -> true
+      %NodeData.Comment{} -> true
+      _ -> false
+    end
+  end
+
+  defp char_len(tid, id), do: String.length(Table.fetch!(tid, id).value)
+  defp max_offset(tid, id), do: Table.max_boundary_offset(tid, id)
+end
