@@ -46,4 +46,39 @@ defmodule Integration.ShadowTest do
       assert result == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/shadow-dom"
+
+    # Shadow innerHTML round-trips, and the host's outerHTML/innerHTML exclude the
+    # shadow tree entirely.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString("<div id='d'>light</div>", "text/html");
+      const d = doc.getElementById("d");
+      const s = d.attachShadow({ mode: "open" });
+      s.innerHTML = "<p>shadow</p><span>x</span>";
+      return {
+        shadow_html: s.innerHTML,
+        host_outer: d.outerHTML,
+        host_inner: d.innerHTML
+      };
+    });
+    """
+
+    test "shadow innerHTML round-trips and the host excludes it", %{js: expected} do
+      doc = DOM.new("<div id='d'>light</div>")
+      d = DOM.query_selector(doc, "#d")
+      s = Element.attach_shadow(d, :open)
+      DOM.ShadowRoot.set_inner_html(s, "<p>shadow</p><span>x</span>")
+
+      result = %{
+        "shadow_html" => DOM.ShadowRoot.inner_html(s),
+        "host_outer" => Element.outer_html(d),
+        "host_inner" => Element.inner_html(d)
+      }
+
+      assert result == expected
+    end
+  end
 end

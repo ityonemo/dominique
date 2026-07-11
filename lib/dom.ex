@@ -1295,6 +1295,46 @@ defmodule DOM do
   end
 
   @doc false
+  def _shadow_inner_html(server, node_id) do
+    GenServer.call(server, {:shadow_inner_html, node_id})
+  end
+
+  # A shadow root has no tag; serialize its children with an empty container name
+  # (so no raw-text handling), like a DocumentFragment.
+  defp shadow_inner_html_impl(node_id, _from, state) do
+    child_ids = Table.children_by_extent(state.nodes, node_id)
+    iodata = DOM.HTML.children("", child_ids, state.nodes)
+    {:reply, IO.iodata_to_binary(iodata), state}
+  end
+
+  @doc false
+  def _shadow_set_inner_html(server, node_id, html) do
+    GenServer.call(server, {:shadow_set_inner_html, node_id, html})
+  end
+
+  # Fragment-parse `html` in a default (div-like) context and replace the shadow
+  # root's children with the result. Reuses the element innerHTML machinery.
+  defp shadow_set_inner_html_impl(node_id, html, _from, state) do
+    root = fragment_root_for(html, %{name: "div", namespace: :html}, state)
+
+    Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
+    Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
+
+    resync_spans(state)
+    {:reply, :ok, state}
+  end
+
+  @doc false
+  def _shadow_host(%Node{server: server, node_id: node_id}) do
+    GenServer.call(server, {:shadow_host, node_id})
+  end
+
+  defp shadow_host_impl(node_id, _from, state) do
+    host_id = Table.shadow_host(state.nodes, node_id)
+    {:reply, host_id && node_handle(state.nodes, host_id), state}
+  end
+
+  @doc false
   def _element_set_outer_html(server, node_id, html) do
     case GenServer.call(server, {:set_outer_html, node_id, html}) do
       :ok -> :ok
@@ -1596,6 +1636,18 @@ defmodule DOM do
 
   def handle_call({:shadow_root, node_id}, from, state) do
     shadow_root_impl(node_id, from, state)
+  end
+
+  def handle_call({:shadow_inner_html, node_id}, from, state) do
+    shadow_inner_html_impl(node_id, from, state)
+  end
+
+  def handle_call({:shadow_set_inner_html, node_id, html}, from, state) do
+    shadow_set_inner_html_impl(node_id, html, from, state)
+  end
+
+  def handle_call({:shadow_host, node_id}, from, state) do
+    shadow_host_impl(node_id, from, state)
   end
 
   def handle_call({:create, node_data}, from, state) do
