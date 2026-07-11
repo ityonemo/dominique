@@ -212,13 +212,31 @@ CALLER's process (`DOM.query_selector*`/`matches`), so the document server never
 crashes on a bad selector. `*|`/bare match any namespace; `|` (`:none`, the null
 namespace) matches nothing, since every parsed element is `:html`/`:svg`/`:mathml`.
 
+**Attribute namespaces (`DOM.Namespace`).** An attribute is `{key, value}` where the
+KEY is a plain qualified-name **string** (the 99% case, unchanged) OR a `{prefix,
+local, url}` **triple** for a namespaced attribute; the value is always a plain
+string. Plain attributes keep bare-string keys, so all value readers, the `:id`/
+`:class`/`:attr` index, and CSS attribute matching are untouched (CSS matches
+string-keyed attrs only and correctly ignores triples). `DOM.NodeData.Element`
+carries the key helpers: `qualified_name/1` (DOM colon form, used by the serializer
++ `getAttributeNames`), `dat_name/1` (html5lib **space** form `xlink href`, used by
+`test/_support/dat_outline.ex` so the tree-construction suite still passes),
+`matches_key?/2`. The parser's foreign-content adjustment builds triples via
+`DOM.Namespace` (the closed element-ns + xlink/xml/xmlns tables). API:
+`DOM.create_element_ns`, `Element.get_attribute_ns`/`set_attribute_ns` (identity =
+`(url, local)`; overwrite KEEPS the old prefix per WHATWG; same-prefix-different-url
+are two attributes), `lookup_prefix`/`lookup_namespace_uri` (nil in HTML docs —
+`xmlns:*` is a plain attribute there, matching both browsers).
+
 **Implemented — derivable UI/state pseudo-classes** (element name + attributes +
 ancestry, no runtime state; `DOM.CSS.PseudoClass` + `DOM.CSS.Query`): `:enabled`/
 `:disabled` (own `disabled`, `fieldset[disabled]` inheritance with the first-
 `<legend>` exception, `optgroup[disabled]` for options), `:required`/`:optional`,
 `:checked` (the `checked`/`selected` attribute), `:default` (checked input /
-selected option), `:link` (`a`/`area` with `href`), `:read-write`/`:read-only`.
-Verified against the Chromium+Firefox oracle (`query_selector_test.exs`).
+selected option / **the form's first submit-capable control**), `:link` (`a`/`area`
+with `href`), `:read-write`/`:read-only` (**contenteditable inherited via the
+ancestor walk**, honoring `contenteditable=false`). Verified against the
+Chromium+Firefox oracle (`query_selector_test.exs`, `derivable_pseudo_test.exs`).
 
 **Deferred — intended to be implemented:**
 
@@ -231,8 +249,7 @@ Verified against the Chromium+Firefox oracle (`query_selector_test.exs`).
   `NodeData` models today**. **We DO want to support these**, which will require
   modeling that state (an input/focus model, HTML element interfaces, a
   navigation/URL model — downstream of Events / a state layer). Until then they
-  are unmatchable. (Also deferred within `:default`: the "default submit button"
-  case, which needs a form-tree walk.)
+  are unmatchable.
 - **Policy for unmodelable pseudo-classes** (decide when building `match/3`):
   prefer **match-nothing** over raising — that mirrors browser `querySelector`,
   where e.g. `:hover` simply returns no elements rather than erroring.
