@@ -425,6 +425,144 @@ defmodule DOM do
     {:reply, :ok, state}
   end
 
+  @doc false
+  def _range_insert_node(server, range_id, node_id) do
+    GenServer.call(server, {:range_insert_node, range_id, node_id})
+  end
+
+  defp range_insert_node_impl(range_id, node_id, _from, state) do
+    {{start_key, so}, _stop} = Table.range_boundaries(state.index, range_id)
+    container = Table.node_at_start_key(state.nodes, start_key)
+    do_insert_at_boundary(state, container, so, node_id)
+    {:reply, :ok, state}
+  end
+
+  # Insert node_id at boundary (container, offset). Text container: split at offset
+  # (unless at an edge) and insert before the tail. Element/fragment: insert at the
+  # child index `offset`.
+  defp do_insert_at_boundary(state, container, offset, node_id) do
+    if Table.type(state.nodes, container) in [:text, :comment] do
+      insert_into_text(state, container, offset, node_id)
+    else
+      insert_at_child_index(state, container, offset, node_id)
+    end
+  end
+
+  defp insert_into_text(state, text_id, offset, node_id) do
+    parent_id = Table.parent(state.nodes, text_id)
+
+    reference =
+      cond do
+        offset == 0 -> text_id
+        offset >= String.length(Table.value(state.nodes, text_id)) -> nil
+        :else -> split_text_for_insert(state, text_id, offset)
+      end
+
+    insert_relative(state, parent_id, node_id, reference)
+  end
+
+  # Split `text_id` at `offset`; return the tail node to insert before.
+  defp split_text_for_insert(state, text_id, offset) do
+    {before, rest} = String.split_at(Table.value(state.nodes, text_id), offset)
+    Table.set_value(state.nodes, text_id, before)
+    tail = Table.create_text(state.nodes, rest)
+    insert_after(state.nodes, Table.parent(state.nodes, text_id), tail, text_id)
+    tail
+  end
+
+  defp insert_at_child_index(state, container, offset, node_id) do
+    reference = Enum.at(Table.children(state.nodes, container), offset)
+    insert_relative(state, container, node_id, reference)
+  end
+
+  # Insert node_id under parent before `reference` (append when nil), routing
+  # through the server impls so hierarchy + range adjustment run.
+  defp insert_relative(state, parent_id, node_id, reference) do
+    if reference do
+      insert_before_impl(parent_id, node_id, reference, nil, state)
+    else
+      append_child_impl(parent_id, node_id, nil, state)
+    end
+  end
+
+  @doc false
+  def _range_surround_contents(server, range_id, element_id) do
+    case GenServer.call(server, {:range_surround_contents, range_id, element_id}) do
+      :ok -> :ok
+      {:error, :invalid_state} -> raise DOM.InvalidStateError
+    end
+  end
+
+  defp range_surround_contents_impl(range_id, element_id, _from, state) do
+    {sc, _so, ec, _eo} = range_endpoints!(state.nodes, state.index, range_id)
+
+    if partially_selects_non_text?(state.nodes, sc, ec) do
+      {:reply, {:error, :invalid_state}, state}
+    else
+      # extract -> append into element -> insert element at the range start
+      {:reply, fragment, _state} = range_extract_contents_impl(range_id, nil, state)
+
+      Enum.each(
+        Table.children(state.nodes, fragment.node_id),
+        &Table.append_child(state.nodes, element_id, &1)
+      )
+
+      Table.reindex(state.nodes, state.index)
+      resync_spans(state)
+
+      {{start_key, so2}, _} = Table.range_boundaries(state.index, range_id)
+      container = Table.node_at_start_key(state.nodes, start_key)
+      do_insert_at_boundary(state, container, so2, element_id)
+
+      # select the inserted element
+      select_element_in_range(state, range_id, element_id)
+      {:reply, :ok, state}
+    end
+  end
+
+  # A range partially selects a non-Text node when any PARTIALLY-CONTAINED node is
+  # not character data. A node is partially contained when it contains one boundary
+  # endpoint but not the other — i.e. the nodes on each boundary's path from the
+  # container up to (excluding) the common ancestor. surroundContents forbids this.
+  defp partially_selects_non_text?(nodes, sc, ec) do
+    common = range_common_ancestor(nodes, sc, ec)
+
+    (partially_contained_chain(nodes, sc, common) ++ partially_contained_chain(nodes, ec, common))
+    |> Enum.any?(&(Table.type(nodes, &1) not in [:text, :comment]))
+  end
+
+  # The nodes from `boundary` up to (but not including) `common`.
+  defp partially_contained_chain(_nodes, common, common), do: []
+
+  defp partially_contained_chain(nodes, node, common) do
+    case Table.parent(nodes, node) do
+      ^common -> [node]
+      nil -> [node]
+      parent -> [node | partially_contained_chain(nodes, parent, common)]
+    end
+  end
+
+  defp range_common_ancestor(nodes, a, b) do
+    a_chain = ancestor_or_self_chain(nodes, a)
+    b_set = MapSet.new(ancestor_or_self_chain(nodes, b))
+    Enum.find(a_chain, &MapSet.member?(b_set, &1))
+  end
+
+  defp ancestor_or_self_chain(nodes, id) do
+    case Table.parent(nodes, id) do
+      nil -> [id]
+      parent -> [id | ancestor_or_self_chain(nodes, parent)]
+    end
+  end
+
+  # After surround, set the range to select `element_id` (start before, end after).
+  defp select_element_in_range(state, range_id, element_id) do
+    parent_id = Table.parent(state.nodes, element_id)
+    at = child_index(state.nodes, parent_id, element_id)
+    pkey = Table.fetch!(state.nodes, parent_id).start
+    Table.range_put(state.index, range_id, {pkey, at}, {pkey, at + 1})
+  end
+
   # Collapse `range_id` onto its start boundary (after extract/delete, per spec).
   defp collapse_range_to_start(state, range_id) do
     {{start_key, so}, _stop} = Table.range_boundaries(state.index, range_id)
@@ -1446,6 +1584,14 @@ defmodule DOM do
 
   def handle_call({:range_delete_contents, range_id}, from, state) do
     range_delete_contents_impl(range_id, from, state)
+  end
+
+  def handle_call({:range_insert_node, range_id, node_id}, from, state) do
+    range_insert_node_impl(range_id, node_id, from, state)
+  end
+
+  def handle_call({:range_surround_contents, range_id, element_id}, from, state) do
+    range_surround_contents_impl(range_id, element_id, from, state)
   end
 
   @impl true

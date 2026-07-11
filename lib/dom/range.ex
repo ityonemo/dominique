@@ -234,6 +234,25 @@ defmodule DOM.Range do
     DOM._range_delete_contents(range.server, range.range_id)
   end
 
+  @doc """
+  Insert `node` at the range's start boundary (splitting the start text node when
+  the boundary is mid-text). Returns `:ok`.
+  """
+  @spec insert_node(t(), Node.t()) :: :ok
+  def insert_node(%__MODULE__{} = range, %Node{} = node) do
+    DOM._range_insert_node(range.server, range.range_id, node.node_id)
+  end
+
+  @doc """
+  Wrap the range's contents in `element`: extract the contents, append them to
+  `element`, then insert `element` at the range's start. Raises
+  `InvalidStateError` when the range partially selects a non-Text node.
+  """
+  @spec surround_contents(t(), Node.t()) :: :ok
+  def surround_contents(%__MODULE__{} = range, %Node{type: :element} = element) do
+    DOM._range_surround_contents(range.server, range.range_id, element.node_id)
+  end
+
   # -1 if point is before the range, 1 if after, 0 if within (inclusive).
   defp point_vs_range(point, start, stop) do
     cond do

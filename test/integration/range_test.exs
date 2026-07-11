@@ -267,4 +267,49 @@ defmodule Integration.RangeTest do
       assert %{"extract" => extract.(), "delete_source" => del.()} == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/dom/ranges"
+
+    # insertNode (mid-text split) and surroundContents (wrap) match the browser.
+    @js """
+    return await page.evaluate(() => {
+      const insert = () => {
+        const doc = new DOMParser().parseFromString("<p id='p'>hello</p>", "text/html");
+        const t = doc.getElementById("p").firstChild;
+        const r = doc.createRange(); r.setStart(t, 2); r.setEnd(t, 2);
+        r.insertNode(doc.createElement("span"));
+        return doc.getElementById("p").innerHTML;
+      };
+      const surround = () => {
+        const doc = new DOMParser().parseFromString("<p id='p'>hello world</p>", "text/html");
+        const t = doc.getElementById("p").firstChild;
+        const r = doc.createRange(); r.setStart(t, 6); r.setEnd(t, 11);
+        r.surroundContents(doc.createElement("mark"));
+        return doc.getElementById("p").innerHTML;
+      };
+      return { insert: insert(), surround: surround() };
+    });
+    """
+
+    test "insertNode / surroundContents match the browser", %{js: expected} do
+      insert = fn ->
+        doc = DOM.new("<p id='p'>hello</p>")
+        [t] = Node.child_nodes(DOM.query_selector(doc, "#p"))
+        r = Range.create_range(doc) |> Range.set_start(t, 2) |> Range.set_end(t, 2)
+        Range.insert_node(r, DOM.create_element(doc, "span"))
+        DOM.Element.inner_html(DOM.query_selector(doc, "#p"))
+      end
+
+      surround = fn ->
+        doc = DOM.new("<p id='p'>hello world</p>")
+        [t] = Node.child_nodes(DOM.query_selector(doc, "#p"))
+        r = Range.create_range(doc) |> Range.set_start(t, 6) |> Range.set_end(t, 11)
+        Range.surround_contents(r, DOM.create_element(doc, "mark"))
+        DOM.Element.inner_html(DOM.query_selector(doc, "#p"))
+      end
+
+      assert %{"insert" => insert.(), "surround" => surround.()} == expected
+    end
+  end
 end
