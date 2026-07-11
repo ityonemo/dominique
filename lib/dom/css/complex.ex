@@ -38,14 +38,17 @@ defmodule DOM.CSS.Complex do
     end)
   end
 
+  # :child / :descendant cross the shadow boundary: the parent of a shadow root's
+  # child is (for selector purposes) the host, so `:host > p` and `:host p` match
+  # the shadow tree.
   defp related(%{nodes: nodes}, :child, node_id) do
-    case Query.parent(nodes, node_id) do
+    case Query.shadow_parent(nodes, node_id) do
       nil -> []
       parent_id -> [parent_id]
     end
   end
 
-  defp related(%{nodes: nodes}, :descendant, node_id), do: Query.ancestors(nodes, node_id)
+  defp related(%{nodes: nodes}, :descendant, node_id), do: Query.shadow_ancestors(nodes, node_id)
 
   defp related(context, :next_sibling, node_id) do
     context |> Query.prev_element_siblings(node_id) |> Enum.take(1)

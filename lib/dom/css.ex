@@ -45,7 +45,11 @@ defprotocol DOM.CSS do
   `index` (the id/class `:ordered_set` index). Threaded through `match/3` so leaf
   matchers can reach either — most only need `nodes`; `#id`/`.class` read `index`.
   """
-  @type context :: %{nodes: :ets.tid(), index: :ets.tid()}
+  @type context :: %{
+          nodes: :ets.tid(),
+          index: :ets.tid(),
+          scope_host: reference() | nil
+        }
 
   @doc """
   Matches this selector against `context` (see `t:context/0`), reducing

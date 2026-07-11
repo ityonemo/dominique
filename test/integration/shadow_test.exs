@@ -163,4 +163,50 @@ defmodule Integration.ShadowTest do
       assert result == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/shadow-dom"
+
+    # :host / :host() / :host-context() matching from within the shadow scope.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<section class='dark'><div id='host' class='themed'></div></section>", "text/html");
+      const host = doc.getElementById("host");
+      const s = host.attachShadow({ mode: "open" });
+      s.innerHTML = "<p id='p'>x</p>";
+      const ids = (sel) => Array.from(s.querySelectorAll(sel), n => n.id);
+      // NOTE: :host-context() is Chromium-only (Firefox throws), so it is verified
+      // in the unit suite, not against the (disagreeing) browser oracle.
+      return {
+        host: ids(":host"),
+        host_match: ids(":host(.themed)"),
+        host_nomatch: ids(":host(.nope)"),
+        host_desc: ids(":host p")
+      };
+    });
+    """
+
+    test ":host selectors match the browser", %{js: expected} do
+      doc =
+        DOM.new("<section class='dark'><div id='host' class='themed'></div></section>")
+
+      host = DOM.query_selector(doc, "#host")
+      s = Element.attach_shadow(host, :open)
+      DOM.ShadowRoot.set_inner_html(s, "<p id='p'>x</p>")
+
+      ids = fn sel ->
+        s |> DOM.query_selector_all(sel) |> Enum.map(&Element.get_attribute(&1, "id"))
+      end
+
+      result = %{
+        "host" => ids.(":host"),
+        "host_match" => ids.(":host(.themed)"),
+        "host_nomatch" => ids.(":host(.nope)"),
+        "host_desc" => ids.(":host p")
+      }
+
+      assert result == expected
+    end
+  end
 end

@@ -102,6 +102,33 @@ defmodule DOM.CSS.Query do
     end
   end
 
+  @doc """
+  Like `parent/2`, but crosses a shadow boundary: a node whose parent is a shadow
+  root reports that shadow root's HOST as its parent, so `:host > x` matches. A
+  bare shadow root reports its host too.
+  """
+  @spec shadow_parent(:ets.tid(), reference()) :: reference() | nil
+  def shadow_parent(nodes, node_id) do
+    case parent(nodes, node_id) do
+      nil -> Table.shadow_host(nodes, node_id)
+      parent_id -> cross_shadow(nodes, parent_id)
+    end
+  end
+
+  @doc "All shadow-crossing ancestor ids of `node_id`, nearest first (see `shadow_parent/2`)."
+  @spec shadow_ancestors(:ets.tid(), reference()) :: [reference()]
+  def shadow_ancestors(nodes, node_id) do
+    case shadow_parent(nodes, node_id) do
+      nil -> []
+      parent_id -> [parent_id | shadow_ancestors(nodes, parent_id)]
+    end
+  end
+
+  # If `id` is a shadow root, the boundary crosses to its host; else `id` itself.
+  defp cross_shadow(nodes, id) do
+    Table.shadow_host(nodes, id) || id
+  end
+
   @doc "All child ids of `node_id`, in document order (span-backed range scan)."
   @spec children_ids(DOM.CSS.context(), reference()) :: [reference()]
   def children_ids(%{nodes: nodes, index: index}, node_id) do

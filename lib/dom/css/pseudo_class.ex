@@ -171,6 +171,38 @@ defmodule DOM.CSS.PseudoClass do
     Enum.filter(candidates, &(&1 == scope_id))
   end
 
+  # :host — the shadow host of the current shadow scope. Matches nothing outside a
+  # shadow scope (scope_host nil), mirroring the browser.
+  def match(%{name: "host", arg: nil}, %{scope_host: host}, candidates) do
+    Enum.filter(candidates, &(&1 == host))
+  end
+
+  # :host(sel) — the shadow host, if it matches `sel`.
+  def match(%{name: "host", arg: {:selector_list, _}}, %{scope_host: nil}, _candidates), do: []
+
+  def match(%{name: "host", arg: {:selector_list, list}}, context, candidates) do
+    host = context.scope_host
+
+    if match_list(list, context, [host]) != [],
+      do: Enum.filter(candidates, &(&1 == host)),
+      else: []
+  end
+
+  # :host-context(sel) — the host, when the host or one of its (light-tree)
+  # ancestors matches `sel`.
+  def match(%{name: "host-context", arg: {:selector_list, _}}, %{scope_host: nil}, _cands), do: []
+
+  def match(%{name: "host-context", arg: {:selector_list, list}}, context, candidates) do
+    host = context.scope_host
+    chain = [host | Query.ancestors(context.nodes, host)]
+
+    if Enum.any?(chain, &(match_list(list, context, [&1]) != [])) do
+      Enum.filter(candidates, &(&1 == host))
+    else
+      []
+    end
+  end
+
   # :lang(A, B, …) — the element's inherited `lang` (nearest ancestor-or-self
   # bearing one) matches one of the args by the `|=` rule: equal, or a prefix
   # followed by "-", case-insensitively (BCP-47 subtags).

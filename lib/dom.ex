@@ -1553,8 +1553,10 @@ defmodule DOM do
   # `selector` arrives already parsed and validated by the caller (parse_selector!).
   # In a `matches` context the node itself is the scoping root for `:scope`.
   defp matches_impl(node_id, selector, _from, state) do
+    # The scope for :host is the node's own shadow root's host, if the node is in a
+    # shadow tree — matches(node, ":host") on a shadow host is true.
     scoped = DOM.CSS.bind_scope(selector, node_id)
-    context = css_context(state)
+    context = css_context(state, shadow_scope_host(state.nodes, node_id))
 
     matched =
       Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, [node_id]) != [] end)
@@ -1562,8 +1564,22 @@ defmodule DOM do
     {:reply, matched, state}
   end
 
-  # The tables a CSS match runs against (see DOM.CSS.context/0).
-  defp css_context(state), do: %{nodes: state.nodes, index: state.index}
+  # The tables a CSS match runs against (see DOM.CSS.context/0), plus the shadow
+  # scope host (nil outside a shadow scope) for :host/:host-context/::slotted.
+  defp css_context(state, scope_host) do
+    %{nodes: state.nodes, index: state.index, scope_host: scope_host}
+  end
+
+  # The :host scope for matches(node): the node itself when it is a shadow host
+  # (so `host.matches(":host")` is true), else the host of the shadow tree it lives
+  # in, else nil.
+  defp shadow_scope_host(nodes, node_id) do
+    cond do
+      Slots.shadow_host?(nodes, node_id) -> node_id
+      host = Table.shadow_host(nodes, root_node(nodes, node_id, false)) -> host
+      true -> nil
+    end
+  end
 
   # Descendant element ids of `root_id` matching `selector`, in tree order. Each
   # complex in the selector list contributes its matches; the union is ordered by
@@ -1575,8 +1591,15 @@ defmodule DOM do
   # `:scope` matches nothing (mirrors the browser).
   defp query_ids(root_id, selector, state) do
     scoped = DOM.CSS.bind_scope(selector, root_id)
-    candidates = descendant_ids(state.nodes, root_id)
-    context = css_context(state)
+    descendants = descendant_ids(state.nodes, root_id)
+
+    # In a shadow-scoped query, :host/::slotted must reach outside the descendant
+    # set: prepend the host (an ancestor, so first in document order) and the
+    # slots' assigned nodes (light DOM) to the candidate pool.
+    scope_host = shadow_query_host(state.nodes, root_id)
+    extra = shadow_extra_candidates(state, root_id, scope_host)
+    candidates = extra ++ descendants
+    context = css_context(state, scope_host)
 
     matched =
       scoped
@@ -1584,6 +1607,24 @@ defmodule DOM do
       |> MapSet.new()
 
     Enum.filter(candidates, &MapSet.member?(matched, &1))
+  end
+
+  # The host of the query root, when the root is a shadow root; else nil.
+  defp shadow_query_host(nodes, root_id) do
+    if Table.type(nodes, root_id) == :shadow_root, do: Table.shadow_host(nodes, root_id)
+  end
+
+  # Extra candidates a shadow-scoped query must consider beyond descendants: the
+  # shadow's slots' assigned nodes (light DOM), so ::slotted can match them. The
+  # HOST is NOT injected — querySelectorAll(":host") returns nothing in browsers
+  # (the host is not a descendant of the shadow root), though host.matches(":host")
+  # is true and `:host x` matches via the shadow-crossing combinator walk.
+  defp shadow_extra_candidates(_state, _root_id, nil), do: []
+
+  defp shadow_extra_candidates(state, root_id, _host) do
+    state.nodes
+    |> Slots.slots_in(root_id)
+    |> Enum.flat_map(&Slots.assigned_nodes(state.index, &1))
   end
 
   defp class_tokens(names), do: String.split(names)
