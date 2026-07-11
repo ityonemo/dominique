@@ -20,6 +20,7 @@ defmodule DOM do
   use GenServer
   use MatchSpec
 
+  alias DOM.Events
   alias DOM.HTML.TreeBuilder
   alias DOM.Node
   alias DOM.NodeData
@@ -1371,6 +1372,23 @@ defmodule DOM do
   @doc false
   def _node_listeners(server, node_id) do
     _atomic_ets_op(server, fn _nodes, index -> Table.listeners_of(index, node_id) end)
+  end
+
+  @doc false
+  # Dispatch runs listeners (which may call DOM ops re-entrantly), so it goes
+  # through _atomic_ets_op like every other in-server operation. `server` is passed
+  # to the engine so the handles listeners receive carry the right pid.
+  def _node_dispatch_event(server, node_id, event) do
+    _atomic_ets_op(server, fn nodes, index ->
+      Events.dispatch(nodes, index, server, node_id, event)
+    end)
+  end
+
+  @doc false
+  # Flip one flag on an in-flight event's :active_event row (from a listener's
+  # prevent_default/stop_*). Re-entrant: the listener runs inside this same server.
+  def _event_set_flag(server, ref, flag) do
+    _atomic_ets_op(server, fn _nodes, index -> Table.active_event_set(index, ref, flag) end)
   end
 
   def _element_inner_html(server, node_id) do

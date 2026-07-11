@@ -346,6 +346,16 @@ defmodule DOM.Node do
     DOM._node_remove_event_listener(node.server, node.node_id, type, fun, capture)
   end
 
+  @doc """
+  Dispatch `event` at `node`, running its listeners. Returns `false` if the event
+  was cancelled (a listener called `preventDefault` on a cancelable event), else
+  `true` — the DOM's `dispatchEvent` boolean.
+  """
+  @spec dispatch_event(t(), DOM.Event.t()) :: boolean()
+  def dispatch_event(%__MODULE__{} = node, %DOM.Event{} = event) do
+    DOM._node_dispatch_event(node.server, node.node_id, event)
+  end
+
   @doc false
   # Test-only introspection: a node's registered listeners in registration order.
   def __listeners(%__MODULE__{} = node) do

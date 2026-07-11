@@ -1020,6 +1020,51 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # Active (in-flight) events (:active_event rows)
+  # ==========================================================================
+  #
+  # Each in-flight dispatch owns one `{{:active_event, ref}, flags}` row holding the
+  # event's mutable state (default_prevented / propagation_stopped /
+  # immediate_stopped). Keyed by a per-dispatch ref so NESTED dispatches coexist
+  # without clobbering — the ref also travels in the DOM.Event struct handed to
+  # listeners, routing prevent_default/stop_* to the right row.
+
+  @active_event_flags %{
+    default_prevented: false,
+    propagation_stopped: false,
+    immediate_stopped: false
+  }
+
+  @doc "Open an active-event row for `ref` with all flags clear."
+  @spec active_event_open(tid, reference()) :: :ok
+  def active_event_open(index, ref) do
+    :ets.insert(index, {{:active_event, ref}, @active_event_flags})
+    :ok
+  end
+
+  @doc "Set one flag on the active-event row for `ref`."
+  @spec active_event_set(tid, reference(), atom()) :: :ok
+  def active_event_set(index, ref, flag) do
+    [{key, flags}] = :ets.lookup(index, {:active_event, ref})
+    :ets.insert(index, {key, Map.put(flags, flag, true)})
+    :ok
+  end
+
+  @doc "The active-event flags map for `ref`."
+  @spec active_event_flags(tid, reference()) :: %{atom() => boolean()}
+  def active_event_flags(index, ref) do
+    [{_key, flags}] = :ets.lookup(index, {:active_event, ref})
+    flags
+  end
+
+  @doc "Delete the active-event row for `ref` (dispatch finished)."
+  @spec active_event_close(tid, reference()) :: :ok
+  def active_event_close(index, ref) do
+    :ets.delete(index, {:active_event, ref})
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.
