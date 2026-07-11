@@ -1045,6 +1045,7 @@ defmodule DOM.NodeData.Table do
       check_index!(rows, index)
       check_spans!(rows, index)
       check_ranges!(rows, index)
+      check_slots!(rows, index)
     end
 
     :ok
@@ -1057,6 +1058,32 @@ defmodule DOM.NodeData.Table do
   defp check_ranges!(rows, index) do
     by_start = Map.new(rows, fn {id, data} -> {Map.get(data, :start), {id, data}} end)
     Enum.each(range_all_rows(index), &check_range_row!(&1, rows, by_start))
+  end
+
+  # Slot assignment consistency: every :slot / :assigned / :assigned_host row must
+  # reference live nodes, and the `:slot`/`:assigned` views must agree (a node is in
+  # slot S's assigned list iff its `:assigned` row points at S).
+  defp check_slots!(rows, index) do
+    live = MapSet.new(rows, fn {id, _data} -> id end)
+
+    slot_pairs =
+      for {{:slot, slot_id, _pos}, node_id} <- :ets.tab2list(index), do: {slot_id, node_id}
+
+    assigned =
+      for {{:assigned, node_id}, slot_id} <- :ets.tab2list(index),
+          into: %{},
+          do: {node_id, slot_id}
+
+    Enum.each(slot_pairs, fn {slot_id, node_id} ->
+      unless MapSet.member?(live, slot_id) and MapSet.member?(live, node_id) do
+        raise "dangling slot row: #{inspect({slot_id, node_id})} references a missing node"
+      end
+
+      if Map.get(assigned, node_id) != slot_id do
+        raise "slot rows disagree: #{inspect(node_id)} assigned to " <>
+                "#{inspect(Map.get(assigned, node_id))} but slot-listed under #{inspect(slot_id)}"
+      end
+    end)
   end
 
   defp check_range_row!({kind, extent_key, ref, offset}, rows, by_start) do

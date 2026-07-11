@@ -23,6 +23,7 @@ defmodule DOM do
   alias DOM.HTML.TreeBuilder
   alias DOM.Node
   alias DOM.NodeData
+  alias DOM.NodeData.Slots
   alias DOM.NodeData.Table
 
   # ==========================================================================
@@ -292,6 +293,8 @@ defmodule DOM do
 
   defp attach_shadow(id, mode, state) do
     shadow_id = Table.create_shadow_root(state.nodes, id, mode)
+    Table.span_index_all(state.nodes, state.index)
+    DOM.NodeData.Slots.recompute(state.nodes, state.index, id)
     {:reply, {:ok, node_handle(state.nodes, shadow_id)}, state}
   end
 
@@ -715,6 +718,7 @@ defmodule DOM do
         Table.append_child(state.nodes, parent_id, child_id)
         resync_spans(state)
         adjust_ranges(state, snapshot, {:insert, parent_id, at, 1})
+        recompute_slots(state, child_id)
         {:reply, :ok, state}
     end
   end
@@ -724,6 +728,17 @@ defmodule DOM do
   # extents are the order source, so this only copies them — no carve from the
   # `children` field.
   defp resync_spans(state), do: Table.span_index_all(state.nodes, state.index)
+
+  # Recompute slot assignment for the shadow host affected by a mutation, if any.
+  # `node_id` is a node touched by the op (a light child of a host, or a slot in a
+  # shadow tree); Slots.affected_host resolves which host's assignment to redo.
+  defp recompute_slots(state, node_id) do
+    if host = DOM.NodeData.Slots.affected_host(state.nodes, node_id) do
+      DOM.NodeData.Slots.recompute(state.nodes, state.index, host)
+    end
+
+    :ok
+  end
 
   # A snapshot of every node's start key, captured BEFORE a structural mutation so
   # live-range adjustment can (a) remap boundaries whose container's key changed
@@ -872,6 +887,7 @@ defmodule DOM do
         Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
         resync_spans(state)
         adjust_ranges(state, snapshot, {:insert, parent_id, at, 1})
+        recompute_slots(state, child_id)
         {:reply, :ok, state}
     end
   end
@@ -965,6 +981,12 @@ defmodule DOM do
       Table.remove_child(state.nodes, parent_id, child_id)
       resync_spans(state)
       adjust_ranges(state, snapshot, {:remove, parent_id, at, removed_keys})
+      # The removed node's parent may be a shadow host (or the removed subtree may
+      # contain slots) — recompute assignment from the parent directly.
+      if Slots.shadow_host?(state.nodes, parent_id) do
+        Slots.recompute(state.nodes, state.index, parent_id)
+      end
+
       {:reply, :ok, state}
     else
       {:reply, {:error, :not_found}, state}
@@ -1321,6 +1343,8 @@ defmodule DOM do
     Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
 
     resync_spans(state)
+    # The shadow tree's <slot>s changed — reassign the host's light children.
+    recompute_slots(state, node_id)
     {:reply, :ok, state}
   end
 
@@ -1332,6 +1356,35 @@ defmodule DOM do
   defp shadow_host_impl(node_id, _from, state) do
     host_id = Table.shadow_host(state.nodes, node_id)
     {:reply, host_id && node_handle(state.nodes, host_id), state}
+  end
+
+  @doc false
+  def _slot_assigned_nodes(server, slot_id) do
+    GenServer.call(server, {:slot_assigned_nodes, slot_id})
+  end
+
+  defp slot_assigned_nodes_impl(slot_id, _from, state) do
+    handles =
+      state.index
+      |> DOM.NodeData.Slots.assigned_nodes(slot_id)
+      |> Enum.map(&node_handle(state.nodes, &1))
+
+    {:reply, handles, state}
+  end
+
+  @doc false
+  def _node_assigned_slot(server, node_id) do
+    GenServer.call(server, {:node_assigned_slot, node_id})
+  end
+
+  defp node_assigned_slot_impl(node_id, _from, state) do
+    reply =
+      case DOM.NodeData.Slots.assigned_slot(state.index, node_id) do
+        nil -> nil
+        slot_id -> node_handle(state.nodes, slot_id)
+      end
+
+    {:reply, reply, state}
   end
 
   @doc false
@@ -1648,6 +1701,14 @@ defmodule DOM do
 
   def handle_call({:shadow_host, node_id}, from, state) do
     shadow_host_impl(node_id, from, state)
+  end
+
+  def handle_call({:slot_assigned_nodes, slot_id}, from, state) do
+    slot_assigned_nodes_impl(slot_id, from, state)
+  end
+
+  def handle_call({:node_assigned_slot, node_id}, from, state) do
+    node_assigned_slot_impl(node_id, from, state)
   end
 
   def handle_call({:create, node_data}, from, state) do

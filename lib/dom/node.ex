@@ -201,6 +201,11 @@ defmodule DOM.Node do
   def owner_document(%__MODULE__{} = node),
     do: DOM._node_owner_document(node.server, node.node_id)
 
+  @doc "The `<slot>` this node is assigned to (shadow slotting), or `nil`."
+  @spec assigned_slot(t()) :: t() | nil
+  def assigned_slot(%__MODULE__{} = node),
+    do: DOM._node_assigned_slot(node.server, node.node_id)
+
   # ==========================================================================
   # Inspection
   # ==========================================================================
