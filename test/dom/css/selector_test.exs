@@ -405,6 +405,52 @@ defmodule DOM.CSS.SelectorTest do
       assert DOM.CSS.parse("p::first-line") ==
                [%Compound{simples: [%Type{name: "p"}, %PseudoElement{name: "first-line"}]}]
     end
+
+    test "::slotted(sel) is a functional pseudo-element carrying a selector list" do
+      assert DOM.CSS.parse("::slotted(span)") ==
+               [
+                 %Compound{
+                   simples: [
+                     %PseudoElement{
+                       name: "slotted",
+                       arg: {:selector_list, [%Compound{simples: [%Type{name: "span"}]}]}
+                     }
+                   ]
+                 }
+               ]
+    end
+  end
+
+  describe "shadow pseudo-classes" do
+    test ":host is a keyword pseudo-class" do
+      assert DOM.CSS.parse(":host") == [%Compound{simples: [%PseudoClass{name: "host"}]}]
+    end
+
+    test ":host(sel) / :host-context(sel) carry a selector list" do
+      assert DOM.CSS.parse(":host(.a)") ==
+               [
+                 %Compound{
+                   simples: [
+                     %PseudoClass{
+                       name: "host",
+                       arg: {:selector_list, [%Compound{simples: [%Class{name: "a"}]}]}
+                     }
+                   ]
+                 }
+               ]
+
+      assert DOM.CSS.parse(":host-context(.b)") ==
+               [
+                 %Compound{
+                   simples: [
+                     %PseudoClass{
+                       name: "host-context",
+                       arg: {:selector_list, [%Compound{simples: [%Class{name: "b"}]}]}
+                     }
+                   ]
+                 }
+               ]
+    end
   end
 
   describe "combinators" do

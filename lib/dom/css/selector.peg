@@ -18,7 +18,11 @@ compound <- simple+
 
 ws <- ' '*
 
-simple <- universal / id / class / attribute / pseudo_element / negation / nth / functional_selector / functional_args / pseudo_class / type
+simple <- universal / id / class / attribute / functional_pseudo_element / pseudo_element / negation / nth / functional_selector / functional_args / pseudo_class / type
+
+functional_pseudo_element <- '::' fpe_name '(' ws selector_list_inner ws ')'
+
+fpe_name <- 'slotted'
 
 pseudo_element <- '::' name
 
@@ -26,7 +30,7 @@ negation <- ':not(' ws selector_list_inner ws ')'
 
 functional_selector <- has / ':' func_sel_name '(' ws selector_list_inner ws ')'
 
-func_sel_name <- 'is' / 'where'
+func_sel_name <- 'is' / 'where' / 'host-context' / 'host'
 
 has <- ':has(' ws relative_list ws ')'
 

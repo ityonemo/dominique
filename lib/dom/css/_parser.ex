@@ -24,6 +24,8 @@ defmodule DOM.CSS.Parser do
     namespace: [tag: true, post_traverse: :namespace],
     ns_prefix: [collect: true],
     pseudo_element: [post_traverse: :pseudo_element],
+    functional_pseudo_element: [tag: true, post_traverse: :functional_pseudo_element],
+    fpe_name: [collect: true],
     pseudo_class: [post_traverse: :pseudo_class],
     negation: [tag: true, post_traverse: :negation],
     functional_selector: [tag: true, post_traverse: :functional_selector],
@@ -180,6 +182,16 @@ defmodule DOM.CSS.Parser do
 
   defp pseudo_element(rest, [name, "::"], context, _loc, _col) do
     {rest, [%DOM.CSS.PseudoElement{name: name}], context}
+  end
+
+  defp functional_pseudo_element(
+         rest,
+         [{:functional_pseudo_element, ["::", name, "(", {:selector_list_inner, list}, ")"]}],
+         ctx,
+         _loc,
+         _col
+       ) do
+    {rest, [%DOM.CSS.PseudoElement{name: name, arg: {:selector_list, list}}], ctx}
   end
 
   defp pseudo_class(rest, [name, ":"], context, _loc, _col) do

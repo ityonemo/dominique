@@ -93,7 +93,13 @@ defmodule DOM.CSS.SelectorPropertyTest do
       ),
       functional_selector_pc(),
       functional_args_pc(),
-      gen(all(n <- ident(), do: %PseudoElement{name: n}))
+      gen(all(n <- ident(), do: %PseudoElement{name: n})),
+      gen(
+        all(
+          list <- leaf_compound_list(),
+          do: %PseudoElement{name: "slotted", arg: {:selector_list, list}}
+        )
+      )
     ])
   end
 
@@ -123,6 +129,9 @@ defmodule DOM.CSS.SelectorPropertyTest do
   defp functional_selector_pc do
     one_of([
       gen all(name <- member_of(["is", "where"]), list <- compound_list()) do
+        %PseudoClass{name: name, arg: {:selector_list, list}}
+      end,
+      gen all(name <- member_of(["host", "host-context"]), list <- leaf_compound_list()) do
         %PseudoClass{name: name, arg: {:selector_list, list}}
       end,
       gen all(list <- relative_list()) do
@@ -159,6 +168,36 @@ defmodule DOM.CSS.SelectorPropertyTest do
   defp compound_list do
     gen all(compounds <- list_of(compound(), min_length: 1, max_length: 3)) do
       compounds
+    end
+  end
+
+  # A shallow selector list of leaf compounds (type/id/class/attribute only — no
+  # nested functional selectors). Used inside :host()/:host-context()/::slotted()
+  # so their round-trip is exercised without deepening the recursive generator.
+  defp leaf_compound_list do
+    gen all(compounds <- list_of(leaf_compound(), min_length: 1, max_length: 2)) do
+      compounds
+    end
+  end
+
+  defp leaf_compound do
+    gen all(
+          lead <-
+            one_of([
+              gen(all(n <- ident(), do: [%Type{name: n}])),
+              constant([%Universal{}])
+            ]),
+          subs <-
+            list_of(
+              one_of([
+                gen(all(n <- ident(), do: %Id{name: n})),
+                gen(all(n <- ident(), do: %Class{name: n})),
+                attribute()
+              ]),
+              max_length: 2
+            )
+        ) do
+      %Compound{simples: lead ++ subs}
     end
   end
 
