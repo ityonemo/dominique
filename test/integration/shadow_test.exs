@@ -209,4 +209,48 @@ defmodule Integration.ShadowTest do
       assert result == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/shadow-dom"
+
+    # ::slotted(sel) is a pseudo-element: it never appears in a shadow-scoped
+    # querySelectorAll, and a shadow-scoped query returns only the shadow root's
+    # own descendants — never the light-DOM nodes slotted into it.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<div id='host'><a class='x'>1</a><b>2</b></div>", "text/html");
+      const host = doc.getElementById("host");
+      const s = host.attachShadow({ mode: "open" });
+      s.innerHTML = "<slot></slot>";
+      const names = (sel) => Array.from(s.querySelectorAll(sel), n => n.nodeName.toLowerCase());
+      return {
+        slotted_a: names("::slotted(a)"),
+        slotted_star: names("::slotted(*)"),
+        universal: names("*"),
+        type_a: names("a")
+      };
+    });
+    """
+
+    test "::slotted matches nothing and shadow queries exclude light DOM", %{js: expected} do
+      doc = DOM.new("<div id='host'><a class='x'>1</a><b>2</b></div>")
+      host = DOM.query_selector(doc, "#host")
+      s = Element.attach_shadow(host, :open)
+      DOM.ShadowRoot.set_inner_html(s, "<slot></slot>")
+
+      names = fn sel ->
+        s |> DOM.query_selector_all(sel) |> Enum.map(&String.downcase(DOM.Node.node_name(&1)))
+      end
+
+      result = %{
+        "slotted_a" => names.("::slotted(a)"),
+        "slotted_star" => names.("::slotted(*)"),
+        "universal" => names.("*"),
+        "type_a" => names.("a")
+      }
+
+      assert result == expected
+    end
+  end
 end

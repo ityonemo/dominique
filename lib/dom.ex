@@ -1591,14 +1591,15 @@ defmodule DOM do
   # `:scope` matches nothing (mirrors the browser).
   defp query_ids(root_id, selector, state) do
     scoped = DOM.CSS.bind_scope(selector, root_id)
-    descendants = descendant_ids(state.nodes, root_id)
+    candidates = descendant_ids(state.nodes, root_id)
 
-    # In a shadow-scoped query, :host/::slotted must reach outside the descendant
-    # set: prepend the host (an ancestor, so first in document order) and the
-    # slots' assigned nodes (light DOM) to the candidate pool.
+    # A shadow-scoped query's candidate set is exactly the shadow root's
+    # descendants — the host and the slots' assigned (light-DOM) nodes are NOT
+    # injected. querySelectorAll never returns them: `:host` and `::slotted(...)`
+    # match nothing here (verified against Chromium+Firefox); `:host` is only
+    # interrogable via matches/2, and `:host x` reaches the shadow tree through
+    # the shadow-crossing combinator walk (Complex.related), not the candidate set.
     scope_host = shadow_query_host(state.nodes, root_id)
-    extra = shadow_extra_candidates(state, root_id, scope_host)
-    candidates = extra ++ descendants
     context = css_context(state, scope_host)
 
     matched =
@@ -1609,22 +1610,10 @@ defmodule DOM do
     Enum.filter(candidates, &MapSet.member?(matched, &1))
   end
 
-  # The host of the query root, when the root is a shadow root; else nil.
+  # The host of the query root, when the root is a shadow root; else nil. Sets the
+  # :host-context scope for matches run inside a shadow-scoped query.
   defp shadow_query_host(nodes, root_id) do
     if Table.type(nodes, root_id) == :shadow_root, do: Table.shadow_host(nodes, root_id)
-  end
-
-  # Extra candidates a shadow-scoped query must consider beyond descendants: the
-  # shadow's slots' assigned nodes (light DOM), so ::slotted can match them. The
-  # HOST is NOT injected — querySelectorAll(":host") returns nothing in browsers
-  # (the host is not a descendant of the shadow root), though host.matches(":host")
-  # is true and `:host x` matches via the shadow-crossing combinator walk.
-  defp shadow_extra_candidates(_state, _root_id, nil), do: []
-
-  defp shadow_extra_candidates(state, root_id, _host) do
-    state.nodes
-    |> Slots.slots_in(root_id)
-    |> Enum.flat_map(&Slots.assigned_nodes(state.index, &1))
   end
 
   defp class_tokens(names), do: String.split(names)
