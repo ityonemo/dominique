@@ -1388,6 +1388,31 @@ defmodule DOM do
   end
 
   @doc false
+  def _node_get_root_node(server, node_id, composed?) do
+    GenServer.call(server, {:get_root_node, node_id, composed?})
+  end
+
+  defp get_root_node_impl(node_id, composed?, _from, state) do
+    root = root_node(state.nodes, node_id, composed?)
+    {:reply, node_handle(state.nodes, root), state}
+  end
+
+  # Walk `parent` to the tree root. Non-composed stops there (a shadow root has
+  # parent nil, so it IS the root). Composed jumps a shadow root to its host and
+  # keeps walking, crossing every nested shadow boundary to the document.
+  defp root_node(nodes, node_id, composed?) do
+    case Table.parent(nodes, node_id) do
+      nil -> maybe_cross_shadow(nodes, node_id, composed?)
+      parent -> root_node(nodes, parent, composed?)
+    end
+  end
+
+  defp maybe_cross_shadow(nodes, root_id, composed?) do
+    host = composed? && Table.shadow_host(nodes, root_id)
+    if host, do: root_node(nodes, host, composed?), else: root_id
+  end
+
+  @doc false
   def _element_set_outer_html(server, node_id, html) do
     case GenServer.call(server, {:set_outer_html, node_id, html}) do
       :ok -> :ok
@@ -1709,6 +1734,10 @@ defmodule DOM do
 
   def handle_call({:node_assigned_slot, node_id}, from, state) do
     node_assigned_slot_impl(node_id, from, state)
+  end
+
+  def handle_call({:get_root_node, node_id, composed?}, from, state) do
+    get_root_node_impl(node_id, composed?, from, state)
   end
 
   def handle_call({:create, node_data}, from, state) do

@@ -127,4 +127,40 @@ defmodule Integration.ShadowTest do
       assert result == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/shadow-dom"
+
+    # getRootNode: non-composed stops at the shadow root, composed reaches the doc.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString("<div id='host'></div>", "text/html");
+      const host = doc.getElementById("host");
+      const s = host.attachShadow({ mode: "open" });
+      s.innerHTML = "<span id='inner'>x</span>";
+      const inner = s.getElementById("inner");
+      return {
+        plain_is_shadow: inner.getRootNode() === s,
+        plain_not_doc: inner.getRootNode() !== doc,
+        composed_is_doc: inner.getRootNode({ composed: true }) === doc
+      };
+    });
+    """
+
+    test "getRootNode composed vs non-composed matches the browser", %{js: expected} do
+      doc = DOM.new("<div id='host'></div>")
+      host = DOM.query_selector(doc, "#host")
+      s = Element.attach_shadow(host, :open)
+      DOM.ShadowRoot.set_inner_html(s, "<span id='inner'>x</span>")
+      inner = DOM.query_selector(s, "#inner")
+
+      result = %{
+        "plain_is_shadow" => DOM.Node.get_root_node(inner).node_id == s.node_id,
+        "plain_not_doc" => DOM.Node.get_root_node(inner).node_id != doc.node_id,
+        "composed_is_doc" => DOM.Node.get_root_node(inner, true).node_id == doc.node_id
+      }
+
+      assert result == expected
+    end
+  end
 end

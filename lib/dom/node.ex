@@ -206,6 +206,15 @@ defmodule DOM.Node do
   def assigned_slot(%__MODULE__{} = node),
     do: DOM._node_assigned_slot(node.server, node.node_id)
 
+  @doc """
+  The node's root — its tree root (a document, shadow root, or detached fragment).
+  With `composed? == true`, cross shadow boundaries via each shadow root's host,
+  returning the shadow-including (composed) root.
+  """
+  @spec get_root_node(t(), boolean()) :: t()
+  def get_root_node(%__MODULE__{} = node, composed? \\ false),
+    do: DOM._node_get_root_node(node.server, node.node_id, composed?)
+
   # ==========================================================================
   # Inspection
   # ==========================================================================
