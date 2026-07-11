@@ -166,7 +166,10 @@ defmodule DOM do
   @doc false
   # Internal: the DocumentFragment holding a template element's contents.
   def _element_content(%Node{server: server, node_id: node_id}) do
-    GenServer.call(server, {:element_content, node_id})
+    _atomic_ets_op(server, fn nodes, _index ->
+      [{^node_id, %NodeData.Element{content: content_id}}] = :ets.lookup(nodes, node_id)
+      if content_id, do: node_handle(nodes, content_id)
+    end)
   end
 
   @doc false
@@ -278,12 +281,6 @@ defmodule DOM do
   defp index_element(_index, _node_id, _node_data), do: :ok
 
   # The content DocumentFragment handle of a template element (nil if unset).
-  defp element_content_impl(id, _from, state) do
-    [{^id, %NodeData.Element{content: content_id}}] = :ets.lookup(state.nodes, id)
-    reply = if content_id, do: node_handle(state.nodes, content_id), else: nil
-    {:reply, reply, state}
-  end
-
   # Elements permitted to host a shadow root (§ "valid shadow host name"): a fixed
   # HTML set, plus any valid custom-element name (a hyphenated local name).
   @shadow_host_names ~w(article aside blockquote body div footer h1 h2 h3 h4 h5 h6
@@ -377,16 +374,41 @@ defmodule DOM do
     {:reply, :ets.select_replace(state.index, match_spec), state}
   end
 
-  # Runs a multi-step ETS operation `op.(nodes)` atomically inside the server (a
-  # single message, so no other operation can interleave). Use this for any read-
-  # modify-write against the table that can't be a single `_select`/
-  # `_select_replace` hit; `op` returns the value to reply with.
+  # Runs a multi-step ETS operation `op.(nodes, index)` atomically inside the
+  # server (a single message, so no other operation can interleave). Use this for
+  # any read-modify-write against the tables that can't be a single `_select_*` /
+  # `_select_replace_*` hit; `op` returns the value to reply with.
+  #
+  # Re-entrant fork (like _select_*): called from OUTSIDE the server it does a
+  # GenServer.call; called from INSIDE (server == self(), e.g. an event listener
+  # running during dispatch) it runs `op` directly against the pdict tids — a call
+  # back into the busy server would deadlock. `op` is a pure function of the two
+  # tids, so no server state is involved and the direct run is equivalent. This is
+  # the deep seam: every read-modify-write built on _atomic_ets_op is re-entrant-
+  # safe for free.
   def _atomic_ets_op(server, op) do
-    GenServer.call(server, {:atomic_ets_op, op})
+    if server == self(),
+      do: op.(Process.get(:nodes), Process.get(:index)),
+      else: GenServer.call(server, {:atomic_ets_op, op})
   end
 
   defp atomic_ets_op_impl(op, _from, state) do
     {:reply, op.(state.nodes, state.index), state}
+  end
+
+  @doc false
+  # Private, for testing purposes: run an arbitrary 0-arity `fun` INSIDE the
+  # document server process, so a test can exercise a DOM operation under the exact
+  # condition an event listener runs under (server == self()). Its return value is
+  # replied back. If `fun` calls a DOM operation that is not re-entrant-safe, this
+  # deadlocks (the test times out) — which is precisely what such a test asserts
+  # against.
+  def lambda(server, fun) do
+    GenServer.call(server, {:lambda, fun})
+  end
+
+  defp lambda_impl(fun, _from, state) do
+    {:reply, fun.(), state}
   end
 
   # ==========================================================================
@@ -1812,11 +1834,6 @@ defmodule DOM do
   end
 
   @impl true
-  def handle_call({:element_content, id}, from, state) do
-    element_content_impl(id, from, state)
-  end
-
-  @impl true
   def handle_call({:select_nodes, match_spec}, from, state) do
     select_nodes_impl(match_spec, from, state)
   end
@@ -1839,6 +1856,11 @@ defmodule DOM do
   @impl true
   def handle_call({:atomic_ets_op, op}, from, state) do
     atomic_ets_op_impl(op, from, state)
+  end
+
+  @impl true
+  def handle_call({:lambda, fun}, from, state) do
+    lambda_impl(fun, from, state)
   end
 
   def handle_call(:check_index_consistency, from, state) do
