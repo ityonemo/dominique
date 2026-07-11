@@ -384,6 +384,59 @@ defmodule DOM do
     {:reply, node_handle(state.nodes, fragment_id), state}
   end
 
+  @doc false
+  def _range_extract_contents(server, range_id) do
+    GenServer.call(server, {:range_extract_contents, range_id})
+  end
+
+  defp range_extract_contents_impl(range_id, _from, state) do
+    {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
+    snapshot = range_snapshot(state)
+    extracted = DOM.Range.Contents.extract(state.nodes, sc, so, ec, eo)
+
+    fragment_id = make_ref()
+    Table.put(state.nodes, fragment_id, %NodeData.DocumentFragment{})
+    Table.append_children(state.nodes, fragment_id, extracted)
+    Table.reindex(state.nodes, state.index)
+    resync_spans(state)
+
+    collapse_range_to_start(state, range_id)
+    reconcile_ranges(state, snapshot)
+
+    {:reply, node_handle(state.nodes, fragment_id), state}
+  end
+
+  @doc false
+  def _range_delete_contents(server, range_id) do
+    GenServer.call(server, {:range_delete_contents, range_id})
+  end
+
+  defp range_delete_contents_impl(range_id, _from, state) do
+    {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
+    snapshot = range_snapshot(state)
+    extracted = DOM.Range.Contents.extract(state.nodes, sc, so, ec, eo)
+
+    Enum.each(extracted, &delete_subtree(state.nodes, state.index, &1))
+    resync_spans(state)
+
+    collapse_range_to_start(state, range_id)
+    reconcile_ranges(state, snapshot)
+
+    {:reply, :ok, state}
+  end
+
+  # Collapse `range_id` onto its start boundary (after extract/delete, per spec).
+  defp collapse_range_to_start(state, range_id) do
+    {{start_key, so}, _stop} = Table.range_boundaries(state.index, range_id)
+    Table.range_put(state.index, range_id, {start_key, so}, {start_key, so})
+  end
+
+  # After an extract/delete that moved/removed nodes, re-pin every OTHER range's
+  # boundaries whose container key changed (the generic remap), and drop boundaries
+  # whose container no longer exists onto a still-live ancestor position. The
+  # remap catches key changes; dangling boundaries are cleaned by re-resolving.
+  defp reconcile_ranges(state, snapshot), do: apply_remap(state, snapshot)
+
   # Resolve a range's stored boundaries into `{start_container_id, start_offset,
   # end_container_id, end_offset}` via the extent-key reverse lookup.
   defp range_endpoints!(nodes, index, range_id) do
@@ -1385,6 +1438,14 @@ defmodule DOM do
 
   def handle_call({:range_clone_contents, range_id}, from, state) do
     range_clone_contents_impl(range_id, from, state)
+  end
+
+  def handle_call({:range_extract_contents, range_id}, from, state) do
+    range_extract_contents_impl(range_id, from, state)
+  end
+
+  def handle_call({:range_delete_contents, range_id}, from, state) do
+    range_delete_contents_impl(range_id, from, state)
   end
 
   @impl true

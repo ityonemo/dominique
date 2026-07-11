@@ -35,6 +35,92 @@ defmodule DOM.Range.Contents do
     end
   end
 
+  @doc """
+  EXTRACT the contents of `[(sc, so), (ec, eo)]`: move the selected content out of
+  the source tree into a list of detached node ids (document order). Partial text
+  nodes are truncated in place; fully-contained subtrees are detached; partial
+  start/end elements are shallow-cloned to hold their extracted descendants (the
+  element itself stays in the source). Mirrors `clone/5` but moves rather than
+  copies.
+  """
+  @spec extract(Table.tid(), Table.id(), non_neg_integer(), Table.id(), non_neg_integer()) ::
+          [Table.id()]
+  def extract(tid, sc, so, ec, eo) do
+    cond do
+      sc == ec and so == eo ->
+        []
+
+      sc == ec and character_data?(tid, sc) ->
+        [extract_char_slice(tid, sc, so, eo)]
+
+      :else ->
+        extract_spanning(tid, sc, so, ec, eo)
+    end
+  end
+
+  defp extract_spanning(tid, sc, so, ec, eo) do
+    common = common_ancestor(tid, sc, ec)
+    start_part = extract_start_side(tid, common, sc, so)
+    middle = extract_contained_children(tid, common, sc, so, ec, eo)
+    end_part = extract_end_side(tid, common, ec, eo)
+    start_part ++ middle ++ end_part
+  end
+
+  # Extract the partial start node: char slice (truncating the source text), or a
+  # shallow clone of the start path element holding its extracted descendants.
+  defp extract_start_side(tid, common, sc, so) do
+    if sc == common do
+      []
+    else
+      child = child_on_path(tid, common, sc)
+
+      if child == sc and character_data?(tid, sc) do
+        [extract_char_slice(tid, sc, so, char_len(tid, sc))]
+      else
+        holder = shallow_clone(tid, child)
+        append_all(tid, holder, extract(tid, sc, so, child, max_offset(tid, child)))
+        [holder]
+      end
+    end
+  end
+
+  defp extract_end_side(tid, common, ec, eo) do
+    if ec == common do
+      []
+    else
+      child = child_on_path(tid, common, ec)
+
+      if child == ec and character_data?(tid, ec) do
+        [extract_char_slice(tid, ec, 0, eo)]
+      else
+        holder = shallow_clone(tid, child)
+        append_all(tid, holder, extract(tid, child, 0, ec, eo))
+        [holder]
+      end
+    end
+  end
+
+  # Detach every fully-contained child of `common` from the source (they become
+  # fragment children directly, no clone). Returns them in document order.
+  defp extract_contained_children(tid, common, sc, so, ec, eo) do
+    kids = Table.children_by_extent(tid, common)
+    from = contained_lo(tid, common, sc, so, kids)
+    to = contained_hi(tid, common, ec, eo, kids)
+    contained = Enum.slice(kids, from, max(to - from, 0))
+    Enum.each(contained, &Table.detach(tid, &1))
+    contained
+  end
+
+  # A new character node holding `value[from..to]`, REMOVED from the source node's
+  # value (the source keeps everything outside [from, to)).
+  defp extract_char_slice(tid, id, from, to) do
+    data = Table.fetch!(tid, id)
+    extracted = String.slice(data.value, from, to - from)
+    kept = String.slice(data.value, 0, from) <> String.slice(data.value, to, char_len(tid, id))
+    Table.set_value(tid, id, kept)
+    new_char_node(tid, data, extracted)
+  end
+
   # The general case: start container, fully-contained middle children, end
   # container — relative to their common ancestor.
   defp clone_spanning(tid, sc, so, ec, eo) do

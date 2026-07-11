@@ -203,4 +203,68 @@ defmodule Integration.RangeTest do
       assert result == expected
     end
   end
+
+  playwright do
+    @link "https://github.com/web-platform-tests/wpt/tree/master/dom/ranges"
+
+    # extractContents / deleteContents: the extracted fragment AND the mutated
+    # source both match the browser (partial-both-ends range across two paragraphs).
+    @js """
+    return await page.evaluate(() => {
+      const html = "<div id='d'><p id='p1'>hello</p><p id='p2'>world</p></div>";
+
+      const extract = () => {
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const t1 = doc.getElementById("p1").firstChild;
+        const t2 = doc.getElementById("p2").firstChild;
+        const r = doc.createRange(); r.setStart(t1, 2); r.setEnd(t2, 3);
+        const wrap = doc.createElement("div");
+        wrap.appendChild(r.extractContents());
+        return { frag: wrap.innerHTML, source: doc.getElementById("d").innerHTML,
+                 collapsed: r.collapsed };
+      };
+
+      const del = () => {
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const t1 = doc.getElementById("p1").firstChild;
+        const t2 = doc.getElementById("p2").firstChild;
+        const r = doc.createRange(); r.setStart(t1, 2); r.setEnd(t2, 3);
+        r.deleteContents();
+        return doc.getElementById("d").innerHTML;
+      };
+
+      return { extract: extract(), delete_source: del() };
+    });
+    """
+
+    test "extractContents / deleteContents match the browser", %{js: expected} do
+      html = "<div id='d'><p id='p1'>hello</p><p id='p2'>world</p></div>"
+
+      extract = fn ->
+        doc = DOM.new(html)
+        [t1] = Node.child_nodes(DOM.query_selector(doc, "#p1"))
+        [t2] = Node.child_nodes(DOM.query_selector(doc, "#p2"))
+        r = Range.create_range(doc) |> Range.set_start(t1, 2) |> Range.set_end(t2, 3)
+        wrap = DOM.create_element(doc, "div")
+        Node.append_child(wrap, Range.extract_contents(r))
+
+        %{
+          "frag" => DOM.Element.inner_html(wrap),
+          "source" => DOM.Element.inner_html(DOM.query_selector(doc, "#d")),
+          "collapsed" => Range.collapsed?(r)
+        }
+      end
+
+      del = fn ->
+        doc = DOM.new(html)
+        [t1] = Node.child_nodes(DOM.query_selector(doc, "#p1"))
+        [t2] = Node.child_nodes(DOM.query_selector(doc, "#p2"))
+        r = Range.create_range(doc) |> Range.set_start(t1, 2) |> Range.set_end(t2, 3)
+        Range.delete_contents(r)
+        DOM.Element.inner_html(DOM.query_selector(doc, "#d"))
+      end
+
+      assert %{"extract" => extract.(), "delete_source" => del.()} == expected
+    end
+  end
 end

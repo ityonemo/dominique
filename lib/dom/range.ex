@@ -219,6 +219,21 @@ defmodule DOM.Range do
     DOM._range_clone_contents(range.server, range.range_id)
   end
 
+  @doc """
+  Move the range's contents into a DocumentFragment (removing them from the source
+  tree) and collapse the range to its start. Returns the fragment.
+  """
+  @spec extract_contents(t()) :: Node.t()
+  def extract_contents(%__MODULE__{} = range) do
+    DOM._range_extract_contents(range.server, range.range_id)
+  end
+
+  @doc "Delete the range's contents from the tree and collapse the range to its start."
+  @spec delete_contents(t()) :: :ok
+  def delete_contents(%__MODULE__{} = range) do
+    DOM._range_delete_contents(range.server, range.range_id)
+  end
+
   # -1 if point is before the range, 1 if after, 0 if within (inclusive).
   defp point_vs_range(point, start, stop) do
     cond do
