@@ -153,6 +153,17 @@ defmodule DOM do
     create(document, %NodeData.Element{local_name: local_name})
   end
 
+  @doc """
+  Creates an element in namespace `url` with qualified name `qualified_name`. `url`
+  is one of the modeled namespace URLs (svg/mathml/html); the qualified name is
+  stored as the element's `local_name`.
+  """
+  @spec create_element_ns(Node.t(), String.t(), String.t()) :: Node.t()
+  def create_element_ns(%Node{type: :document} = document, url, qualified_name) do
+    namespace = DOM.Namespace.element_atom(url) || :html
+    create(document, %NodeData.Element{local_name: qualified_name, namespace: namespace})
+  end
+
   @doc false
   # Internal: build an element with an explicit namespace and pre-adjusted
   # attribute list in one hop (used by the HTML tree builder for foreign

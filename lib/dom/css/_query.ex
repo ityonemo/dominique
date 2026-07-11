@@ -196,18 +196,19 @@ defmodule DOM.CSS.Query do
     |> Enum.find_value(fn id -> own_attribute(nodes, id, name) end)
   end
 
-  @doc "The value of attribute `name` set directly on `node_id`, or nil."
+  @doc "The value of attribute `name` (by qualified name) set directly on `node_id`, or nil."
   @spec own_attribute(:ets.tid(), reference(), String.t()) :: String.t() | nil
   def own_attribute(nodes, node_id, name) do
     case select(nodes, attributes_of_spec(node_id)) do
-      [attributes] ->
-        case List.keyfind(attributes, name, 0) do
-          {^name, value} -> value
-          nil -> nil
-        end
+      [attributes] -> find_attribute_value(attributes, name)
+      [] -> nil
+    end
+  end
 
-      [] ->
-        nil
+  defp find_attribute_value(attributes, name) do
+    case Enum.find(attributes, fn {key, _v} -> DOM.NodeData.Element.matches_key?(key, name) end) do
+      {_key, value} -> value
+      nil -> nil
     end
   end
 

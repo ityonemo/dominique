@@ -68,13 +68,15 @@ defmodule DatOutline do
     [line(["| ", indent(depth) | body])]
   end
 
-  # Attributes are dumped as pseudo-children, sorted lexicographically by name.
+  # Attributes are dumped as pseudo-children, sorted lexicographically by the
+  # html5lib rendered name — a namespaced key renders "prefix local" (space form).
   defp attribute_lines(element, depth) do
     element
-    |> Element.get_attribute_names()
+    |> Element.raw_attributes()
+    |> Enum.map(fn {key, value} -> {DOM.NodeData.Element.dat_name(key), value} end)
     |> Enum.sort()
-    |> Enum.map(fn name ->
-      line(["| ", indent(depth), name, "=", ?", Element.get_attribute(element, name), ?"])
+    |> Enum.map(fn {name, value} ->
+      line(["| ", indent(depth), name, "=", ?", value, ?"])
     end)
   end
 

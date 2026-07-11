@@ -119,6 +119,9 @@ after
     end
   end
 
+  # Attributes arrive with their KEY already rendered to a qualified-name string by
+  # the caller (the record's serialize/3), so this stays free of DOM.NodeData.* —
+  # see the module note about the compile cycle.
   defp attributes(attributes) do
     Enum.map(attributes, fn {name, value} ->
       [?\s, name, ~s(="), escape_attribute(value) | ~s(")]

@@ -3045,18 +3045,21 @@ defmodule DOM.HTML.TreeBuilder do
 
   # "Adjust foreign attributes" prefix table (§13.2.6.5): a prefixed name becomes
   # "prefix local" (space-separated) so the .dat outline renders both columns.
+  # "Adjust foreign attributes" (§13.2.6.5): a prefixed foreign attribute becomes a
+  # namespaced `{prefix, local, url}` attribute KEY (via DOM.Namespace). Maps the
+  # qualified name -> its namespace url; the bare `xmlns` has a nil prefix.
   @foreign_attributes %{
-    "xlink:actuate" => "xlink actuate",
-    "xlink:arcrole" => "xlink arcrole",
-    "xlink:href" => "xlink href",
-    "xlink:role" => "xlink role",
-    "xlink:show" => "xlink show",
-    "xlink:title" => "xlink title",
-    "xlink:type" => "xlink type",
-    "xml:lang" => "xml lang",
-    "xml:space" => "xml space",
-    "xmlns" => "xmlns",
-    "xmlns:xlink" => "xmlns xlink"
+    "xlink:actuate" => DOM.Namespace.xlink(),
+    "xlink:arcrole" => DOM.Namespace.xlink(),
+    "xlink:href" => DOM.Namespace.xlink(),
+    "xlink:role" => DOM.Namespace.xlink(),
+    "xlink:show" => DOM.Namespace.xlink(),
+    "xlink:title" => DOM.Namespace.xlink(),
+    "xlink:type" => DOM.Namespace.xlink(),
+    "xml:lang" => DOM.Namespace.xml(),
+    "xml:space" => DOM.Namespace.xml(),
+    "xmlns" => DOM.Namespace.xmlns(),
+    "xmlns:xlink" => DOM.Namespace.xmlns()
   }
 
   defp svg_tag_name(name), do: Map.get(@svg_tags, name, name)
@@ -3234,8 +3237,14 @@ defmodule DOM.HTML.TreeBuilder do
     %{token | attributes: Enum.map(token.attributes, &adjust_foreign_attribute/1)}
   end
 
-  defp adjust_foreign_attribute({name, value}),
-    do: {Map.get(@foreign_attributes, name, name), value}
+  # A known foreign attribute becomes a `{prefix, local, url}` triple KEY; others are
+  # unchanged (plain string key).
+  defp adjust_foreign_attribute({name, value}) do
+    case Map.get(@foreign_attributes, name) do
+      nil -> {name, value}
+      url -> {DOM.Namespace.attr_key(name, url), value}
+    end
+  end
 
   # Any-other-end-tag loop (§13.2.6.5). Walk from the current node down: a FOREIGN
   # node whose lowercased name matches the token pops to it; reaching an HTML

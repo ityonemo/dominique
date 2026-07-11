@@ -310,23 +310,39 @@ defmodule DOM.NodeData.Table do
 
   @spec get_attribute(tid, id, String.t()) :: String.t() | nil
   def get_attribute(tid, id, name) do
-    case List.keyfind(fetch!(tid, id).attributes, name, 0) do
-      {^name, value} -> value
+    case Enum.find(fetch!(tid, id).attributes, fn {key, _v} ->
+           NodeData.Element.matches_key?(key, name)
+         end) do
+      {_key, value} -> value
       nil -> nil
     end
   end
 
   @spec has_attribute(tid, id, String.t()) :: boolean()
-  def has_attribute(tid, id, name), do: List.keymember?(fetch!(tid, id).attributes, name, 0)
+  def has_attribute(tid, id, name) do
+    Enum.any?(fetch!(tid, id).attributes, fn {key, _v} ->
+      NodeData.Element.matches_key?(key, name)
+    end)
+  end
 
   @spec set_attribute(tid, id, String.t(), String.t()) :: :ok
   def set_attribute(tid, id, name, value) do
     element = fetch!(tid, id)
+    put(tid, id, %{element | attributes: put_attr_by_name(element.attributes, name, value)})
+  end
 
-    put(tid, id, %{
-      element
-      | attributes: List.keystore(element.attributes, name, 0, {name, value})
-    })
+  # Update the value of the attribute matching qualified `name` (key preserved), or
+  # append a plain-keyed attribute when none matches.
+  defp put_attr_by_name(attrs, name, value) do
+    if Enum.any?(attrs, fn {key, _v} -> NodeData.Element.matches_key?(key, name) end) do
+      Enum.map(attrs, &update_attr_value(&1, name, value))
+    else
+      attrs ++ [{name, value}]
+    end
+  end
+
+  defp update_attr_value({key, _v} = attr, name, value) do
+    if NodeData.Element.matches_key?(key, name), do: {key, value}, else: attr
   end
 
   @doc "Set `name`=`value` only if the element does not already carry `name`."
@@ -722,12 +738,17 @@ defmodule DOM.NodeData.Table do
   # {:id,…}/{:class,…} memberships. Single source of truth for index_put and the
   # consistency checker.
   defp memberships(%NodeData.Element{local_name: local_name, attributes: attributes}) do
+    # `id`/`class` are HTML (null-namespace) attributes — the bare-string-key patterns
+    # match only plain attributes, so a namespaced `{_, "id", _}` triple correctly does
+    # NOT populate getElementById / class matching.
     ids = for {"id", value} <- attributes, do: {:id, value}
 
     classes =
       for {"class", value} <- attributes, token <- class_tokens(value), do: {:class, token}
 
-    attrs = for {name, value} <- attributes, do: {:attr, name, value}
+    # The :attr row keys on the attribute KEY verbatim (a plain string or a
+    # {prefix, local, url} triple); the attribute match specs pin the key term.
+    attrs = for {key, value} <- attributes, do: {:attr, key, value}
     [{:tag, local_name} | ids ++ classes ++ attrs]
   end
 
