@@ -205,8 +205,13 @@ defmodule DOM do
     create(document, node_data)
   end
 
-  defp create(%Node{type: :document} = document, node_data) do
-    GenServer.call(document.server, {:create, node_data})
+  defp create(%Node{type: :document, server: server}, node_data) do
+    _atomic_ets_op(server, fn nodes, index ->
+      node_id = make_ref()
+      Table.put(nodes, node_id, node_data)
+      index_element(index, node_id, node_data)
+      node_handle(nodes, node_id)
+    end)
   end
 
   defp create(%Node{}, _node_data), do: raise(DOM.HierarchyRequestError)
@@ -283,13 +288,6 @@ defmodule DOM do
 
     Table.span_index_all(state.nodes, state.index)
     {:noreply, %{state | fragment_root: root_id}}
-  end
-
-  defp create_impl(node_data, _from, state) do
-    node_id = make_ref()
-    Table.put(state.nodes, node_id, node_data)
-    index_element(state.index, node_id, node_data)
-    {:reply, node_handle(state.nodes, node_id), state}
   end
 
   # Register an element's tag/id/class in the index (no-op for non-elements).
@@ -460,35 +458,38 @@ defmodule DOM do
   end
 
   @doc false
+  # splitText (§): the original keeps chars 0..offset, a new Text sibling gets the
+  # remainder. Boundaries in the original past `offset` move into the new node.
   def _text_split(server, node_id, offset) do
-    case GenServer.call(server, {:text_split, node_id, offset}) do
+    result =
+      _atomic_ets_op(server, fn nodes, index -> text_split_op(nodes, index, node_id, offset) end)
+
+    case result do
       {:ok, new_node} -> new_node
       {:error, :index_size} -> raise DOM.IndexSizeError
     end
   end
 
-  # splitText (§): the original keeps chars 0..offset, a new Text sibling gets the
-  # remainder. Boundaries in the original past `offset` move into the new node.
-  defp text_split_impl(node_id, offset, _from, state) do
-    value = Table.value(state.nodes, node_id)
+  defp text_split_op(nodes, index, node_id, offset) do
+    value = Table.value(nodes, node_id)
 
     if offset > String.length(value) do
-      {:reply, {:error, :index_size}, state}
+      {:error, :index_size}
     else
       {before, rest} = String.split_at(value, offset)
-      orig_key = Table.fetch!(state.nodes, node_id).start
-      parent_id = Table.parent(state.nodes, node_id)
+      orig_key = Table.fetch!(nodes, node_id).start
+      parent_id = Table.parent(nodes, node_id)
 
-      snapshot = range_snapshot(state.nodes, state.index)
-      Table.set_value(state.nodes, node_id, before)
-      new_id = Table.create_text(state.nodes, rest)
-      insert_after(state.nodes, parent_id, new_id, node_id)
-      resync_spans(state.nodes, state.index)
+      snapshot = range_snapshot(nodes, index)
+      Table.set_value(nodes, node_id, before)
+      new_id = Table.create_text(nodes, rest)
+      insert_after(nodes, parent_id, new_id, node_id)
+      resync_spans(nodes, index)
 
-      new_key = Table.fetch!(state.nodes, new_id).start
-      adjust_split_ranges(state, snapshot, parent_id, node_id, orig_key, new_key, offset)
+      new_key = Table.fetch!(nodes, new_id).start
+      adjust_split_ranges(nodes, index, snapshot, parent_id, node_id, orig_key, new_key, offset)
 
-      {:reply, {:ok, node_handle(state.nodes, new_id)}, state}
+      {:ok, node_handle(nodes, new_id)}
     end
   end
 
@@ -602,12 +603,12 @@ defmodule DOM do
   end
 
   # Insert node_id under parent before `reference` (append when nil), routing
-  # through the server impls so hierarchy + range adjustment run.
+  # through the tree-surgery workers so hierarchy + range adjustment run.
   defp insert_relative(state, parent_id, node_id, reference) do
     if reference do
-      insert_before_impl(parent_id, node_id, reference, nil, state)
+      insert_before_op(state.nodes, state.index, parent_id, node_id, reference)
     else
-      append_child_impl(parent_id, node_id, nil, state)
+      append_child_op(state.nodes, state.index, parent_id, node_id)
     end
   end
 
@@ -721,13 +722,13 @@ defmodule DOM do
 
   # split rule (boundaries past the split move into the new node) + the insert of
   # the new sibling (a child was added after the original's index in the parent).
-  defp adjust_split_ranges(_state, nil, _parent, _orig, _ok, _nk, _off), do: :ok
+  defp adjust_split_ranges(_nodes, _index, nil, _parent, _orig, _ok, _nk, _off), do: :ok
 
-  defp adjust_split_ranges(state, snapshot, parent_id, orig_id, orig_key, new_key, offset) do
-    DOM.Range.Adjust.on_split(state.nodes, state.index, orig_key, new_key, offset)
-    at = child_index(state.nodes, parent_id, orig_id)
-    parent_key = Map.get(snapshot, parent_id) || current_start(state.nodes, parent_id)
-    DOM.Range.Adjust.on_insert(state.nodes, state.index, parent_key, at, 1)
+  defp adjust_split_ranges(nodes, index, snapshot, parent_id, orig_id, orig_key, new_key, offset) do
+    DOM.Range.Adjust.on_split(nodes, index, orig_key, new_key, offset)
+    at = child_index(nodes, parent_id, orig_id)
+    parent_key = Map.get(snapshot, parent_id) || current_start(nodes, parent_id)
+    DOM.Range.Adjust.on_insert(nodes, index, parent_key, at, 1)
     :ok
   end
 
@@ -747,10 +748,16 @@ defmodule DOM do
   def _node_append_child(server, parent_id, %{server: child_server, node_id: child_id} = child) do
     result =
       if child_server == server do
-        GenServer.call(server, {:append_child, parent_id, child_id})
+        _atomic_ets_op(server, fn nodes, index ->
+          append_child_op(nodes, index, parent_id, child_id)
+        end)
       else
         subtree = _export_subtree(child_server, child_id)
-        result = GenServer.call(server, {:append_subtree, parent_id, child_id, subtree})
+
+        result =
+          _atomic_ets_op(server, fn nodes, index ->
+            append_subtree_op(nodes, index, parent_id, child_id, subtree)
+          end)
 
         if match?({:ok, _transferred_child}, result) do
           _remove_subtree(child_server, child_id)
@@ -766,27 +773,27 @@ defmodule DOM do
     end
   end
 
-  defp append_child_impl(parent_id, child_id, _from, state) do
-    child_data = fetch_node!(state.nodes, child_id)
-    parent_data = fetch_node!(state.nodes, parent_id)
+  defp append_child_op(nodes, index, parent_id, child_id) do
+    child_data = fetch_node!(nodes, child_id)
+    parent_data = fetch_node!(nodes, parent_id)
 
     cond do
-      invalid_hierarchy?(state.nodes, parent_data, parent_id, child_data, child_id, nil, nil) ->
-        {:reply, {:error, :hierarchy_request}, state}
+      invalid_hierarchy?(nodes, parent_data, parent_id, child_data, child_id, nil, nil) ->
+        {:error, :hierarchy_request}
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
-        append_fragment(state.nodes, parent_id, child_id, child_data)
-        resync_spans(state.nodes, state.index)
-        {:reply, :ok, state}
+        append_fragment(nodes, parent_id, child_id, child_data)
+        resync_spans(nodes, index)
+        :ok
 
       :else ->
-        snapshot = range_snapshot(state.nodes, state.index)
-        at = length(Table.children(state.nodes, parent_id))
-        Table.append_child(state.nodes, parent_id, child_id)
-        resync_spans(state.nodes, state.index)
-        adjust_ranges(state.nodes, state.index, snapshot, {:insert, parent_id, at, 1})
-        recompute_slots(state.nodes, state.index, child_id)
-        {:reply, :ok, state}
+        snapshot = range_snapshot(nodes, index)
+        at = length(Table.children(nodes, parent_id))
+        Table.append_child(nodes, parent_id, child_id)
+        resync_spans(nodes, index)
+        adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
+        recompute_slots(nodes, index, child_id)
+        :ok
     end
   end
 
@@ -893,15 +900,16 @@ defmodule DOM do
       ) do
     result =
       if child_server == server do
-        GenServer.call(server, {:insert_before, parent_id, child_id, reference_child_id})
+        _atomic_ets_op(server, fn nodes, index ->
+          insert_before_op(nodes, index, parent_id, child_id, reference_child_id)
+        end)
       else
         subtree = _export_subtree(child_server, child_id)
 
         result =
-          GenServer.call(
-            server,
-            {:insert_subtree, parent_id, child_id, reference_child_id, subtree}
-          )
+          _atomic_ets_op(server, fn nodes, index ->
+            insert_subtree_op(nodes, index, parent_id, child_id, reference_child_id, subtree)
+          end)
 
         if match?({:ok, _transferred_child}, result) do
           _remove_subtree(child_server, child_id)
@@ -918,19 +926,19 @@ defmodule DOM do
     end
   end
 
-  defp insert_before_impl(parent_id, child_id, reference_child_id, _from, state) do
-    child_data = fetch_node!(state.nodes, child_id)
-    parent_data = fetch_node!(state.nodes, parent_id)
+  defp insert_before_op(nodes, index, parent_id, child_id, reference_child_id) do
+    child_data = fetch_node!(nodes, child_id)
+    parent_data = fetch_node!(nodes, parent_id)
 
     cond do
-      inclusive_ancestor?(state.nodes, child_id, parent_id) ->
-        {:reply, {:error, :hierarchy_request}, state}
+      inclusive_ancestor?(nodes, child_id, parent_id) ->
+        {:error, :hierarchy_request}
 
-      reference_child_id not in Table.children(state.nodes, parent_id) ->
-        {:reply, {:error, :not_found}, state}
+      reference_child_id not in Table.children(nodes, parent_id) ->
+        {:error, :not_found}
 
       invalid_hierarchy?(
-        state.nodes,
+        nodes,
         parent_data,
         parent_id,
         child_data,
@@ -938,67 +946,59 @@ defmodule DOM do
         reference_child_id,
         nil
       ) ->
-        {:reply, {:error, :hierarchy_request}, state}
+        {:error, :hierarchy_request}
 
       child_id == reference_child_id ->
-        {:reply, :ok, state}
+        :ok
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
-        insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
-        resync_spans(state.nodes, state.index)
-        {:reply, :ok, state}
+        insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
+        resync_spans(nodes, index)
+        :ok
 
       :else ->
-        snapshot = range_snapshot(state.nodes, state.index)
-        at = child_index(state.nodes, parent_id, reference_child_id)
-        Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
-        resync_spans(state.nodes, state.index)
-        adjust_ranges(state.nodes, state.index, snapshot, {:insert, parent_id, at, 1})
-        recompute_slots(state.nodes, state.index, child_id)
-        {:reply, :ok, state}
+        snapshot = range_snapshot(nodes, index)
+        at = child_index(nodes, parent_id, reference_child_id)
+        Table.insert_before(nodes, parent_id, child_id, reference_child_id)
+        resync_spans(nodes, index)
+        adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
+        recompute_slots(nodes, index, child_id)
+        :ok
     end
   end
 
-  defp append_subtree_impl(parent_id, child_id, subtree, _from, state) do
+  defp append_subtree_op(nodes, index, parent_id, child_id, subtree) do
     subtree_nodes = Map.new(subtree)
     child_data = Map.fetch!(subtree_nodes, child_id)
-    parent_data = fetch_node!(state.nodes, parent_id)
+    parent_data = fetch_node!(nodes, parent_id)
 
-    if invalid_hierarchy?(
-         state.nodes,
-         parent_data,
-         parent_id,
-         child_data,
-         child_id,
-         nil,
-         subtree_nodes
-       ) do
-      {:reply, {:error, :hierarchy_request}, state}
+    if invalid_hierarchy?(nodes, parent_data, parent_id, child_data, child_id, nil, subtree_nodes) do
+      {:error, :hierarchy_request}
     else
-      materialize_subtree(state.nodes, state.index, child_id, subtree)
+      materialize_subtree(nodes, index, child_id, subtree)
 
       if match?(%NodeData.DocumentFragment{}, child_data) do
-        append_fragment(state.nodes, parent_id, child_id, child_data)
+        append_fragment(nodes, parent_id, child_id, child_data)
       else
-        Table.append_child(state.nodes, parent_id, child_id)
+        Table.append_child(nodes, parent_id, child_id)
       end
 
-      resync_spans(state.nodes, state.index)
-      {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
+      resync_spans(nodes, index)
+      {:ok, node_handle(nodes, child_id)}
     end
   end
 
-  defp insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, _from, state) do
+  defp insert_subtree_op(nodes, index, parent_id, child_id, reference_child_id, subtree) do
     subtree_nodes = Map.new(subtree)
     child_data = Map.fetch!(subtree_nodes, child_id)
-    parent_data = fetch_node!(state.nodes, parent_id)
+    parent_data = fetch_node!(nodes, parent_id)
 
     cond do
-      reference_child_id not in Table.children(state.nodes, parent_id) ->
-        {:reply, {:error, :not_found}, state}
+      reference_child_id not in Table.children(nodes, parent_id) ->
+        {:error, :not_found}
 
       invalid_hierarchy?(
-        state.nodes,
+        nodes,
         parent_data,
         parent_id,
         child_data,
@@ -1006,19 +1006,19 @@ defmodule DOM do
         reference_child_id,
         subtree_nodes
       ) ->
-        {:reply, {:error, :hierarchy_request}, state}
+        {:error, :hierarchy_request}
 
       :else ->
-        materialize_subtree(state.nodes, state.index, child_id, subtree)
+        materialize_subtree(nodes, index, child_id, subtree)
 
         if match?(%NodeData.DocumentFragment{}, child_data) do
-          insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
+          insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
         else
-          Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
+          Table.insert_before(nodes, parent_id, child_id, reference_child_id)
         end
 
-        resync_spans(state.nodes, state.index)
-        {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
+        resync_spans(nodes, index)
+        {:ok, node_handle(nodes, child_id)}
     end
   end
 
@@ -1034,29 +1034,34 @@ defmodule DOM do
   end
 
   def _node_remove_child(server, parent_id, %{node_id: child_id} = child) do
-    case GenServer.call(server, {:remove_child, parent_id, child_id}) do
+    result =
+      _atomic_ets_op(server, fn nodes, index ->
+        remove_child_op(nodes, index, parent_id, child_id)
+      end)
+
+    case result do
       :ok -> child
       {:error, :not_found} -> raise DOM.NotFoundError
     end
   end
 
-  defp remove_child_impl(parent_id, child_id, _from, state) do
-    if child_id in Table.children(state.nodes, parent_id) do
-      snapshot = range_snapshot(state.nodes, state.index)
-      at = child_index(state.nodes, parent_id, child_id)
-      removed_keys = removed_subtree_keys(state.nodes, child_id)
-      Table.remove_child(state.nodes, parent_id, child_id)
-      resync_spans(state.nodes, state.index)
-      adjust_ranges(state.nodes, state.index, snapshot, {:remove, parent_id, at, removed_keys})
+  defp remove_child_op(nodes, index, parent_id, child_id) do
+    if child_id in Table.children(nodes, parent_id) do
+      snapshot = range_snapshot(nodes, index)
+      at = child_index(nodes, parent_id, child_id)
+      removed_keys = removed_subtree_keys(nodes, child_id)
+      Table.remove_child(nodes, parent_id, child_id)
+      resync_spans(nodes, index)
+      adjust_ranges(nodes, index, snapshot, {:remove, parent_id, at, removed_keys})
       # The removed node's parent may be a shadow host (or the removed subtree may
       # contain slots) — recompute assignment from the parent directly.
-      if Slots.shadow_host?(state.nodes, parent_id) do
-        Slots.recompute(state.nodes, state.index, parent_id)
+      if Slots.shadow_host?(nodes, parent_id) do
+        Slots.recompute(nodes, index, parent_id)
       end
 
-      {:reply, :ok, state}
+      :ok
     else
-      {:reply, {:error, :not_found}, state}
+      {:error, :not_found}
     end
   end
 
@@ -1082,15 +1087,16 @@ defmodule DOM do
       ) do
     result =
       if new_server == server do
-        GenServer.call(server, {:replace_child, parent_id, new_child_id, old_child_id})
+        _atomic_ets_op(server, fn nodes, index ->
+          replace_child_op(nodes, index, parent_id, new_child_id, old_child_id)
+        end)
       else
         subtree = _export_subtree(new_server, new_child_id)
 
         result =
-          GenServer.call(
-            server,
-            {:replace_subtree, parent_id, new_child_id, old_child_id, subtree}
-          )
+          _atomic_ets_op(server, fn nodes, index ->
+            replace_subtree_op(nodes, index, parent_id, new_child_id, old_child_id, subtree)
+          end)
 
         if match?({:ok, _replaced}, result) do
           _remove_subtree(new_server, new_child_id)
@@ -1106,36 +1112,38 @@ defmodule DOM do
     end
   end
 
-  defp replace_child_impl(parent_id, new_child_id, old_child_id, _from, state) do
-    new_child_data = fetch_node!(state.nodes, new_child_id)
-    parent_data = fetch_node!(state.nodes, parent_id)
+  defp replace_child_op(nodes, index, parent_id, new_child_id, old_child_id) do
+    new_child_data = fetch_node!(nodes, new_child_id)
+    parent_data = fetch_node!(nodes, parent_id)
 
     replace_child_common(
+      nodes,
+      index,
       parent_id,
       parent_data,
       new_child_id,
       new_child_data,
       old_child_id,
       nil,
-      fn -> detach_from_parent(state.nodes, new_child_id, new_child_data) end,
-      state
+      fn -> detach_from_parent(nodes, new_child_id, new_child_data) end
     )
   end
 
-  defp replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, _from, state) do
+  defp replace_subtree_op(nodes, index, parent_id, new_child_id, old_child_id, subtree) do
     subtree_nodes = Map.new(subtree)
     new_child_data = Map.fetch!(subtree_nodes, new_child_id)
-    parent_data = fetch_node!(state.nodes, parent_id)
+    parent_data = fetch_node!(nodes, parent_id)
 
     replace_child_common(
+      nodes,
+      index,
       parent_id,
       parent_data,
       new_child_id,
       new_child_data,
       old_child_id,
       subtree_nodes,
-      fn -> materialize_subtree(state.nodes, state.index, new_child_id, subtree) end,
-      state
+      fn -> materialize_subtree(nodes, index, new_child_id, subtree) end
     )
   end
 
@@ -1143,24 +1151,25 @@ defmodule DOM do
   # child from its old parent or materializes a transferred subtree; the
   # document validity check excludes `old_child_id`, which is leaving.
   defp replace_child_common(
+         nodes,
+         index,
          parent_id,
          parent_data,
          new_child_id,
          new_child_data,
          old_child_id,
          subtree_nodes,
-         prepare,
-         state
+         prepare
        ) do
     cond do
-      old_child_id not in Table.children(state.nodes, parent_id) ->
-        {:reply, {:error, :not_found}, state}
+      old_child_id not in Table.children(nodes, parent_id) ->
+        {:error, :not_found}
 
       new_child_id == old_child_id ->
-        {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
+        {:ok, node_handle(nodes, new_child_id)}
 
       invalid_hierarchy?(
-        state.nodes,
+        nodes,
         parent_data,
         parent_id,
         new_child_data,
@@ -1168,7 +1177,7 @@ defmodule DOM do
         old_child_id,
         subtree_nodes
       ) ->
-        {:reply, {:error, :hierarchy_request}, state}
+        {:error, :hierarchy_request}
 
       :else ->
         prepare.()
@@ -1176,35 +1185,29 @@ defmodule DOM do
         # via the extent-authoritative insert_before, so extents land in old's
         # neighborhood), then remove old_child — leaving its gap.
         if match?(%NodeData.DocumentFragment{}, new_child_data) do
-          insert_fragment(state.nodes, parent_id, new_child_id, new_child_data, old_child_id)
+          insert_fragment(nodes, parent_id, new_child_id, new_child_data, old_child_id)
         else
-          Table.insert_before(state.nodes, parent_id, new_child_id, old_child_id)
+          Table.insert_before(nodes, parent_id, new_child_id, old_child_id)
         end
 
-        Table.remove_child(state.nodes, parent_id, old_child_id)
-        resync_spans(state.nodes, state.index)
-        {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
+        Table.remove_child(nodes, parent_id, old_child_id)
+        resync_spans(nodes, index)
+        {:ok, node_handle(nodes, new_child_id)}
     end
   end
 
   def _export_subtree(server, node_id) do
-    GenServer.call(server, {:export_subtree, node_id})
-  end
-
-  defp export_subtree_impl(node_id, _from, state) do
-    {:reply, subtree(state.nodes, node_id), state}
+    _atomic_ets_op(server, fn nodes, _index -> subtree(nodes, node_id) end)
   end
 
   def _remove_subtree(server, node_id) do
-    GenServer.call(server, {:remove_subtree, node_id})
-  end
-
-  defp remove_subtree_impl(node_id, _from, state) do
-    node_data = fetch_node!(state.nodes, node_id)
-    detach_from_parent(state.nodes, node_id, node_data)
-    delete_subtree(state.nodes, state.index, node_id)
-    resync_spans(state.nodes, state.index)
-    {:reply, :ok, state}
+    _atomic_ets_op(server, fn nodes, index ->
+      node_data = fetch_node!(nodes, node_id)
+      detach_from_parent(nodes, node_id, node_data)
+      delete_subtree(nodes, index, node_id)
+      resync_spans(nodes, index)
+      :ok
+    end)
   end
 
   defp invalid_hierarchy?(nodes, parent, parent_id, child, child_id, reference_child_id, subtree) do
@@ -1630,25 +1633,23 @@ defmodule DOM do
     end)
   end
 
-  def _node_set_text_content(server, node_id, value) do
-    GenServer.call(server, {:set_text_content, node_id, value})
-  end
-
   # Replace all children with a single Text node (none when value is empty).
-  defp set_text_content_impl(node_id, value, _from, state) do
-    state.nodes
-    |> Table.children(node_id)
-    |> Enum.each(&delete_subtree(state.nodes, state.index, &1))
+  def _node_set_text_content(server, node_id, value) do
+    _atomic_ets_op(server, fn nodes, index ->
+      nodes
+      |> Table.children(node_id)
+      |> Enum.each(&delete_subtree(nodes, index, &1))
 
-    if value != "" do
-      # append via the extent-authoritative mutator so the new text node is placed
-      # (extent written), then mirrored into the span rows by resync.
-      text_id = Table.create_text(state.nodes, value)
-      Table.append_child(state.nodes, node_id, text_id)
-    end
+      if value != "" do
+        # append via the extent-authoritative mutator so the new text node is placed
+        # (extent written), then mirrored into the span rows by resync.
+        text_id = Table.create_text(nodes, value)
+        Table.append_child(nodes, node_id, text_id)
+      end
 
-    resync_spans(state.nodes, state.index)
-    {:reply, :ok, state}
+      resync_spans(nodes, index)
+      :ok
+    end)
   end
 
   # Delete a subtree from the node table and retract each node's index + span rows.
@@ -1663,13 +1664,11 @@ defmodule DOM do
   end
 
   def _node_set_value(server, node_id, value) do
-    GenServer.call(server, {:set_value, node_id, value})
-  end
-
-  defp set_value_impl(node_id, value, _from, state) do
-    node = fetch_node!(state.nodes, node_id)
-    put_node(state.nodes, node_id, %{node | value: value})
-    {:reply, :ok, state}
+    _atomic_ets_op(server, fn nodes, _index ->
+      node = fetch_node!(nodes, node_id)
+      put_node(nodes, node_id, %{node | value: value})
+      :ok
+    end)
   end
 
   # Descendant node_data in tree order, excluding the node itself.
@@ -1736,10 +1735,6 @@ defmodule DOM do
     fragment_root_impl(from, state)
   end
 
-  def handle_call({:create, node_data}, from, state) do
-    create_impl(node_data, from, state)
-  end
-
   @impl true
   def handle_call({:select_nodes, match_spec}, from, state) do
     select_nodes_impl(match_spec, from, state)
@@ -1782,10 +1777,6 @@ defmodule DOM do
     range_detach_impl(range_id, from, state)
   end
 
-  def handle_call({:text_split, node_id, offset}, from, state) do
-    text_split_impl(node_id, offset, from, state)
-  end
-
   def handle_call({:range_clone_contents, range_id}, from, state) do
     range_clone_contents_impl(range_id, from, state)
   end
@@ -1804,68 +1795,5 @@ defmodule DOM do
 
   def handle_call({:range_surround_contents, range_id, element_id}, from, state) do
     range_surround_contents_impl(range_id, element_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:append_child, parent_id, child_id}, from, state) do
-    append_child_impl(parent_id, child_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:append_subtree, parent_id, child_id, subtree}, from, state) do
-    append_subtree_impl(parent_id, child_id, subtree, from, state)
-  end
-
-  @impl true
-  def handle_call({:insert_before, parent_id, child_id, reference_child_id}, from, state) do
-    insert_before_impl(parent_id, child_id, reference_child_id, from, state)
-  end
-
-  @impl true
-  def handle_call(
-        {:insert_subtree, parent_id, child_id, reference_child_id, subtree},
-        from,
-        state
-      ) do
-    insert_subtree_impl(parent_id, child_id, reference_child_id, subtree, from, state)
-  end
-
-  @impl true
-  def handle_call({:remove_child, parent_id, child_id}, from, state) do
-    remove_child_impl(parent_id, child_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:replace_child, parent_id, new_child_id, old_child_id}, from, state) do
-    replace_child_impl(parent_id, new_child_id, old_child_id, from, state)
-  end
-
-  @impl true
-  def handle_call(
-        {:replace_subtree, parent_id, new_child_id, old_child_id, subtree},
-        from,
-        state
-      ) do
-    replace_subtree_impl(parent_id, new_child_id, old_child_id, subtree, from, state)
-  end
-
-  @impl true
-  def handle_call({:export_subtree, node_id}, from, state) do
-    export_subtree_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:remove_subtree, node_id}, from, state) do
-    remove_subtree_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:set_text_content, node_id, value}, from, state) do
-    set_text_content_impl(node_id, value, from, state)
-  end
-
-  @impl true
-  def handle_call({:set_value, node_id, value}, from, state) do
-    set_value_impl(node_id, value, from, state)
   end
 end

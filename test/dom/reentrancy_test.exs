@@ -119,6 +119,75 @@ defmodule DOM.ReentrancyTest do
     end
   end
 
+  describe "mutations" do
+    test "create_element + append_child" do
+      doc = new_document("<div id='p'></div>")
+      p = DOM.query_selector(doc, "#p")
+
+      inside(doc, fn ->
+        child = DOM.create_element(doc, "span")
+        Node.append_child(p, child)
+      end)
+
+      assert Element.inner_html(p) == "<span></span>"
+    end
+
+    test "set_attribute / remove_attribute" do
+      doc = new_document("<div id='d'></div>")
+      d = DOM.query_selector(doc, "#d")
+
+      inside(d, fn -> Element.set_attribute(d, "data-x", "1") end)
+      assert Element.get_attribute(d, "data-x") == "1"
+
+      inside(d, fn -> Element.remove_attribute(d, "data-x") end)
+      refute Element.has_attribute(d, "data-x")
+    end
+
+    test "insert_before / remove_child / replace_child" do
+      doc = new_document("<ul id='u'><li id='a'></li><li id='b'></li></ul>")
+      u = DOM.query_selector(doc, "#u")
+      b = DOM.query_selector(doc, "#b")
+
+      inside(doc, fn ->
+        c = DOM.create_element(doc, "li")
+        Element.set_attribute(c, "id", "c")
+        Node.insert_before(u, c, b)
+      end)
+
+      assert Enum.map(DOM.query_selector_all(u, "li"), &Element.get_attribute(&1, "id")) ==
+               ["a", "c", "b"]
+
+      a = DOM.query_selector(doc, "#a")
+      inside(u, fn -> Node.remove_child(u, a) end)
+      refute DOM.query_selector(doc, "#a")
+
+      new = DOM.create_element(doc, "li")
+      inside(u, fn -> Node.replace_child(u, new, b) end)
+      refute DOM.query_selector(doc, "#b")
+    end
+
+    test "set_inner_html / set_text_content" do
+      doc = new_document("<div id='d'></div>")
+      d = DOM.query_selector(doc, "#d")
+
+      inside(d, fn -> Element.set_inner_html(d, "<b>x</b>") end)
+      assert Element.inner_html(d) == "<b>x</b>"
+
+      inside(d, fn -> Node.set_text_content(d, "plain") end)
+      assert Node.text_content(d) == "plain"
+    end
+
+    test "split_text" do
+      doc = new_document("<p id='p'>hello world</p>")
+      p = DOM.query_selector(doc, "#p")
+      [text] = DOM.Node.child_nodes(p)
+
+      tail = inside(text, fn -> DOM.Text.split_text(text, 5) end)
+      assert Node.value(text) == "hello"
+      assert Node.value(tail) == " world"
+    end
+  end
+
   describe "shadow reads" do
     test "shadow_root / shadow_host / inner_html" do
       doc = new_document("<div id='h'></div>")
