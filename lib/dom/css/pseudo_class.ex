@@ -137,13 +137,14 @@ defmodule DOM.CSS.PseudoClass do
     Enum.filter(candidates, &checked?(nodes, &1))
   end
 
-  # :default — a checked input, or a selected option (the default-submit-button
-  # case needs a form walk and is deferred).
+  # :default — a checked input, a selected option, or the DEFAULT SUBMIT BUTTON of a
+  # form (the first submit-capable control in the form's tree order).
   def match(%{name: "default"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, fn id ->
       (Query.local_name(nodes, id) == "input" and Query.has_own_attribute?(nodes, id, "checked")) or
         (Query.local_name(nodes, id) == "option" and
-           Query.has_own_attribute?(nodes, id, "selected"))
+           Query.has_own_attribute?(nodes, id, "selected")) or
+        default_submit_button?(nodes, id)
     end)
   end
 
@@ -274,18 +275,56 @@ defmodule DOM.CSS.PseudoClass do
     end
   end
 
+  # Whether `id` is the default submit button of its form: a submit-capable control
+  # that is the FIRST such control in its owning <form>'s tree order.
+  defp default_submit_button?(nodes, id) do
+    submit_control?(nodes, id) and
+      case form_of(nodes, id) do
+        nil -> false
+        form -> first_submit_control(nodes, form) == id
+      end
+  end
+
+  # A submit-capable control: a <button> (submit is its default type unless type is
+  # given as reset/button) or an <input type=submit|image>.
+  defp submit_control?(nodes, id) do
+    case Query.local_name(nodes, id) do
+      "button" -> Query.own_attribute(nodes, id, "type") in [nil, "submit"]
+      "input" -> input_type(nodes, id) in ~w(submit image)
+      _ -> false
+    end
+  end
+
+  defp form_of(nodes, id) do
+    Enum.find(Query.ancestors(nodes, id), &(Query.local_name(nodes, &1) == "form"))
+  end
+
+  defp first_submit_control(nodes, form) do
+    nodes
+    |> DOM.NodeData.Table.descendant_ids(form)
+    |> Enum.find(&submit_control?(nodes, &1))
+  end
+
   # A control is mutable when it has neither `readonly` nor `disabled`.
   defp mutable?(nodes, id) do
     not Query.has_own_attribute?(nodes, id, "readonly") and
       not Query.actually_disabled?(nodes, id)
   end
 
-  # An editing host: an element with a truthy `contenteditable` (present, and not
-  # the string "false"). Inheritance of contenteditable is not modeled.
+  # An editing host: the nearest inclusive ancestor with a `contenteditable` value
+  # decides — a value other than "false" makes the element editable, "false" (or no
+  # such ancestor) makes it not. This models contenteditable INHERITANCE.
   defp editable?(nodes, id) do
-    case Query.own_attribute(nodes, id, "contenteditable") do
+    [id | Query.ancestors(nodes, id)]
+    |> Enum.find_value(fn ancestor ->
+      case Query.own_attribute(nodes, ancestor, "contenteditable") do
+        nil -> nil
+        value -> {String.downcase(value) != "false"}
+      end
+    end)
+    |> case do
+      {editable?} -> editable?
       nil -> false
-      value -> String.downcase(value) != "false"
     end
   end
 
