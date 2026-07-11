@@ -10,7 +10,6 @@ defmodule DOM.Events do
   # prevent_default/stop_* route back to this row. The row is opened on entry and
   # closed on exit (try/after, so a raising listener still cleans up).
 
-  alias DOM.CSS.Query
   alias DOM.Event
   alias DOM.NodeData.Table
 
@@ -18,7 +17,10 @@ defmodule DOM.Events do
   # dispatchEvent boolean). Runs in-server: `nodes`/`index` are the live tids,
   # `server` is the document pid (for building handles listeners receive).
   #
-  # The propagation path is target..root; the phases are:
+  # The propagation path is target..root (shadow-crossing when `event.composed`,
+  # else stopping at the origin shadow root). Each path entry carries the RETARGETED
+  # target for that node: shadow-internal nodes see the real target, light-DOM nodes
+  # past a shadow boundary see the host. Phases:
   #   1. CAPTURING — root -> target-exclusive, capture listeners
   #   2. AT_TARGET — the target, both capture and bubble listeners
   #   3. BUBBLING  — target-exclusive -> root, bubble listeners (only if bubbles)
@@ -28,14 +30,15 @@ defmodule DOM.Events do
   def dispatch(nodes, index, server, target_id, %Event{} = event) do
     ref = make_ref()
     Table.active_event_open(index, ref)
+    event = %{event | ref: ref}
 
-    event = %{event | ref: ref, target: handle(nodes, server, target_id)}
-    ancestors = Query.ancestors(nodes, target_id)
+    # path = [{node_id, retarget_id}, ...] from target outward; the target entry
+    # heads it, the rest are the (shadow-crossing) ancestors.
+    [target_entry | ancestors] = propagation_path(nodes, target_id, event.composed)
 
     try do
-      # capture: root -> target-exclusive
       run_phase(nodes, index, server, Enum.reverse(ancestors), :capturing, event)
-      run_phase(nodes, index, server, [target_id], :at_target, event)
+      run_phase(nodes, index, server, [target_entry], :at_target, event)
 
       if event.bubbles do
         run_phase(nodes, index, server, ancestors, :bubbling, event)
@@ -47,17 +50,62 @@ defmodule DOM.Events do
     end
   end
 
-  # Walk `path` firing each node's phase-appropriate listeners. A no-op once
+  @doc """
+  The composed path for an event dispatched at `target_id`: `[{node_id,
+  retarget_id}, ...]` from the target outward to the root, crossing shadow
+  boundaries only when `composed?`. The `retarget_id` is `event.target` as seen
+  by a listener on that node (the host once past a shadow boundary).
+  """
+  @spec propagation_path(:ets.tid(), reference(), boolean()) :: [{reference(), reference()}]
+  def propagation_path(nodes, target_id, composed?) do
+    build_path(nodes, target_id, target_id, composed?, [])
+  end
+
+  # Walk parent-ward accumulating {node, retarget}. `retarget` is the current
+  # visible target — the real target within a tree, re-set to the host each time a
+  # shadow boundary is crossed. A boundary is a node whose `parent` is nil AND is a
+  # shadow root: composed jumps to the host, non-composed stops.
+  defp build_path(nodes, node_id, retarget, composed?, acc) do
+    acc = [{node_id, retarget} | acc]
+
+    case Table.parent(nodes, node_id) do
+      nil ->
+        host = shadow_host_of(nodes, node_id)
+
+        if composed? and host do
+          # crossed a shadow boundary: the host becomes the visible target
+          build_path(nodes, host, host, composed?, acc)
+        else
+          Enum.reverse(acc)
+        end
+
+      parent_id ->
+        build_path(nodes, parent_id, retarget, composed?, acc)
+    end
+  end
+
+  # The host of `node_id` when it is a shadow root, else nil (marks a boundary).
+  defp shadow_host_of(nodes, node_id) do
+    if Table.type(nodes, node_id) == :shadow_root, do: Table.shadow_host(nodes, node_id)
+  end
+
+  # Walk `path` (entries `{node_id, retarget_id}`) firing each node's
+  # phase-appropriate listeners with the retargeted event.target. A no-op once
   # propagation_stopped is set — so a stop in the capture phase skips the target and
-  # bubble phases too (checked before the phase and between nodes).
+  # bubble phases too (checked before each node fires).
   defp run_phase(nodes, index, server, path, phase, event) do
     event = %{event | event_phase: Event.phase(phase)}
 
-    Enum.reduce_while(path, :ok, fn node_id, _ ->
+    Enum.reduce_while(path, :ok, fn {node_id, retarget_id}, _ ->
       if Table.active_event_flags(index, event.ref).propagation_stopped do
         {:halt, :ok}
       else
-        current = %{event | current_target: handle(nodes, server, node_id)}
+        current = %{
+          event
+          | current_target: handle(nodes, server, node_id),
+            target: handle(nodes, server, retarget_id)
+        }
+
         fire_listeners(index, node_id, phase, current)
         {:cont, :ok}
       end

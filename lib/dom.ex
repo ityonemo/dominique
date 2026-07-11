@@ -1391,6 +1391,15 @@ defmodule DOM do
     _atomic_ets_op(server, fn _nodes, index -> Table.active_event_set(index, ref, flag) end)
   end
 
+  @doc false
+  def _node_composed_path(server, node_id, composed?) do
+    _atomic_ets_op(server, fn nodes, _index ->
+      nodes
+      |> Events.propagation_path(node_id, composed?)
+      |> Enum.map(fn {id, _retarget} -> node_handle(nodes, id) end)
+    end)
+  end
+
   def _element_inner_html(server, node_id) do
     _atomic_ets_op(server, fn nodes, _index ->
       element = fetch_node!(nodes, node_id)

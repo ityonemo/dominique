@@ -356,6 +356,16 @@ defmodule DOM.Node do
     DOM._node_dispatch_event(node.server, node.node_id, event)
   end
 
+  @doc """
+  The composed path an `event` would traverse if dispatched at `node` — the nodes
+  from `node` outward to the root, crossing shadow boundaries only when the event
+  is `composed`. Mirrors `Event.composedPath()` (computed for a given target).
+  """
+  @spec composed_path(t(), DOM.Event.t()) :: [t()]
+  def composed_path(%__MODULE__{} = node, %DOM.Event{composed: composed?}) do
+    DOM._node_composed_path(node.server, node.node_id, composed?)
+  end
+
   @doc false
   # Test-only introspection: a node's registered listeners in registration order.
   def __listeners(%__MODULE__{} = node) do

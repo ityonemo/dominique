@@ -2,10 +2,79 @@ defmodule Integration.EventTest do
   use ExUnit.Case, async: true
   use Playwright
 
+  alias DOM.Element
   alias DOM.Event
   alias DOM.Node
 
   @moduletag :integration
+
+  playwright do
+    @link "https://dom.spec.whatwg.org/#retargeting-algorithm"
+
+    # Shadow dispatch: composed crosses the boundary to the host and retargets
+    # event.target per node (host for light-DOM listeners, real target inside the
+    # shadow); non-composed stops at the shadow root.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<section id='sec'><div id='host'></div></section>", "text/html");
+      const host = doc.getElementById("host"), sec = doc.getElementById("sec");
+      const s = host.attachShadow({ mode: "open" });
+      s.innerHTML = "<span id='inner'>x</span>";
+      const inner = s.getElementById("inner");
+
+      const run = (composed) => {
+        const fired = [];
+        const nodes = [["inner", inner], ["shadow", s], ["host", host], ["sec", sec]];
+        const regs = [];
+        nodes.forEach(([label, n]) => {
+          const h = (e) => fired.push(label + ":" + (e.target.id || e.target.nodeName));
+          n.addEventListener("evt", h);
+          regs.push([n, h]);
+        });
+        inner.dispatchEvent(new Event("evt", { bubbles: true, composed }));
+        regs.forEach(([n, h]) => n.removeEventListener("evt", h));
+        return fired;
+      };
+
+      return { composed: run(true), non_composed: run(false) };
+    });
+    """
+
+    test "shadow retargeting + composed boundary match the browser", %{js: expected} do
+      run = fn composed ->
+        doc = DOM.new("<section id='sec'><div id='host'></div></section>")
+        host = DOM.query_selector(doc, "#host")
+        sec = DOM.query_selector(doc, "#sec")
+        s = Element.attach_shadow(host, :open)
+        DOM.ShadowRoot.set_inner_html(s, "<span id='inner'>x</span>")
+        inner = DOM.query_selector(s, "#inner")
+        me = self()
+
+        # ev.target is always an ELEMENT here (inner or the retargeted host), so it
+        # matches the browser's e.target.id.
+        target_id = fn ev ->
+          cond do
+            ev.target.node_id == inner.node_id -> "inner"
+            ev.target.node_id == host.node_id -> "host"
+            true -> "?"
+          end
+        end
+
+        for {label, node} <- [{"inner", inner}, {"shadow", s}, {"host", host}, {"sec", sec}] do
+          Node.add_event_listener(node, "evt", fn ev ->
+            send(me, label <> ":" <> target_id.(ev))
+          end)
+        end
+
+        Node.dispatch_event(inner, Event.new("evt", bubbles: true, composed: composed))
+        drain_order()
+      end
+
+      result = %{"composed" => run.(true), "non_composed" => run.(false)}
+      assert result == expected
+    end
+  end
 
   playwright do
     @link "https://dom.spec.whatwg.org/#dispatching-events"
