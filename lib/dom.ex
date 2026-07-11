@@ -70,6 +70,7 @@ defmodule DOM do
     # GenServer.call back into this same process. See DOM.NodeData.
     Process.put(:nodes, nodes)
     Process.put(:index, index)
+    Process.put(:document_id, document_id)
     state = %__MODULE__{nodes: nodes, index: index, document_id: document_id}
 
     case build_continue(opts) do
@@ -174,7 +175,10 @@ defmodule DOM do
 
   @doc false
   def _element_attach_shadow(server, node_id, mode) do
-    case GenServer.call(server, {:attach_shadow, node_id, mode}) do
+    result =
+      _atomic_ets_op(server, fn nodes, index -> attach_shadow(nodes, index, node_id, mode) end)
+
+    case result do
       {:ok, shadow} -> shadow
       {:error, :not_supported} -> raise DOM.NotSupportedError
     end
@@ -182,7 +186,12 @@ defmodule DOM do
 
   @doc false
   def _element_shadow_root(%Node{server: server, node_id: node_id}) do
-    GenServer.call(server, {:shadow_root, node_id})
+    _atomic_ets_op(server, fn nodes, _index ->
+      case Table.shadow_root(nodes, node_id) do
+        nil -> nil
+        shadow_id -> open_shadow_handle(nodes, shadow_id)
+      end
+    end)
   end
 
   def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
@@ -296,21 +305,22 @@ defmodule DOM do
   @shadow_host_names ~w(article aside blockquote body div footer h1 h2 h3 h4 h5 h6
                         header main nav p section span)
 
-  defp attach_shadow_impl(id, mode, _from, state) do
-    element = Table.fetch!(state.nodes, id)
+  defp attach_shadow(nodes, index, id, mode) do
+    element = Table.fetch!(nodes, id)
 
     cond do
-      element.shadow_root != nil -> {:reply, {:error, :not_supported}, state}
-      not valid_shadow_host?(element.local_name) -> {:reply, {:error, :not_supported}, state}
-      :else -> attach_shadow(id, mode, state)
-    end
-  end
+      element.shadow_root != nil ->
+        {:error, :not_supported}
 
-  defp attach_shadow(id, mode, state) do
-    shadow_id = Table.create_shadow_root(state.nodes, id, mode)
-    Table.span_index_all(state.nodes, state.index)
-    DOM.NodeData.Slots.recompute(state.nodes, state.index, id)
-    {:reply, {:ok, node_handle(state.nodes, shadow_id)}, state}
+      not valid_shadow_host?(element.local_name) ->
+        {:error, :not_supported}
+
+      :else ->
+        shadow_id = Table.create_shadow_root(nodes, id, mode)
+        Table.span_index_all(nodes, index)
+        DOM.NodeData.Slots.recompute(nodes, index, id)
+        {:ok, node_handle(nodes, shadow_id)}
+    end
   end
 
   defp valid_shadow_host?(local_name) do
@@ -319,18 +329,6 @@ defmodule DOM do
 
   # A valid custom element name contains a hyphen (a coarse but practical check).
   defp custom_element_name?(local_name), do: String.contains?(local_name, "-")
-
-  # The element's shadow root handle — nil when absent OR closed (a closed root is
-  # reachable only via attach_shadow's return value).
-  defp shadow_root_impl(id, _from, state) do
-    reply =
-      case Table.shadow_root(state.nodes, id) do
-        nil -> nil
-        shadow_id -> open_shadow_handle(state.nodes, shadow_id)
-      end
-
-    {:reply, reply, state}
-  end
 
   defp open_shadow_handle(nodes, shadow_id) do
     if Table.shadow_mode(nodes, shadow_id) == :open, do: node_handle(nodes, shadow_id)
@@ -1331,139 +1329,114 @@ defmodule DOM do
   end
 
   def _node_owner_document(server, node_id) do
-    GenServer.call(server, {:owner_document, node_id})
-  end
+    _atomic_ets_op(server, fn _nodes, _index ->
+      document_id = Process.get(:document_id)
 
-  defp owner_document_impl(node_id, _from, state) do
-    owner =
-      if node_id != state.document_id do
-        %Node{server: self(), node_id: state.document_id, type: :document}
+      if node_id != document_id do
+        %Node{server: server, node_id: document_id, type: :document}
       end
-
-    {:reply, owner, state}
+    end)
   end
 
   def _node_clone_node(server, node_id, deep?) do
-    GenServer.call(server, {:clone_node, node_id, deep?})
-  end
-
-  defp clone_node_impl(node_id, deep?, _from, state) do
-    clone_id = Table.clone(state.nodes, node_id, deep?)
-    Table.reindex(state.nodes, state.index)
-    Table.span_index_all(state.nodes, state.index)
-    {:reply, node_handle(state.nodes, clone_id), state}
+    _atomic_ets_op(server, fn nodes, index ->
+      clone_id = Table.clone(nodes, node_id, deep?)
+      Table.reindex(nodes, index)
+      Table.span_index_all(nodes, index)
+      node_handle(nodes, clone_id)
+    end)
   end
 
   def _element_inner_html(server, node_id) do
-    GenServer.call(server, {:inner_html, node_id})
-  end
-
-  defp inner_html_impl(node_id, _from, state) do
-    element = fetch_node!(state.nodes, node_id)
-    child_ids = Table.children_by_extent(state.nodes, node_id)
-    iodata = DOM.HTML.children(element.local_name, child_ids, state.nodes)
-    {:reply, IO.iodata_to_binary(iodata), state}
+    _atomic_ets_op(server, fn nodes, _index ->
+      element = fetch_node!(nodes, node_id)
+      child_ids = Table.children_by_extent(nodes, node_id)
+      IO.iodata_to_binary(DOM.HTML.children(element.local_name, child_ids, nodes))
+    end)
   end
 
   @doc false
-  def _element_set_inner_html(server, node_id, html) do
-    GenServer.call(server, {:set_inner_html, node_id, html})
-  end
-
   # innerHTML setter (§): fragment-parse `html` with this element as the context,
   # then replace the element's children with the parsed fragment's children. All
   # in-process on this server's table via DOM.NodeData.Table.
-  defp set_inner_html_impl(node_id, html, _from, state) do
-    element = Table.fetch!(state.nodes, node_id)
-    context = %{name: element.local_name, namespace: element.namespace}
-    root = fragment_root_for(html, context, state)
+  def _element_set_inner_html(server, node_id, html) do
+    _atomic_ets_op(server, fn nodes, index ->
+      element = Table.fetch!(nodes, node_id)
+      context = %{name: element.local_name, namespace: element.namespace}
+      root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-    Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
-    Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
-
-    resync_spans(state.nodes, state.index)
-    {:reply, :ok, state}
+      Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
+      Table.append_children(nodes, node_id, Table.children(nodes, root))
+      resync_spans(nodes, index)
+      :ok
+    end)
   end
 
   @doc false
-  def _shadow_inner_html(server, node_id) do
-    GenServer.call(server, {:shadow_inner_html, node_id})
-  end
-
   # A shadow root has no tag; serialize its children with an empty container name
   # (so no raw-text handling), like a DocumentFragment.
-  defp shadow_inner_html_impl(node_id, _from, state) do
-    child_ids = Table.children_by_extent(state.nodes, node_id)
-    iodata = DOM.HTML.children("", child_ids, state.nodes)
-    {:reply, IO.iodata_to_binary(iodata), state}
+  def _shadow_inner_html(server, node_id) do
+    _atomic_ets_op(server, fn nodes, _index ->
+      child_ids = Table.children_by_extent(nodes, node_id)
+      IO.iodata_to_binary(DOM.HTML.children("", child_ids, nodes))
+    end)
   end
 
   @doc false
-  def _shadow_set_inner_html(server, node_id, html) do
-    GenServer.call(server, {:shadow_set_inner_html, node_id, html})
-  end
-
   # Fragment-parse `html` in a default (div-like) context and replace the shadow
   # root's children with the result. Reuses the element innerHTML machinery.
-  defp shadow_set_inner_html_impl(node_id, html, _from, state) do
-    root = fragment_root_for(html, %{name: "div", namespace: :html}, state)
+  def _shadow_set_inner_html(server, node_id, html) do
+    _atomic_ets_op(server, fn nodes, index ->
+      root =
+        fragment_root_for(
+          html,
+          %{name: "div", namespace: :html},
+          nodes,
+          index,
+          Process.get(:document_id)
+        )
 
-    Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
-    Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
-
-    resync_spans(state.nodes, state.index)
-    # The shadow tree's <slot>s changed — reassign the host's light children.
-    recompute_slots(state.nodes, state.index, node_id)
-    {:reply, :ok, state}
+      Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
+      Table.append_children(nodes, node_id, Table.children(nodes, root))
+      resync_spans(nodes, index)
+      # The shadow tree's <slot>s changed — reassign the host's light children.
+      recompute_slots(nodes, index, node_id)
+      :ok
+    end)
   end
 
   @doc false
   def _shadow_host(%Node{server: server, node_id: node_id}) do
-    GenServer.call(server, {:shadow_host, node_id})
-  end
-
-  defp shadow_host_impl(node_id, _from, state) do
-    host_id = Table.shadow_host(state.nodes, node_id)
-    {:reply, host_id && node_handle(state.nodes, host_id), state}
+    _atomic_ets_op(server, fn nodes, _index ->
+      host_id = Table.shadow_host(nodes, node_id)
+      host_id && node_handle(nodes, host_id)
+    end)
   end
 
   @doc false
   def _slot_assigned_nodes(server, slot_id) do
-    GenServer.call(server, {:slot_assigned_nodes, slot_id})
-  end
-
-  defp slot_assigned_nodes_impl(slot_id, _from, state) do
-    handles =
-      state.index
+    _atomic_ets_op(server, fn nodes, index ->
+      index
       |> DOM.NodeData.Slots.assigned_nodes(slot_id)
-      |> Enum.map(&node_handle(state.nodes, &1))
-
-    {:reply, handles, state}
+      |> Enum.map(&node_handle(nodes, &1))
+    end)
   end
 
   @doc false
   def _node_assigned_slot(server, node_id) do
-    GenServer.call(server, {:node_assigned_slot, node_id})
-  end
-
-  defp node_assigned_slot_impl(node_id, _from, state) do
-    reply =
-      case DOM.NodeData.Slots.assigned_slot(state.index, node_id) do
+    _atomic_ets_op(server, fn nodes, index ->
+      case DOM.NodeData.Slots.assigned_slot(index, node_id) do
         nil -> nil
-        slot_id -> node_handle(state.nodes, slot_id)
+        slot_id -> node_handle(nodes, slot_id)
       end
-
-    {:reply, reply, state}
+    end)
   end
 
   @doc false
   def _node_get_root_node(server, node_id, composed?) do
-    GenServer.call(server, {:get_root_node, node_id, composed?})
-  end
-
-  defp get_root_node_impl(node_id, composed?, _from, state) do
-    root = root_node(state.nodes, node_id, composed?)
-    {:reply, node_handle(state.nodes, root), state}
+    _atomic_ets_op(server, fn nodes, _index ->
+      node_handle(nodes, root_node(nodes, node_id, composed?))
+    end)
   end
 
   # Walk `parent` to the tree root. Non-composed stops there (a shadow root has
@@ -1482,36 +1455,31 @@ defmodule DOM do
   end
 
   @doc false
-  def _element_set_outer_html(server, node_id, html) do
-    case GenServer.call(server, {:set_outer_html, node_id, html}) do
-      :ok -> :ok
-      {:error, :no_modification} -> raise DOM.NoModificationAllowedError
-    end
-  end
-
   # outerHTML setter (§): fragment-parse `html` in the element's PARENT context,
   # then replace the element itself (in the parent) with the parsed nodes. An
   # element with no element parent cannot be replaced.
-  defp set_outer_html_impl(node_id, html, _from, state) do
-    parent_id = Table.parent(state.nodes, node_id)
+  def _element_set_outer_html(server, node_id, html) do
+    result =
+      _atomic_ets_op(server, fn nodes, index ->
+        parent_id = Table.parent(nodes, node_id)
 
-    if is_nil(parent_id) or Table.type(state.nodes, parent_id) != :element do
-      {:reply, {:error, :no_modification}, state}
-    else
-      parent = Table.fetch!(state.nodes, parent_id)
-      context = %{name: parent.local_name, namespace: parent.namespace}
-      root = fragment_root_for(html, context, state)
+        if is_nil(parent_id) or Table.type(nodes, parent_id) != :element do
+          {:error, :no_modification}
+        else
+          parent = Table.fetch!(nodes, parent_id)
+          context = %{name: parent.local_name, namespace: parent.namespace}
+          root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-      Table.insert_children_before(
-        state.nodes,
-        parent_id,
-        Table.children(state.nodes, root),
-        node_id
-      )
+          Table.insert_children_before(nodes, parent_id, Table.children(nodes, root), node_id)
+          Table.remove_child(nodes, parent_id, node_id)
+          resync_spans(nodes, index)
+          :ok
+        end
+      end)
 
-      Table.remove_child(state.nodes, parent_id, node_id)
-      resync_spans(state.nodes, state.index)
-      {:reply, :ok, state}
+    case result do
+      :ok -> :ok
+      {:error, :no_modification} -> raise DOM.NoModificationAllowedError
     end
   end
 
@@ -1519,29 +1487,17 @@ defmodule DOM do
   # synthetic fragment-root id (whose children are the parsed nodes). build_into's
   # bulk-load indexes the parsed elements; span_index_all mirrors the fresh extents
   # into the span rows.
-  defp fragment_root_for(html, context, state) do
+  defp fragment_root_for(html, context, nodes, index, document_id) do
     tokens = DOM.HTML.fragment_tokens(html, context.name)
-
-    root =
-      TreeBuilder.build_fragment_into(
-        state.nodes,
-        state.index,
-        state.document_id,
-        tokens,
-        context
-      )
-
-    Table.span_index_all(state.nodes, state.index)
+    root = TreeBuilder.build_fragment_into(nodes, index, document_id, tokens, context)
+    Table.span_index_all(nodes, index)
     root
   end
 
   def _element_outer_html(server, node_id) do
-    GenServer.call(server, {:outer_html, node_id})
-  end
-
-  defp outer_html_impl(node_id, _from, state) do
-    iodata = DOM.HTML.serialize(fetch_node!(state.nodes, node_id), node_id, state.nodes)
-    {:reply, IO.iodata_to_binary(iodata), state}
+    _atomic_ets_op(server, fn nodes, _index ->
+      IO.iodata_to_binary(DOM.HTML.serialize(fetch_node!(nodes, node_id), node_id, nodes))
+    end)
   end
 
   defp get_elements_by_tag_name(nodes, index, node_id, name) do
@@ -1780,38 +1736,6 @@ defmodule DOM do
     fragment_root_impl(from, state)
   end
 
-  def handle_call({:attach_shadow, node_id, mode}, from, state) do
-    attach_shadow_impl(node_id, mode, from, state)
-  end
-
-  def handle_call({:shadow_root, node_id}, from, state) do
-    shadow_root_impl(node_id, from, state)
-  end
-
-  def handle_call({:shadow_inner_html, node_id}, from, state) do
-    shadow_inner_html_impl(node_id, from, state)
-  end
-
-  def handle_call({:shadow_set_inner_html, node_id, html}, from, state) do
-    shadow_set_inner_html_impl(node_id, html, from, state)
-  end
-
-  def handle_call({:shadow_host, node_id}, from, state) do
-    shadow_host_impl(node_id, from, state)
-  end
-
-  def handle_call({:slot_assigned_nodes, slot_id}, from, state) do
-    slot_assigned_nodes_impl(slot_id, from, state)
-  end
-
-  def handle_call({:node_assigned_slot, node_id}, from, state) do
-    node_assigned_slot_impl(node_id, from, state)
-  end
-
-  def handle_call({:get_root_node, node_id, composed?}, from, state) do
-    get_root_node_impl(node_id, composed?, from, state)
-  end
-
   def handle_call({:create, node_data}, from, state) do
     create_impl(node_data, from, state)
   end
@@ -1933,34 +1857,6 @@ defmodule DOM do
   @impl true
   def handle_call({:remove_subtree, node_id}, from, state) do
     remove_subtree_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:owner_document, node_id}, from, state) do
-    owner_document_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:clone_node, node_id, deep?}, from, state) do
-    clone_node_impl(node_id, deep?, from, state)
-  end
-
-  @impl true
-  def handle_call({:inner_html, node_id}, from, state) do
-    inner_html_impl(node_id, from, state)
-  end
-
-  def handle_call({:set_inner_html, node_id, html}, from, state) do
-    set_inner_html_impl(node_id, html, from, state)
-  end
-
-  def handle_call({:set_outer_html, node_id, html}, from, state) do
-    set_outer_html_impl(node_id, html, from, state)
-  end
-
-  @impl true
-  def handle_call({:outer_html, node_id}, from, state) do
-    outer_html_impl(node_id, from, state)
   end
 
   @impl true

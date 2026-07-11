@@ -84,4 +84,64 @@ defmodule DOM.ReentrancyTest do
       refute inside(a, fn -> DOM.matches(a, "span") end)
     end
   end
+
+  describe "serialization + document reads" do
+    test "inner_html / outer_html" do
+      doc = new_document("<div id='d'><b>x</b></div>")
+      d = DOM.query_selector(doc, "#d")
+
+      assert inside(d, fn -> Element.inner_html(d) end) == "<b>x</b>"
+      assert inside(d, fn -> Element.outer_html(d) end) == ~s(<div id="d"><b>x</b></div>)
+    end
+
+    test "owner_document" do
+      doc = new_document("<div id='d'></div>")
+      d = DOM.query_selector(doc, "#d")
+
+      assert inside(d, fn -> Node.owner_document(d) end).node_id == doc.node_id
+      # the document's own owner_document is nil
+      assert inside(doc, fn -> Node.owner_document(doc) end) == nil
+    end
+
+    test "clone_node" do
+      doc = new_document("<div id='d'><span>x</span></div>")
+      d = DOM.query_selector(doc, "#d")
+
+      clone = inside(d, fn -> Node.clone_node(d, true) end)
+      assert clone.node_id != d.node_id
+      assert Element.outer_html(clone) == ~s(<div id="d"><span>x</span></div>)
+    end
+
+    test "get_root_node" do
+      doc = new_document("<div id='d'></div>")
+      d = DOM.query_selector(doc, "#d")
+      assert inside(d, fn -> Node.get_root_node(d) end).node_id == doc.node_id
+    end
+  end
+
+  describe "shadow reads" do
+    test "shadow_root / shadow_host / inner_html" do
+      doc = new_document("<div id='h'></div>")
+      host = DOM.query_selector(doc, "#h")
+      s = Element.attach_shadow(host, :open)
+      DOM.ShadowRoot.set_inner_html(s, "<p>x</p>")
+
+      assert inside(host, fn -> Element.shadow_root(host) end).node_id == s.node_id
+      assert inside(s, fn -> DOM.ShadowRoot.host(s) end).node_id == host.node_id
+      assert inside(s, fn -> DOM.ShadowRoot.inner_html(s) end) == "<p>x</p>"
+    end
+
+    test "assigned_nodes / assigned_slot" do
+      doc = new_document("<div id='h'><a slot='x'>1</a></div>")
+      host = DOM.query_selector(doc, "#h")
+      s = Element.attach_shadow(host, :open)
+      DOM.ShadowRoot.set_inner_html(s, "<slot name='x'></slot>")
+      [slot] = DOM.query_selector_all(s, "slot")
+      a = DOM.query_selector(doc, "a")
+
+      assigned = inside(slot, fn -> DOM.Slot.assigned_nodes(slot) end)
+      assert Enum.map(assigned, & &1.node_id) == [a.node_id]
+      assert inside(a, fn -> Node.assigned_slot(a) end).node_id == slot.node_id
+    end
+  end
 end
