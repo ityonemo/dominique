@@ -216,6 +216,121 @@ defmodule DOM.Node do
     do: DOM._node_get_root_node(node.server, node.node_id, composed?)
 
   # ==========================================================================
+  # ParentNode / ChildNode / sibling-element mixins
+  # ==========================================================================
+
+  @doc "The node's ELEMENT children, in document order (ParentNode.children)."
+  @spec children(t()) :: [t()]
+  def children(%__MODULE__{} = node) do
+    node |> child_nodes() |> Enum.filter(&(&1.type == :element))
+  end
+
+  @doc "The first element child, or `nil`."
+  @spec first_element_child(t()) :: t() | nil
+  def first_element_child(%__MODULE__{} = node), do: node |> children() |> List.first()
+
+  @doc "The last element child, or `nil`."
+  @spec last_element_child(t()) :: t() | nil
+  def last_element_child(%__MODULE__{} = node), do: node |> children() |> List.last()
+
+  @doc "The number of element children."
+  @spec child_element_count(t()) :: non_neg_integer()
+  def child_element_count(%__MODULE__{} = node), do: node |> children() |> length()
+
+  @doc "The previous ELEMENT sibling, or `nil`."
+  @spec previous_element_sibling(t()) :: t() | nil
+  def previous_element_sibling(%__MODULE__{} = node), do: element_sibling(node, :prev)
+
+  @doc "The next ELEMENT sibling, or `nil`."
+  @spec next_element_sibling(t()) :: t() | nil
+  def next_element_sibling(%__MODULE__{} = node), do: element_sibling(node, :next)
+
+  defp element_sibling(node, direction) do
+    case parent_node(node) do
+      nil -> nil
+      parent -> sibling_at(children(parent), node.node_id, direction)
+    end
+  end
+
+  # The element sibling before/after `node_id` in `siblings`, or nil. A nil index
+  # (node_id is not itself an element) yields no element sibling by this API.
+  defp sibling_at(siblings, node_id, direction) do
+    case {Enum.find_index(siblings, &(&1.node_id == node_id)), direction} do
+      {nil, _} -> nil
+      {0, :prev} -> nil
+      {idx, :prev} -> Enum.at(siblings, idx - 1)
+      {idx, :next} -> Enum.at(siblings, idx + 1)
+    end
+  end
+
+  @doc "Removes `node` from its parent (a no-op when it has none)."
+  @spec remove(t()) :: :ok
+  def remove(%__MODULE__{} = node) do
+    if parent = parent_node(node), do: remove_child(parent, node)
+    :ok
+  end
+
+  @doc "Inserts `others` into `node`'s parent immediately before `node`."
+  @spec before(t(), [t() | String.t()]) :: :ok
+  def before(%__MODULE__{} = node, others) do
+    if parent = parent_node(node) do
+      Enum.each(coerce(node, others), &insert_before(parent, &1, node))
+    end
+
+    :ok
+  end
+
+  # `after` is a reserved word in Elixir (try/receive), so the ChildNode.after()
+  # method is defined via unquote to keep the DOM name.
+  @doc "Inserts `others` into `node`'s parent immediately after `node`."
+  @spec unquote(:after)(t(), [t() | String.t()]) :: :ok
+  def unquote(:after)(%__MODULE__{} = node, others) do
+    if parent = parent_node(node) do
+      reference = next_sibling(node)
+      Enum.each(coerce(node, others), &insert_before(parent, &1, reference))
+    end
+
+    :ok
+  end
+
+  @doc "Replaces `node` with `others` in its parent."
+  @spec replace_with(t(), [t() | String.t()]) :: :ok
+  def replace_with(%__MODULE__{} = node, others) do
+    if parent = parent_node(node) do
+      reference = next_sibling(node)
+      remove_child(parent, node)
+      Enum.each(coerce(node, others), &insert_before(parent, &1, reference))
+    end
+
+    :ok
+  end
+
+  @doc "Appends `others` as the last children of `node`."
+  @spec append(t(), [t() | String.t()]) :: :ok
+  def append(%__MODULE__{} = node, others) do
+    Enum.each(coerce(node, others), &append_child(node, &1))
+    :ok
+  end
+
+  @doc "Inserts `others` as the first children of `node`."
+  @spec prepend(t(), [t() | String.t()]) :: :ok
+  def prepend(%__MODULE__{} = node, others) do
+    reference = first_child(node)
+    Enum.each(coerce(node, others), &insert_before(node, &1, reference))
+    :ok
+  end
+
+  # Coerce a ChildNode/ParentNode arg list to nodes: strings become Text nodes in
+  # `reference`'s document. Nodes pass through unchanged.
+  defp coerce(%__MODULE__{} = reference, others) do
+    document = owner_document(reference) || reference
+    Enum.map(others, &coerce_one(document, &1))
+  end
+
+  defp coerce_one(_document, %__MODULE__{} = node), do: node
+  defp coerce_one(document, text) when is_binary(text), do: DOM.create_text_node(document, text)
+
+  # ==========================================================================
   # Inspection
   # ==========================================================================
 
