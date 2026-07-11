@@ -495,155 +495,154 @@ defmodule DOM do
 
   @doc false
   def _range_clone_contents(server, range_id) do
-    GenServer.call(server, {:range_clone_contents, range_id})
-  end
+    _atomic_ets_op(server, fn nodes, index ->
+      {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
+      clones = DOM.Range.Contents.clone(nodes, sc, so, ec, eo)
 
-  defp range_clone_contents_impl(range_id, _from, state) do
-    {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
-    clones = DOM.Range.Contents.clone(state.nodes, sc, so, ec, eo)
+      fragment_id = make_ref()
+      Table.put(nodes, fragment_id, %NodeData.DocumentFragment{})
+      Table.append_children(nodes, fragment_id, clones)
+      Table.reindex(nodes, index)
+      resync_spans(nodes, index)
 
-    fragment_id = make_ref()
-    Table.put(state.nodes, fragment_id, %NodeData.DocumentFragment{})
-    Table.append_children(state.nodes, fragment_id, clones)
-    Table.reindex(state.nodes, state.index)
-    resync_spans(state.nodes, state.index)
-
-    {:reply, node_handle(state.nodes, fragment_id), state}
+      node_handle(nodes, fragment_id)
+    end)
   end
 
   @doc false
   def _range_extract_contents(server, range_id) do
-    GenServer.call(server, {:range_extract_contents, range_id})
+    _atomic_ets_op(server, fn nodes, index -> range_extract_op(nodes, index, range_id) end)
   end
 
-  defp range_extract_contents_impl(range_id, _from, state) do
-    {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
-    snapshot = range_snapshot(state.nodes, state.index)
-    extracted = DOM.Range.Contents.extract(state.nodes, sc, so, ec, eo)
+  defp range_extract_op(nodes, index, range_id) do
+    {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
+    snapshot = range_snapshot(nodes, index)
+    extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
 
     fragment_id = make_ref()
-    Table.put(state.nodes, fragment_id, %NodeData.DocumentFragment{})
-    Table.append_children(state.nodes, fragment_id, extracted)
-    Table.reindex(state.nodes, state.index)
-    resync_spans(state.nodes, state.index)
+    Table.put(nodes, fragment_id, %NodeData.DocumentFragment{})
+    Table.append_children(nodes, fragment_id, extracted)
+    Table.reindex(nodes, index)
+    resync_spans(nodes, index)
 
-    collapse_range_to_start(state, range_id)
-    reconcile_ranges(state.nodes, state.index, snapshot)
+    collapse_range_to_start(index, range_id)
+    reconcile_ranges(nodes, index, snapshot)
 
-    {:reply, node_handle(state.nodes, fragment_id), state}
+    node_handle(nodes, fragment_id)
   end
 
   @doc false
   def _range_delete_contents(server, range_id) do
-    GenServer.call(server, {:range_delete_contents, range_id})
-  end
+    _atomic_ets_op(server, fn nodes, index ->
+      {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
+      snapshot = range_snapshot(nodes, index)
+      extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
 
-  defp range_delete_contents_impl(range_id, _from, state) do
-    {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
-    snapshot = range_snapshot(state.nodes, state.index)
-    extracted = DOM.Range.Contents.extract(state.nodes, sc, so, ec, eo)
+      Enum.each(extracted, &delete_subtree(nodes, index, &1))
+      resync_spans(nodes, index)
 
-    Enum.each(extracted, &delete_subtree(state.nodes, state.index, &1))
-    resync_spans(state.nodes, state.index)
+      collapse_range_to_start(index, range_id)
+      reconcile_ranges(nodes, index, snapshot)
 
-    collapse_range_to_start(state, range_id)
-    reconcile_ranges(state.nodes, state.index, snapshot)
-
-    {:reply, :ok, state}
+      :ok
+    end)
   end
 
   @doc false
   def _range_insert_node(server, range_id, node_id) do
-    GenServer.call(server, {:range_insert_node, range_id, node_id})
-  end
-
-  defp range_insert_node_impl(range_id, node_id, _from, state) do
-    {{start_key, so}, _stop} = Table.range_boundaries(state.index, range_id)
-    container = Table.node_at_start_key(state.nodes, start_key)
-    do_insert_at_boundary(state, container, so, node_id)
-    {:reply, :ok, state}
+    _atomic_ets_op(server, fn nodes, index ->
+      {{start_key, so}, _stop} = Table.range_boundaries(index, range_id)
+      container = Table.node_at_start_key(nodes, start_key)
+      do_insert_at_boundary(nodes, index, container, so, node_id)
+      :ok
+    end)
   end
 
   # Insert node_id at boundary (container, offset). Text container: split at offset
   # (unless at an edge) and insert before the tail. Element/fragment: insert at the
   # child index `offset`.
-  defp do_insert_at_boundary(state, container, offset, node_id) do
-    if Table.type(state.nodes, container) in [:text, :comment] do
-      insert_into_text(state, container, offset, node_id)
+  defp do_insert_at_boundary(nodes, index, container, offset, node_id) do
+    if Table.type(nodes, container) in [:text, :comment] do
+      insert_into_text(nodes, index, container, offset, node_id)
     else
-      insert_at_child_index(state, container, offset, node_id)
+      insert_at_child_index(nodes, index, container, offset, node_id)
     end
   end
 
-  defp insert_into_text(state, text_id, offset, node_id) do
-    parent_id = Table.parent(state.nodes, text_id)
+  defp insert_into_text(nodes, index, text_id, offset, node_id) do
+    parent_id = Table.parent(nodes, text_id)
 
     reference =
       cond do
         offset == 0 -> text_id
-        offset >= String.length(Table.value(state.nodes, text_id)) -> nil
-        :else -> split_text_for_insert(state, text_id, offset)
+        offset >= String.length(Table.value(nodes, text_id)) -> nil
+        :else -> split_text_for_insert(nodes, text_id, offset)
       end
 
-    insert_relative(state, parent_id, node_id, reference)
+    insert_relative(nodes, index, parent_id, node_id, reference)
   end
 
   # Split `text_id` at `offset`; return the tail node to insert before.
-  defp split_text_for_insert(state, text_id, offset) do
-    {before, rest} = String.split_at(Table.value(state.nodes, text_id), offset)
-    Table.set_value(state.nodes, text_id, before)
-    tail = Table.create_text(state.nodes, rest)
-    insert_after(state.nodes, Table.parent(state.nodes, text_id), tail, text_id)
+  defp split_text_for_insert(nodes, text_id, offset) do
+    {before, rest} = String.split_at(Table.value(nodes, text_id), offset)
+    Table.set_value(nodes, text_id, before)
+    tail = Table.create_text(nodes, rest)
+    insert_after(nodes, Table.parent(nodes, text_id), tail, text_id)
     tail
   end
 
-  defp insert_at_child_index(state, container, offset, node_id) do
-    reference = Enum.at(Table.children(state.nodes, container), offset)
-    insert_relative(state, container, node_id, reference)
+  defp insert_at_child_index(nodes, index, container, offset, node_id) do
+    reference = Enum.at(Table.children(nodes, container), offset)
+    insert_relative(nodes, index, container, node_id, reference)
   end
 
   # Insert node_id under parent before `reference` (append when nil), routing
   # through the tree-surgery workers so hierarchy + range adjustment run.
-  defp insert_relative(state, parent_id, node_id, reference) do
+  defp insert_relative(nodes, index, parent_id, node_id, reference) do
     if reference do
-      insert_before_op(state.nodes, state.index, parent_id, node_id, reference)
+      insert_before_op(nodes, index, parent_id, node_id, reference)
     else
-      append_child_op(state.nodes, state.index, parent_id, node_id)
+      append_child_op(nodes, index, parent_id, node_id)
     end
   end
 
   @doc false
   def _range_surround_contents(server, range_id, element_id) do
-    case GenServer.call(server, {:range_surround_contents, range_id, element_id}) do
+    result =
+      _atomic_ets_op(server, fn nodes, index ->
+        range_surround_op(nodes, index, range_id, element_id)
+      end)
+
+    case result do
       :ok -> :ok
       {:error, :invalid_state} -> raise DOM.InvalidStateError
     end
   end
 
-  defp range_surround_contents_impl(range_id, element_id, _from, state) do
-    {sc, _so, ec, _eo} = range_endpoints!(state.nodes, state.index, range_id)
+  defp range_surround_op(nodes, index, range_id, element_id) do
+    {sc, _so, ec, _eo} = range_endpoints!(nodes, index, range_id)
 
-    if partially_selects_non_text?(state.nodes, sc, ec) do
-      {:reply, {:error, :invalid_state}, state}
+    if partially_selects_non_text?(nodes, sc, ec) do
+      {:error, :invalid_state}
     else
       # extract -> append into element -> insert element at the range start
-      {:reply, fragment, _state} = range_extract_contents_impl(range_id, nil, state)
+      fragment = range_extract_op(nodes, index, range_id)
 
       Enum.each(
-        Table.children(state.nodes, fragment.node_id),
-        &Table.append_child(state.nodes, element_id, &1)
+        Table.children(nodes, fragment.node_id),
+        &Table.append_child(nodes, element_id, &1)
       )
 
-      Table.reindex(state.nodes, state.index)
-      resync_spans(state.nodes, state.index)
+      Table.reindex(nodes, index)
+      resync_spans(nodes, index)
 
-      {{start_key, so2}, _} = Table.range_boundaries(state.index, range_id)
-      container = Table.node_at_start_key(state.nodes, start_key)
-      do_insert_at_boundary(state, container, so2, element_id)
+      {{start_key, so2}, _} = Table.range_boundaries(index, range_id)
+      container = Table.node_at_start_key(nodes, start_key)
+      do_insert_at_boundary(nodes, index, container, so2, element_id)
 
       # select the inserted element
-      select_element_in_range(state, range_id, element_id)
-      {:reply, :ok, state}
+      select_element_in_range(nodes, index, range_id, element_id)
+      :ok
     end
   end
 
@@ -683,17 +682,17 @@ defmodule DOM do
   end
 
   # After surround, set the range to select `element_id` (start before, end after).
-  defp select_element_in_range(state, range_id, element_id) do
-    parent_id = Table.parent(state.nodes, element_id)
-    at = child_index(state.nodes, parent_id, element_id)
-    pkey = Table.fetch!(state.nodes, parent_id).start
-    Table.range_put(state.index, range_id, {pkey, at}, {pkey, at + 1})
+  defp select_element_in_range(nodes, index, range_id, element_id) do
+    parent_id = Table.parent(nodes, element_id)
+    at = child_index(nodes, parent_id, element_id)
+    pkey = Table.fetch!(nodes, parent_id).start
+    Table.range_put(index, range_id, {pkey, at}, {pkey, at + 1})
   end
 
   # Collapse `range_id` onto its start boundary (after extract/delete, per spec).
-  defp collapse_range_to_start(state, range_id) do
-    {{start_key, so}, _stop} = Table.range_boundaries(state.index, range_id)
-    Table.range_put(state.index, range_id, {start_key, so}, {start_key, so})
+  defp collapse_range_to_start(index, range_id) do
+    {{start_key, so}, _stop} = Table.range_boundaries(index, range_id)
+    Table.range_put(index, range_id, {start_key, so}, {start_key, so})
   end
 
   # After an extract/delete that moved/removed nodes, re-pin every OTHER range's
@@ -1775,25 +1774,5 @@ defmodule DOM do
 
   def handle_call({:range_detach, range_id}, from, state) do
     range_detach_impl(range_id, from, state)
-  end
-
-  def handle_call({:range_clone_contents, range_id}, from, state) do
-    range_clone_contents_impl(range_id, from, state)
-  end
-
-  def handle_call({:range_extract_contents, range_id}, from, state) do
-    range_extract_contents_impl(range_id, from, state)
-  end
-
-  def handle_call({:range_delete_contents, range_id}, from, state) do
-    range_delete_contents_impl(range_id, from, state)
-  end
-
-  def handle_call({:range_insert_node, range_id, node_id}, from, state) do
-    range_insert_node_impl(range_id, node_id, from, state)
-  end
-
-  def handle_call({:range_surround_contents, range_id, element_id}, from, state) do
-    range_surround_contents_impl(range_id, element_id, from, state)
   end
 end

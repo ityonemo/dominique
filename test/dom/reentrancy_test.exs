@@ -188,6 +188,68 @@ defmodule DOM.ReentrancyTest do
     end
   end
 
+  describe "range surgery (on an existing range)" do
+    # A range is created OUTSIDE the server (an external owner is required); its
+    # surgery ops are then exercised from inside the server, as a listener would.
+    setup do
+      doc = new_document("<div id='d'>hello world</div>")
+      d = DOM.query_selector(doc, "#d")
+      [text] = DOM.Node.child_nodes(d)
+      range = DOM.Range.create_range(doc)
+      range = DOM.Range.set_start(range, text, 0)
+      range = DOM.Range.set_end(range, text, 5)
+      %{doc: doc, d: d, text: text, range: range}
+    end
+
+    test "clone_contents", %{doc: doc, range: range} do
+      frag = inside(doc, fn -> DOM.Range.clone_contents(range) end)
+      assert Node.text_content(frag) == "hello"
+    end
+
+    test "extract_contents", %{doc: doc, d: d, range: range} do
+      frag = inside(doc, fn -> DOM.Range.extract_contents(range) end)
+      assert Node.text_content(frag) == "hello"
+      assert Node.text_content(d) == " world"
+    end
+
+    test "delete_contents", %{doc: doc, d: d, range: range} do
+      inside(doc, fn -> DOM.Range.delete_contents(range) end)
+      assert Node.text_content(d) == " world"
+    end
+
+    test "insert_node", %{doc: doc, d: d, range: range} do
+      inside(doc, fn ->
+        img = DOM.create_element(doc, "img")
+        DOM.Range.insert_node(range, img)
+      end)
+
+      assert Element.inner_html(d) =~ "<img>"
+    end
+  end
+
+  describe "escape hatch: range creation is prohibited inside a listener" do
+    # Creating a range needs an EXTERNAL owner to monitor; the server cannot own one
+    # (owner == server is rejected). Attempting it from inside the server raises the
+    # guard's ArgumentError, which surfaces as the DOM.lambda call exiting with it —
+    # i.e. range creation is unavailable to a listener, by design.
+    test "create_range is rejected when attempted inside the server" do
+      # Use a standalone server we tear down ourselves: this test intentionally
+      # crashes the DOM (the guard raises inside the listener), so it must not use
+      # the DOM.Case consistency net (which would try to interrogate a dead server).
+      Process.flag(:trap_exit, true)
+      document_id = make_ref()
+      {:ok, server} = GenServer.start(DOM, document_id: document_id)
+      doc = %DOM.Node{server: server, node_id: document_id, type: :document}
+
+      # GenServer.call exit: {{exception, exception_stack}, call_info}
+      {{exception, _exc_stack}, _call_info} =
+        catch_exit(inside(doc, fn -> DOM.Range.create_range(doc) end))
+
+      assert %ArgumentError{message: message} = exception
+      assert message =~ "may not be owned by the document server process"
+    end
+  end
+
   describe "shadow reads" do
     test "shadow_root / shadow_host / inner_html" do
       doc = new_document("<div id='h'></div>")
