@@ -44,6 +44,24 @@ defmodule DOM.Element do
   def content(%Node{type: :element} = element), do: DOM._element_content(element)
   def content(%Node{}), do: nil
 
+  @doc """
+  Attach a shadow root to the element and return its handle. `mode` is `:open` or
+  `:closed`. Raises `DOM.NotSupportedError` if the element already has a shadow
+  root or is not a valid shadow host.
+  """
+  @spec attach_shadow(Node.t(), :open | :closed) :: Node.t()
+  def attach_shadow(%Node{type: :element} = element, mode) when mode in [:open, :closed] do
+    DOM._element_attach_shadow(element.server, element.node_id, mode)
+  end
+
+  @doc """
+  The element's shadow root, or `nil` — including `nil` for a **closed** shadow
+  root (the closed root is reachable only via `attach_shadow/2`'s return value).
+  """
+  @spec shadow_root(Node.t()) :: Node.t() | nil
+  def shadow_root(%Node{type: :element} = element), do: DOM._element_shadow_root(element)
+  def shadow_root(%Node{}), do: nil
+
   @doc "The value of an attribute, or `nil` when absent."
   @spec get_attribute(Node.t(), String.t()) :: String.t() | nil
   def get_attribute(%Node{type: :element} = element, name) do

@@ -352,6 +352,46 @@ defmodule DOM.NodeData.Table do
     end
   end
 
+  @doc """
+  Attach a shadow root to `host_id`: create a detached `ShadowRoot` record (its
+  own root; `ensure_extent` seeds its window on first append, like template
+  content) and back-link it on the host element. Returns the shadow root id.
+  """
+  @spec create_shadow_root(tid, id, :open | :closed) :: id
+  def create_shadow_root(tid, host_id, mode) do
+    shadow_id = insert_new(tid, %NodeData.ShadowRoot{host: host_id, mode: mode})
+    host = fetch!(tid, host_id)
+    put(tid, host_id, %{host | shadow_root: shadow_id})
+    shadow_id
+  end
+
+  @doc "An element's shadow root id, or nil."
+  @spec shadow_root(tid, id) :: id | nil
+  def shadow_root(tid, id) do
+    case fetch!(tid, id) do
+      %NodeData.Element{shadow_root: shadow_root} -> shadow_root
+      _ -> nil
+    end
+  end
+
+  @doc "A shadow root's host element id, or nil."
+  @spec shadow_host(tid, id) :: id | nil
+  def shadow_host(tid, id) do
+    case fetch!(tid, id) do
+      %NodeData.ShadowRoot{host: host} -> host
+      _ -> nil
+    end
+  end
+
+  @doc "A shadow root's mode (`:open`/`:closed`), or nil for a non-shadow-root."
+  @spec shadow_mode(tid, id) :: :open | :closed | nil
+  def shadow_mode(tid, id) do
+    case fetch!(tid, id) do
+      %NodeData.ShadowRoot{mode: mode} -> mode
+      _ -> nil
+    end
+  end
+
   # ==========================================================================
   # Deep/shallow clone and descendant queries
   # ==========================================================================

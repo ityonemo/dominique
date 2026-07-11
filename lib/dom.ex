@@ -160,6 +160,19 @@ defmodule DOM do
     GenServer.call(server, {:element_content, node_id})
   end
 
+  @doc false
+  def _element_attach_shadow(server, node_id, mode) do
+    case GenServer.call(server, {:attach_shadow, node_id, mode}) do
+      {:ok, shadow} -> shadow
+      {:error, :not_supported} -> raise DOM.NotSupportedError
+    end
+  end
+
+  @doc false
+  def _element_shadow_root(%Node{server: server, node_id: node_id}) do
+    GenServer.call(server, {:shadow_root, node_id})
+  end
+
   def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
 
   def create_comment(document, value), do: create(document, %NodeData.Comment{value: value})
@@ -260,6 +273,49 @@ defmodule DOM do
     [{^id, %NodeData.Element{content: content_id}}] = :ets.lookup(state.nodes, id)
     reply = if content_id, do: node_handle(state.nodes, content_id), else: nil
     {:reply, reply, state}
+  end
+
+  # Elements permitted to host a shadow root (§ "valid shadow host name"): a fixed
+  # HTML set, plus any valid custom-element name (a hyphenated local name).
+  @shadow_host_names ~w(article aside blockquote body div footer h1 h2 h3 h4 h5 h6
+                        header main nav p section span)
+
+  defp attach_shadow_impl(id, mode, _from, state) do
+    element = Table.fetch!(state.nodes, id)
+
+    cond do
+      element.shadow_root != nil -> {:reply, {:error, :not_supported}, state}
+      not valid_shadow_host?(element.local_name) -> {:reply, {:error, :not_supported}, state}
+      :else -> attach_shadow(id, mode, state)
+    end
+  end
+
+  defp attach_shadow(id, mode, state) do
+    shadow_id = Table.create_shadow_root(state.nodes, id, mode)
+    {:reply, {:ok, node_handle(state.nodes, shadow_id)}, state}
+  end
+
+  defp valid_shadow_host?(local_name) do
+    local_name in @shadow_host_names or custom_element_name?(local_name)
+  end
+
+  # A valid custom element name contains a hyphen (a coarse but practical check).
+  defp custom_element_name?(local_name), do: String.contains?(local_name, "-")
+
+  # The element's shadow root handle — nil when absent OR closed (a closed root is
+  # reachable only via attach_shadow's return value).
+  defp shadow_root_impl(id, _from, state) do
+    reply =
+      case Table.shadow_root(state.nodes, id) do
+        nil -> nil
+        shadow_id -> open_shadow_handle(state.nodes, shadow_id)
+      end
+
+    {:reply, reply, state}
+  end
+
+  defp open_shadow_handle(nodes, shadow_id) do
+    if Table.shadow_mode(nodes, shadow_id) == :open, do: node_handle(nodes, shadow_id)
   end
 
   # Generic ETS primitives. A caller module (DOM.Node/DOM.Element) builds a match
@@ -1532,6 +1588,14 @@ defmodule DOM do
   @impl true
   def handle_call(:fragment_root, from, state) do
     fragment_root_impl(from, state)
+  end
+
+  def handle_call({:attach_shadow, node_id, mode}, from, state) do
+    attach_shadow_impl(node_id, mode, from, state)
+  end
+
+  def handle_call({:shadow_root, node_id}, from, state) do
+    shadow_root_impl(node_id, from, state)
   end
 
   def handle_call({:create, node_data}, from, state) do

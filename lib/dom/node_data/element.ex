@@ -5,6 +5,10 @@ defmodule DOM.NodeData.Element do
   defstruct [
     :local_name,
     :content,
+    # The element's shadow root id (a DOM.NodeData.ShadowRoot, a detached root
+    # tree), or nil. Parallel to `content` (template contents); the serializer
+    # never reads it, so the shadow tree is invisible to the host's outerHTML.
+    :shadow_root,
     namespace: :html,
     parent: nil,
     attributes: [],
@@ -26,6 +30,7 @@ defmodule DOM.NodeData.Element do
           local_name: String.t(),
           namespace: namespace(),
           content: reference() | nil,
+          shadow_root: reference() | nil,
           parent: reference() | nil,
           attributes: [{String.t(), String.t()}],
           root: reference() | nil,

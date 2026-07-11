@@ -2,7 +2,7 @@ defmodule DOM.Node do
   @moduledoc """
   A handle to a DOM node: `%DOM.Node{server, node_id, type}`, where `type` is the node
   kind (`:element`, `:text`, `:comment`, `:document`, `:document_fragment`,
-  `:document_type`). Handles are immutable references into the owning document's
+  `:document_type`, `:shadow_root`). Handles are immutable references into the owning document's
   GenServer, not live objects; a handle can go stale after a cross-document
   transfer (see the README).
 
@@ -23,7 +23,13 @@ defmodule DOM.Node do
   defstruct [:server, :node_id, :type]
 
   @type node_type ::
-          :element | :text | :comment | :document | :document_fragment | :document_type
+          :element
+          | :text
+          | :comment
+          | :document
+          | :document_fragment
+          | :document_type
+          | :shadow_root
 
   @type t :: %__MODULE__{server: GenServer.server(), node_id: reference(), type: node_type()}
 
@@ -44,8 +50,9 @@ defmodule DOM.Node do
     raise DOM.HierarchyRequestError
   end
 
-  def append_child(%__MODULE__{type: :document_fragment}, %__MODULE__{type: type})
-      when type in [:document, :document_type] do
+  def append_child(%__MODULE__{type: type}, %__MODULE__{type: child_type})
+      when type in [:document_fragment, :shadow_root] and
+             child_type in [:document, :document_type] do
     raise DOM.HierarchyRequestError
   end
 
@@ -69,8 +76,9 @@ defmodule DOM.Node do
     raise DOM.HierarchyRequestError
   end
 
-  def insert_before(%__MODULE__{type: :document_fragment}, %__MODULE__{type: type}, _reference)
-      when type in [:document, :document_type] do
+  def insert_before(%__MODULE__{type: type}, %__MODULE__{type: child_type}, _reference)
+      when type in [:document_fragment, :shadow_root] and
+             child_type in [:document, :document_type] do
     raise DOM.HierarchyRequestError
   end
 
@@ -158,6 +166,9 @@ defmodule DOM.Node do
 
     {^node_id, %{__struct__: NodeData.DocumentFragment}} ->
       %DOM.Node{server: server, node_id: node_id, type: :document_fragment}
+
+    {^node_id, %{__struct__: NodeData.ShadowRoot}} ->
+      %DOM.Node{server: server, node_id: node_id, type: :shadow_root}
   end
 
   @doc "The node's first child, or `nil`."
@@ -208,6 +219,7 @@ defmodule DOM.Node do
     {^node_id, %{__struct__: NodeData.Document}} -> 9
     {^node_id, %{__struct__: NodeData.DocumentType}} -> 10
     {^node_id, %{__struct__: NodeData.DocumentFragment}} -> 11
+    {^node_id, %{__struct__: NodeData.ShadowRoot}} -> 11
   end
 
   @doc "The DOM `nodeName`."
@@ -224,6 +236,7 @@ defmodule DOM.Node do
     {^node_id, %{__struct__: NodeData.Document}} -> "#document"
     {^node_id, %{__struct__: NodeData.DocumentType, name: name}} -> name
     {^node_id, %{__struct__: NodeData.DocumentFragment}} -> "#document-fragment"
+    {^node_id, %{__struct__: NodeData.ShadowRoot}} -> "#document-fragment"
   end
 
   @doc "A DocumentType's `{public_id, system_id}` (each `nil` when absent)."
