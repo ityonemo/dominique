@@ -333,6 +333,62 @@ defmodule DOM do
     {:noreply, state}
   end
 
+  @doc false
+  def _text_split(server, node_id, offset) do
+    case GenServer.call(server, {:text_split, node_id, offset}) do
+      {:ok, new_node} -> new_node
+      {:error, :index_size} -> raise DOM.IndexSizeError
+    end
+  end
+
+  # splitText (§): the original keeps chars 0..offset, a new Text sibling gets the
+  # remainder. Boundaries in the original past `offset` move into the new node.
+  defp text_split_impl(node_id, offset, _from, state) do
+    value = Table.value(state.nodes, node_id)
+
+    if offset > String.length(value) do
+      {:reply, {:error, :index_size}, state}
+    else
+      {before, rest} = String.split_at(value, offset)
+      orig_key = Table.fetch!(state.nodes, node_id).start
+      parent_id = Table.parent(state.nodes, node_id)
+
+      snapshot = range_snapshot(state)
+      Table.set_value(state.nodes, node_id, before)
+      new_id = Table.create_text(state.nodes, rest)
+      insert_after(state.nodes, parent_id, new_id, node_id)
+      resync_spans(state)
+
+      new_key = Table.fetch!(state.nodes, new_id).start
+      adjust_split_ranges(state, snapshot, parent_id, node_id, orig_key, new_key, offset)
+
+      {:reply, {:ok, node_handle(state.nodes, new_id)}, state}
+    end
+  end
+
+  # Insert `new_id` immediately after `ref_id` under `parent_id` (append if last).
+  defp insert_after(nodes, parent_id, new_id, ref_id) do
+    kids = Table.children(nodes, parent_id)
+    at = Enum.find_index(kids, &(&1 == ref_id))
+
+    case Enum.at(kids, at + 1) do
+      nil -> Table.append_child(nodes, parent_id, new_id)
+      next -> Table.insert_before(nodes, parent_id, new_id, next)
+    end
+  end
+
+  # split rule (boundaries past the split move into the new node) + the insert of
+  # the new sibling (a child was added after the original's index in the parent).
+  defp adjust_split_ranges(_state, nil, _parent, _orig, _ok, _nk, _off), do: :ok
+
+  defp adjust_split_ranges(state, snapshot, parent_id, orig_id, orig_key, new_key, offset) do
+    DOM.Range.Adjust.on_split(state.nodes, state.index, orig_key, new_key, offset)
+    at = child_index(state.nodes, parent_id, orig_id)
+    parent_key = Map.get(snapshot, parent_id) || current_start(state.nodes, parent_id)
+    DOM.Range.Adjust.on_insert(state.nodes, state.index, parent_key, at, 1)
+    :ok
+  end
+
   @doc """
   Assert the document's ETS invariants (see `DOM.NodeData.Table.check_consistency!/1`),
   raising on violation. Test-only; wired into an `on_exit` hook by `DOM.Case`.
@@ -1296,6 +1352,10 @@ defmodule DOM do
 
   def handle_call({:range_detach, range_id}, from, state) do
     range_detach_impl(range_id, from, state)
+  end
+
+  def handle_call({:text_split, node_id, offset}, from, state) do
+    text_split_impl(node_id, offset, from, state)
   end
 
   @impl true

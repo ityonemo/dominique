@@ -73,6 +73,20 @@ defmodule DOM.Range.Adjust do
     :ok
   end
 
+  @doc """
+  A text node with start key `orig_key` was split at `offset`; the remainder is a
+  new node with start key `new_key`. Boundaries in the original text with offset
+  greater than `offset` move into the new node (offset - split point).
+  """
+  @spec on_split(:ets.tid(), :ets.tid(), binary(), binary(), non_neg_integer()) :: :ok
+  def on_split(_nodes, index, orig_key, new_key, offset) do
+    for {kind, _key, ref, off} <- boundaries_in(index, orig_key), off > offset do
+      Table.range_set_boundary(index, kind, ref, new_key, off - offset)
+    end
+
+    :ok
+  end
+
   # All range boundary rows whose container key is `key`.
   defp boundaries_in(index, key) do
     Enum.filter(Table.range_all_rows(index), fn {_kind, k, _ref, _off} -> k == key end)
