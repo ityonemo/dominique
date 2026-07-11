@@ -87,7 +87,10 @@ defmodule DOM.Event do
   def stop_immediate_propagation(%__MODULE__{ref: nil}), do: :ok
 
   def stop_immediate_propagation(%__MODULE__{ref: ref} = event) do
+    # Per spec, this stops the current node's remaining listeners AND propagation to
+    # further nodes — set both flags.
     DOM._event_set_flag(server(event), ref, :immediate_stopped)
+    DOM._event_set_flag(server(event), ref, :propagation_stopped)
   end
 
   # The dispatching server: read off whichever node the loop set as target /

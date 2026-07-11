@@ -10,46 +10,76 @@ defmodule DOM.Events do
   # prevent_default/stop_* route back to this row. The row is opened on entry and
   # closed on exit (try/after, so a raising listener still cleans up).
 
+  alias DOM.CSS.Query
   alias DOM.Event
   alias DOM.NodeData.Table
 
   # Dispatch `event` at `target_id`. Returns `not default_prevented` (the DOM's
   # dispatchEvent boolean). Runs in-server: `nodes`/`index` are the live tids,
   # `server` is the document pid (for building handles listeners receive).
+  #
+  # The propagation path is target..root; the phases are:
+  #   1. CAPTURING — root -> target-exclusive, capture listeners
+  #   2. AT_TARGET — the target, both capture and bubble listeners
+  #   3. BUBBLING  — target-exclusive -> root, bubble listeners (only if bubbles)
+  # propagation_stopped halts between NODES; immediate_stopped halts between
+  # listeners on one node. Both live in the ref-keyed :active_event row.
   @spec dispatch(:ets.tid(), :ets.tid(), GenServer.server(), reference(), Event.t()) :: boolean()
   def dispatch(nodes, index, server, target_id, %Event{} = event) do
     ref = make_ref()
     Table.active_event_open(index, ref)
 
-    target = handle(nodes, server, target_id)
-    event = %{event | ref: ref, target: target}
+    event = %{event | ref: ref, target: handle(nodes, server, target_id)}
+    ancestors = Query.ancestors(nodes, target_id)
 
     try do
-      run_target(nodes, index, server, target_id, event)
+      # capture: root -> target-exclusive
+      run_phase(nodes, index, server, Enum.reverse(ancestors), :capturing, event)
+      run_phase(nodes, index, server, [target_id], :at_target, event)
+
+      if event.bubbles do
+        run_phase(nodes, index, server, ancestors, :bubbling, event)
+      end
+
       not Table.active_event_flags(index, ref).default_prevented
     after
       Table.active_event_close(index, ref)
     end
   end
 
-  # Target phase: fire every listener registered on the target (both capture flags
-  # fire AT_TARGET), in registration order, respecting stopImmediatePropagation.
-  defp run_target(nodes, index, server, target_id, event) do
-    event = %{
-      event
-      | current_target: handle(nodes, server, target_id),
-        event_phase: Event.phase(:at_target)
-    }
+  # Walk `path` firing each node's phase-appropriate listeners. A no-op once
+  # propagation_stopped is set — so a stop in the capture phase skips the target and
+  # bubble phases too (checked before the phase and between nodes).
+  defp run_phase(nodes, index, server, path, phase, event) do
+    event = %{event | event_phase: Event.phase(phase)}
 
-    fire_listeners(index, target_id, event)
+    Enum.reduce_while(path, :ok, fn node_id, _ ->
+      if Table.active_event_flags(index, event.ref).propagation_stopped do
+        {:halt, :ok}
+      else
+        current = %{event | current_target: handle(nodes, server, node_id)}
+        fire_listeners(index, node_id, phase, current)
+        {:cont, :ok}
+      end
+    end)
+
+    :ok
   end
 
-  # Invoke each of `node_id`'s listeners for the event type, in order. Stops early
-  # if a listener set immediate_stopped. `once` listeners are removed before firing.
-  defp fire_listeners(index, node_id, event) do
+  # Which listeners fire in a phase: capture-phase fires capture:true, bubble-phase
+  # fires capture:false, and AT_TARGET fires both (a target listener's capture flag
+  # doesn't gate it).
+  defp fires_in_phase?(_listener, :at_target), do: true
+  defp fires_in_phase?(listener, :capturing), do: listener.capture
+  defp fires_in_phase?(listener, :bubbling), do: not listener.capture
+
+  # Invoke `node_id`'s listeners for the event type that fire in `phase`, in
+  # registration order. Stops early on immediate_stopped. `once` listeners are
+  # removed before firing.
+  defp fire_listeners(index, node_id, phase, event) do
     index
     |> Table.listeners_of(node_id)
-    |> Enum.filter(&(&1.type == event.type))
+    |> Enum.filter(&(&1.type == event.type and fires_in_phase?(&1, phase)))
     |> Enum.reduce_while(:ok, fn listener, _ ->
       if listener.once do
         Table.listener_delete(index, node_id, listener.type, listener.fn, listener.capture)

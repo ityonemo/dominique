@@ -77,6 +77,85 @@ defmodule Integration.EventTest do
     end
   end
 
+  playwright do
+    @link "https://dom.spec.whatwg.org/#dispatching-events"
+
+    # Full capture -> target -> bubble across gp > p > t, with eventPhase recorded,
+    # bubbles gating, and stopPropagation in the capture phase.
+    @js """
+    return await page.evaluate(() => {
+      const doc = new DOMParser().parseFromString(
+        "<a id='gp'><b id='p'><c id='t'></c></b></a>", "text/html");
+      const gp = doc.getElementById("gp"), p = doc.getElementById("p"), t = doc.getElementById("t");
+
+      const run = (bubbles, stopAt) => {
+        const order = [];
+        const mk = (label, phaseFlag) => (e) => {
+          order.push(label + ":" + e.eventPhase);
+          if (stopAt === label) e.stopPropagation();
+        };
+        const reg = [];
+        const add = (node, label, capture) => {
+          const h = mk(label, capture);
+          node.addEventListener("x", h, { capture });
+          reg.push([node, h, capture]);
+        };
+        add(gp, "gpC", true); add(p, "pC", true); add(t, "tC", true);
+        add(t, "tB", false); add(p, "pB", false); add(gp, "gpB", false);
+        t.dispatchEvent(new Event("x", { bubbles }));
+        reg.forEach(([n, h, c]) => n.removeEventListener("x", h, c));
+        return order;
+      };
+
+      return {
+        bubbling: run(true, null),      // full capture+target+bubble
+        non_bubbling: run(false, null), // capture + target only
+        stopped: run(true, "pC")        // stop in capture at p
+      };
+    });
+    """
+
+    test "capture/target/bubble propagation matches the browser", %{js: expected} do
+      run = fn bubbles, stop_at ->
+        doc = DOM.new("<a id='gp'><b id='p'><c id='t'></c></b></a>")
+        gp = DOM.query_selector(doc, "#gp")
+        p = DOM.query_selector(doc, "#p")
+        t = DOM.query_selector(doc, "#t")
+        me = self()
+
+        add = fn node, label, capture ->
+          Node.add_event_listener(
+            node,
+            "x",
+            fn ev ->
+              send(me, "#{label}:#{ev.event_phase}")
+              if stop_at == label, do: Event.stop_propagation(ev)
+            end,
+            capture: capture
+          )
+        end
+
+        add.(gp, "gpC", true)
+        add.(p, "pC", true)
+        add.(t, "tC", true)
+        add.(t, "tB", false)
+        add.(p, "pB", false)
+        add.(gp, "gpB", false)
+
+        Node.dispatch_event(t, Event.new("x", bubbles: bubbles))
+        drain_order()
+      end
+
+      result = %{
+        "bubbling" => run.(true, nil),
+        "non_bubbling" => run.(false, nil),
+        "stopped" => run.(true, "pC")
+      }
+
+      assert result == expected
+    end
+  end
+
   # Collect fire-order tokens the listeners sent to us, in order.
   defp drain_order(acc \\ []) do
     receive do
