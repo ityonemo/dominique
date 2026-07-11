@@ -330,6 +330,15 @@ defmodule DOM.Node do
   defp coerce_one(_document, %__MODULE__{} = node), do: node
   defp coerce_one(document, text) when is_binary(text), do: DOM.create_text_node(document, text)
 
+  @doc """
+  Normalizes `node`'s subtree: merges each run of adjacent Text siblings into the
+  first (concatenating their data) and removes empty Text nodes, recursively.
+  """
+  @spec normalize(t()) :: :ok
+  def normalize(%__MODULE__{} = node) do
+    DOM._node_normalize(node.server, node.node_id)
+  end
+
   # ==========================================================================
   # Comparison
   # ==========================================================================

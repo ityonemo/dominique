@@ -1385,6 +1385,58 @@ defmodule DOM do
   end
 
   @doc false
+  def _node_normalize(server, node_id) do
+    _atomic_ets_op(server, fn nodes, index ->
+      normalize_subtree(nodes, index, node_id)
+      :ok
+    end)
+  end
+
+  # Normalize `node_id`'s subtree: merge each maximal run of adjacent Text children
+  # into its first (concatenating values), drop empty Text children, then recurse
+  # into element/fragment children. Removals ride remove_child_op so live-range
+  # boundaries and slot assignment are maintained.
+  defp normalize_subtree(nodes, index, node_id) do
+    merge_text_runs(Table.children(nodes, node_id), nodes, index, node_id)
+
+    # recurse into the (possibly changed) element/fragment children
+    for child <- Table.children(nodes, node_id),
+        Table.type(nodes, child) not in [:text, :comment] do
+      normalize_subtree(nodes, index, child)
+    end
+
+    :ok
+  end
+
+  # Walk the child list once: accumulate the current Text-run head; fold each
+  # following adjacent Text into it and remove that follower; a non-Text child ends
+  # the run. A leading/standalone empty Text is removed outright (an empty follower
+  # is folded in — appending "" — then removed, which also drops it).
+  defp merge_text_runs(children, nodes, index, parent_id) do
+    # The fold threads the current run's head id (or nil); its final value is
+    # irrelevant — the work is the ETS mutations performed along the way.
+    Enum.reduce(children, nil, fn child, run_head ->
+      cond do
+        Table.type(nodes, child) != :text ->
+          nil
+
+        run_head == nil and Table.value(nodes, child) == "" ->
+          remove_child_op(nodes, index, parent_id, child)
+          nil
+
+        run_head == nil ->
+          child
+
+        :else ->
+          merged = Table.value(nodes, run_head) <> Table.value(nodes, child)
+          Table.set_value(nodes, run_head, merged)
+          remove_child_op(nodes, index, parent_id, child)
+          run_head
+      end
+    end)
+  end
+
+  @doc false
   # Registering the same (type, fn, capture) twice is a no-op (DOM semantics):
   # retract any existing match first, then insert.
   def _node_add_event_listener(server, node_id, %DOM.Listener{} = listener) do
