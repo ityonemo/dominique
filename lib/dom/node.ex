@@ -310,4 +310,45 @@ defmodule DOM.Node do
   def clone_node(%__MODULE__{} = node, deep? \\ false) do
     DOM._node_clone_node(node.server, node.node_id, deep?)
   end
+
+  # ==========================================================================
+  # Events (EventTarget — every node kind is an EventTarget)
+  # ==========================================================================
+
+  @doc """
+  Registers `fun` as a listener for `type` events on `node`. `opts`: `:capture`
+  (fire in the capturing phase), `:once` (auto-remove after one dispatch),
+  `:passive` (`preventDefault` from the listener is ignored). Re-registering the
+  same `(type, fun, capture)` is a no-op, per the DOM.
+  """
+  @spec add_event_listener(t(), String.t(), (DOM.Event.t() -> any()), keyword()) :: :ok
+  def add_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
+      when is_binary(type) and is_function(fun, 1) do
+    listener = %DOM.Listener{
+      type: type,
+      fn: fun,
+      capture: Keyword.get(opts, :capture, false),
+      once: Keyword.get(opts, :once, false),
+      passive: Keyword.get(opts, :passive, false)
+    }
+
+    DOM._node_add_event_listener(node.server, node.node_id, listener)
+  end
+
+  @doc """
+  Removes the listener matching `(type, fun, capture)` from `node`. A no-op when
+  none matches. Only `:capture` is significant for the match (per the DOM).
+  """
+  @spec remove_event_listener(t(), String.t(), (DOM.Event.t() -> any()), keyword()) :: :ok
+  def remove_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
+      when is_binary(type) and is_function(fun, 1) do
+    capture = Keyword.get(opts, :capture, false)
+    DOM._node_remove_event_listener(node.server, node.node_id, type, fun, capture)
+  end
+
+  @doc false
+  # Test-only introspection: a node's registered listeners in registration order.
+  def __listeners(%__MODULE__{} = node) do
+    DOM._node_listeners(node.server, node.node_id)
+  end
 end

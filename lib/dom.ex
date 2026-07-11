@@ -1349,6 +1349,30 @@ defmodule DOM do
     end)
   end
 
+  @doc false
+  # Registering the same (type, fn, capture) twice is a no-op (DOM semantics):
+  # retract any existing match first, then insert.
+  def _node_add_event_listener(server, node_id, %DOM.Listener{} = listener) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      Table.listener_delete(index, node_id, listener.type, listener.fn, listener.capture)
+      Table.listener_put(index, node_id, listener)
+      :ok
+    end)
+  end
+
+  @doc false
+  def _node_remove_event_listener(server, node_id, type, fun, capture) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      Table.listener_delete(index, node_id, type, fun, capture)
+      :ok
+    end)
+  end
+
+  @doc false
+  def _node_listeners(server, node_id) do
+    _atomic_ets_op(server, fn _nodes, index -> Table.listeners_of(index, node_id) end)
+  end
+
   def _element_inner_html(server, node_id) do
     _atomic_ets_op(server, fn nodes, _index ->
       element = fetch_node!(nodes, node_id)
@@ -1651,13 +1675,15 @@ defmodule DOM do
     end)
   end
 
-  # Delete a subtree from the node table and retract each node's index + span rows.
+  # Delete a subtree from the node table and retract each node's index + span +
+  # listener rows (listeners do not survive removal, per the DOM).
   defp delete_subtree(nodes, index, node_id) do
     nodes
     |> subtree(node_id)
     |> Enum.each(fn {id, _node_data} ->
       Table.index_retract(index, id)
       Table.span_retract(index, id)
+      Table.listeners_retract(index, id)
       :ets.delete(nodes, id)
     end)
   end

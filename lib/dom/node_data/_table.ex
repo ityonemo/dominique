@@ -959,6 +959,67 @@ defmodule DOM.NodeData.Table do
   @spec range_present?(tid, reference()) :: boolean()
   def range_present?(index, ref), do: range_boundaries(index, ref) != nil
 
+  # ==========================================================================
+  # Event listeners (:listener rows)
+  # ==========================================================================
+  #
+  # A node's listeners are `{{:listener, node_id, seq}, %DOM.Listener{}}` rows.
+  # `seq` is a per-node monotonic integer (next = current max + 1), so the
+  # ordered_set iterates a node's listeners in registration order — the DOM's
+  # listener fire order. The lambda lives in the value; never serialized/cloned.
+
+  @doc "Append `listener` to `node_id`'s listeners (registration order preserved)."
+  @spec listener_put(tid, id, DOM.Listener.t()) :: :ok
+  def listener_put(index, node_id, %DOM.Listener{} = listener) do
+    seq =
+      case :ets.select(index, listener_seq_spec(node_id)) do
+        [] -> 0
+        seqs -> Enum.max(seqs) + 1
+      end
+
+    :ets.insert(index, {{:listener, node_id, seq}, listener})
+    :ok
+  end
+
+  defmatchspecp listener_seq_spec(node_id) do
+    {{:listener, ^node_id, seq}, _listener} -> seq
+  end
+
+  @doc "A node's listeners, in registration (fire) order."
+  @spec listeners_of(tid, id) :: [DOM.Listener.t()]
+  def listeners_of(index, node_id) do
+    index
+    |> :ets.select(listeners_of_spec(node_id))
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
+  end
+
+  defmatchspecp listeners_of_spec(node_id) do
+    {{:listener, ^node_id, seq}, listener} -> {seq, listener}
+  end
+
+  @doc "Delete `node_id`'s listeners matching `(type, fn, capture)` (DOM identity)."
+  @spec listener_delete(tid, id, String.t(), (... -> any()), boolean()) :: :ok
+  def listener_delete(index, node_id, type, fun, capture) do
+    for {key, %DOM.Listener{type: ^type, fn: ^fun, capture: ^capture}} <-
+          :ets.select(index, listeners_row_spec(node_id)) do
+      :ets.delete(index, key)
+    end
+
+    :ok
+  end
+
+  defmatchspecp listeners_row_spec(node_id) do
+    {{:listener, ^node_id, seq}, listener} -> {{:listener, node_id, seq}, listener}
+  end
+
+  @doc "Drop all listener rows for `node_id` (node removed / adopted away)."
+  @spec listeners_retract(tid, id) :: :ok
+  def listeners_retract(index, node_id) do
+    :ets.match_delete(index, {{:listener, node_id, :_}, :_})
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.
@@ -1046,9 +1107,37 @@ defmodule DOM.NodeData.Table do
       check_spans!(rows, index)
       check_ranges!(rows, index)
       check_slots!(rows, index)
+      check_listeners!(rows, index)
     end
 
     :ok
+  end
+
+  # All index rows of a given family, matched server-side by the key's head tag
+  # (`elem(elem(entry, 0), 0) == kind`) — a whole-table copy is avoided regardless
+  # of the family's key arity.
+  defmatchspecp rows_of_kind(kind) do
+    entry when elem(elem(entry, 0), 0) == kind -> entry
+  end
+
+  @doc "Every index row whose key is headed by `kind` (e.g. `:listener`, `:slot`)."
+  @spec index_rows_of(tid, atom()) :: [{tuple(), term()}]
+  def index_rows_of(index, kind), do: :ets.select(index, rows_of_kind(kind))
+
+  # Listener consistency: every :listener row must reference a live node. Listeners
+  # are primary state (lambdas), so there is nothing to mirror-check — only that a
+  # removed/destroyed node left no dangling listener rows behind.
+  defp check_listeners!(rows, index) do
+    live = MapSet.new(rows, fn {id, _data} -> id end)
+
+    dangling =
+      for {{:listener, node_id, _seq}, _listener} <- index_rows_of(index, :listener),
+          not MapSet.member?(live, node_id),
+          do: node_id
+
+    if dangling != [] do
+      raise "dangling listener rows for dead nodes: #{inspect(Enum.uniq(dangling))}"
+    end
   end
 
   # Range boundary consistency: every :range_* row must pin to a live container node
