@@ -95,6 +95,70 @@ defmodule DOM.Element do
     update_attributes(element, &List.keydelete(&1, name, 0))
   end
 
+  @doc """
+  Toggles `name`: adds it (value `""`) when absent, removes it when present.
+  `force: true` only ever adds, `force: false` only ever removes. Returns whether
+  the attribute is present afterward.
+  """
+  @spec toggle_attribute(Node.t(), String.t(), boolean() | nil) :: boolean()
+  def toggle_attribute(%Node{type: :element} = element, name, force \\ nil) do
+    present = has_attribute(element, name)
+    # add when force is true, or (force nil and currently absent); else remove.
+    add? = if is_nil(force), do: not present, else: force
+
+    if add?, do: set_attribute(element, name, ""), else: remove_attribute(element, name)
+    add?
+  end
+
+  @doc "The nearest inclusive ancestor of `element` matching `selector`, or `nil`."
+  @spec closest(Node.t(), String.t()) :: Node.t() | nil
+  def closest(%Node{type: :element} = element, selector) do
+    if DOM.matches(element, selector) do
+      element
+    else
+      case Node.parent_node(element) do
+        %Node{type: :element} = parent -> closest(parent, selector)
+        _ -> nil
+      end
+    end
+  end
+
+  @doc "Descendant elements of `element` with the given tag name (scoped query)."
+  @spec get_elements_by_tag_name(Node.t(), String.t()) :: [Node.t()]
+  def get_elements_by_tag_name(%Node{type: :element} = element, name),
+    do: DOM.get_elements_by_tag_name(element, name)
+
+  @doc """
+  Parses `html` and inserts the result relative to `element`, at `position`:
+  `"beforebegin"` / `"afterend"` (as siblings) or `"afterbegin"` / `"beforeend"`
+  (as first/last children).
+  """
+  @spec insert_adjacent_html(Node.t(), String.t(), String.t()) :: :ok
+  def insert_adjacent_html(%Node{type: :element} = element, position, html) do
+    DOM._element_insert_adjacent_html(element.server, element.node_id, position, html)
+  end
+
+  @doc "Inserts `node` relative to `element` at `position` (see insert_adjacent_html), returning `node`."
+  @spec insert_adjacent_element(Node.t(), String.t(), Node.t()) :: Node.t()
+  def insert_adjacent_element(%Node{type: :element} = element, position, %Node{} = node) do
+    insert_adjacent_node(element, position, node)
+    node
+  end
+
+  @doc "Inserts a Text node with `text` relative to `element` at `position`."
+  @spec insert_adjacent_text(Node.t(), String.t(), String.t()) :: :ok
+  def insert_adjacent_text(%Node{type: :element} = element, position, text) do
+    document = Node.owner_document(element) || element
+    insert_adjacent_node(element, position, DOM.create_text_node(document, text))
+    :ok
+  end
+
+  # Insert an already-built node relative to `element` per the adjacency position.
+  defp insert_adjacent_node(element, "beforebegin", node), do: Node.before(element, [node])
+  defp insert_adjacent_node(element, "afterend", node), do: Node.after(element, [node])
+  defp insert_adjacent_node(element, "afterbegin", node), do: Node.prepend(element, [node])
+  defp insert_adjacent_node(element, "beforeend", node), do: Node.append(element, [node])
+
   # The element's raw attribute list, read straight from the record.
   defp attributes(%Node{} = element) do
     [attributes] = DOM._select_nodes(element.server, attributes_spec(element.node_id))

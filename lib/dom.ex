@@ -1512,6 +1512,56 @@ defmodule DOM do
   end
 
   @doc false
+  # insertAdjacentHTML: parse `html` (context = the element for child positions, its
+  # parent for sibling positions) then splice the parsed nodes at `position`.
+  def _element_insert_adjacent_html(server, node_id, position, html) do
+    _atomic_ets_op(server, fn nodes, index ->
+      context_id = adjacent_context_id(nodes, node_id, position)
+      context_el = Table.fetch!(nodes, context_id)
+      context = %{name: context_el.local_name, namespace: context_el.namespace}
+      root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
+      parsed = Table.children(nodes, root)
+
+      insert_adjacent(nodes, index, node_id, position, parsed)
+      resync_spans(nodes, index)
+      :ok
+    end)
+  end
+
+  # The fragment-parse context element for a position (element itself for child
+  # positions, its parent for sibling positions).
+  defp adjacent_context_id(_nodes, node_id, position) when position in ~w(afterbegin beforeend),
+    do: node_id
+
+  defp adjacent_context_id(nodes, node_id, _sibling), do: Table.parent(nodes, node_id)
+
+  # Splice `parsed` child ids at the adjacency position relative to `node_id`.
+  defp insert_adjacent(nodes, _index, node_id, "afterbegin", parsed) do
+    case List.first(Table.children(nodes, node_id)) do
+      nil -> Table.append_children(nodes, node_id, parsed)
+      reference -> Table.insert_children_before(nodes, node_id, parsed, reference)
+    end
+  end
+
+  defp insert_adjacent(nodes, _index, node_id, "beforeend", parsed) do
+    Table.append_children(nodes, node_id, parsed)
+  end
+
+  defp insert_adjacent(nodes, _index, node_id, "beforebegin", parsed) do
+    parent = Table.parent(nodes, node_id)
+    Table.insert_children_before(nodes, parent, parsed, node_id)
+  end
+
+  defp insert_adjacent(nodes, _index, node_id, "afterend", parsed) do
+    parent = Table.parent(nodes, node_id)
+
+    case Enum.at(Table.children(nodes, parent), child_index(nodes, parent, node_id) + 1) do
+      nil -> Table.append_children(nodes, parent, parsed)
+      reference -> Table.insert_children_before(nodes, parent, parsed, reference)
+    end
+  end
+
+  @doc false
   # A shadow root has no tag; serialize its children with an empty container name
   # (so no raw-text handling), like a DocumentFragment.
   def _shadow_inner_html(server, node_id) do
