@@ -1156,10 +1156,10 @@ defmodule DOM.NodeData.Table do
     live = MapSet.new(rows, fn {id, _data} -> id end)
 
     slot_pairs =
-      for {{:slot, slot_id, _pos}, node_id} <- :ets.tab2list(index), do: {slot_id, node_id}
+      for {{:slot, slot_id, _pos}, node_id} <- index_rows_of(index, :slot), do: {slot_id, node_id}
 
     assigned =
-      for {{:assigned, node_id}, slot_id} <- :ets.tab2list(index),
+      for {{:assigned, node_id}, slot_id} <- index_rows_of(index, :assigned),
           into: %{},
           do: {node_id, slot_id}
 
@@ -1277,10 +1277,11 @@ defmodule DOM.NodeData.Table do
           membership <- memberships(element),
           do: {membership, node_id}
 
-    # Only membership rows (tag/id/class/attr); span rows are a separate concern.
+    # Only membership rows (tag/id/class/attr); each family is selected server-side
+    # (no whole-table copy), span/range/slot/listener rows never fetched.
     actual =
-      for {key, node_id} <- :ets.tab2list(index),
-          elem(key, 0) in [:tag, :id, :class, :attr],
+      for kind <- [:tag, :id, :class, :attr],
+          {key, node_id} <- index_rows_of(index, kind),
           do: {drop_ref(key), node_id}
 
     if Enum.sort(expected) != Enum.sort(actual) do
