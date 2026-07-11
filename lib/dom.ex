@@ -233,6 +233,42 @@ defmodule DOM do
     end)
   end
 
+  @doc "The document's root element (`<html>`), or `nil` for an empty document."
+  @spec document_element(Node.t()) :: Node.t() | nil
+  def document_element(%Node{type: :document} = document),
+    do: document |> Node.children() |> List.first()
+
+  @doc "The document's `<body>` element, or `nil`."
+  @spec body(Node.t()) :: Node.t() | nil
+  def body(%Node{type: :document} = document), do: query_selector(document, "body")
+
+  @doc "The document's `<head>` element, or `nil`."
+  @spec head(Node.t()) :: Node.t() | nil
+  def head(%Node{type: :document} = document), do: query_selector(document, "head")
+
+  @doc "Elements in `document` whose `name` attribute equals `name`, in tree order."
+  @spec get_elements_by_name(Node.t(), String.t()) :: [Node.t()]
+  def get_elements_by_name(%Node{type: :document} = document, name),
+    do: query_selector_all(document, ~s([name="#{name}"]))
+
+  @doc """
+  Adopts `node` into `document`: removes it from its current tree and transfers
+  ownership to `document`, returning the (possibly re-handled) detached node.
+  """
+  @spec adopt_node(Node.t(), Node.t()) :: Node.t()
+  def adopt_node(%Node{type: :document} = document, %Node{} = node) do
+    _adopt_node(document.server, node.server, node.node_id)
+  end
+
+  @doc """
+  Imports a COPY of `node` (deep when `deep?`) into `document`, leaving the source
+  untouched. Returns the detached copy owned by `document`.
+  """
+  @spec import_node(Node.t(), Node.t(), boolean()) :: Node.t()
+  def import_node(%Node{type: :document} = document, %Node{} = node, deep? \\ false) do
+    _import_node(document.server, node.server, node.node_id, deep?)
+  end
+
   def query_selector(%Node{server: server, node_id: root_id}, selector) do
     selector = parse_selector!(selector)
 
@@ -1031,6 +1067,78 @@ defmodule DOM do
 
     true = :ets.insert(nodes, subtree)
     Enum.each(subtree, fn {id, node_data} -> index_element(index, id, node_data) end)
+  end
+
+  @doc false
+  # adoptNode: move `node_id` into `dst_server`, detached. Same server → just detach
+  # it in place; cross server → export, materialize into dst, remove from source.
+  def _adopt_node(dst_server, dst_server, node_id) do
+    _atomic_ets_op(dst_server, fn nodes, index ->
+      node_data = fetch_node!(nodes, node_id)
+      detach_from_parent(nodes, node_id, node_data)
+      resync_spans(nodes, index)
+      node_handle(nodes, node_id)
+    end)
+  end
+
+  def _adopt_node(dst_server, src_server, node_id) do
+    subtree = _export_subtree(src_server, node_id)
+
+    handle =
+      _atomic_ets_op(dst_server, fn nodes, index ->
+        materialize_subtree(nodes, index, node_id, subtree)
+        resync_spans(nodes, index)
+        node_handle(nodes, node_id)
+      end)
+
+    _remove_subtree(src_server, node_id)
+    handle
+  end
+
+  @doc false
+  # importNode: copy `node_id` (deep when `deep?`) into `dst_server`, detached,
+  # leaving the source intact. Same server → Table.clone; cross server → export a
+  # (possibly shallow) snapshot and materialize a fresh-keyed copy into dst.
+  def _import_node(dst_server, dst_server, node_id, deep?) do
+    _atomic_ets_op(dst_server, fn nodes, index ->
+      clone_id = Table.clone(nodes, node_id, deep?)
+      Table.reindex(nodes, index)
+      Table.span_index_all(nodes, index)
+      node_handle(nodes, clone_id)
+    end)
+  end
+
+  def _import_node(dst_server, src_server, node_id, deep?) do
+    subtree = _export_subtree(src_server, node_id)
+    subtree = if deep?, do: subtree, else: shallow_subtree(subtree, node_id)
+    {rekeyed, new_root} = rekey_subtree(subtree, node_id)
+
+    _atomic_ets_op(dst_server, fn nodes, index ->
+      materialize_subtree(nodes, index, new_root, rekeyed)
+      resync_spans(nodes, index)
+      node_handle(nodes, new_root)
+    end)
+  end
+
+  # Keep only the root record from an exported subtree (shallow import).
+  defp shallow_subtree(subtree, root_id) do
+    subtree
+    |> Enum.filter(fn {id, _rec} -> id == root_id end)
+    |> Enum.map(fn {id, rec} -> {id, %{rec | start: <<0x00>>, stop: <<0x80>>}} end)
+  end
+
+  # Re-key an exported subtree to fresh refs (so an import is independent of its
+  # source), rewriting parent pointers. Returns {rekeyed_entries, new_root_id}.
+  defp rekey_subtree(subtree, root_id) do
+    mapping = Map.new(subtree, fn {id, _rec} -> {id, make_ref()} end)
+
+    rekeyed =
+      Enum.map(subtree, fn {id, rec} ->
+        parent = rec.parent && Map.get(mapping, rec.parent)
+        {Map.fetch!(mapping, id), %{rec | parent: parent}}
+      end)
+
+    {rekeyed, Map.fetch!(mapping, root_id)}
   end
 
   def _node_remove_child(server, parent_id, %{node_id: child_id} = child) do
