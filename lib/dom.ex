@@ -471,11 +471,11 @@ defmodule DOM do
       orig_key = Table.fetch!(state.nodes, node_id).start
       parent_id = Table.parent(state.nodes, node_id)
 
-      snapshot = range_snapshot(state)
+      snapshot = range_snapshot(state.nodes, state.index)
       Table.set_value(state.nodes, node_id, before)
       new_id = Table.create_text(state.nodes, rest)
       insert_after(state.nodes, parent_id, new_id, node_id)
-      resync_spans(state)
+      resync_spans(state.nodes, state.index)
 
       new_key = Table.fetch!(state.nodes, new_id).start
       adjust_split_ranges(state, snapshot, parent_id, node_id, orig_key, new_key, offset)
@@ -497,7 +497,7 @@ defmodule DOM do
     Table.put(state.nodes, fragment_id, %NodeData.DocumentFragment{})
     Table.append_children(state.nodes, fragment_id, clones)
     Table.reindex(state.nodes, state.index)
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
 
     {:reply, node_handle(state.nodes, fragment_id), state}
   end
@@ -509,17 +509,17 @@ defmodule DOM do
 
   defp range_extract_contents_impl(range_id, _from, state) do
     {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
-    snapshot = range_snapshot(state)
+    snapshot = range_snapshot(state.nodes, state.index)
     extracted = DOM.Range.Contents.extract(state.nodes, sc, so, ec, eo)
 
     fragment_id = make_ref()
     Table.put(state.nodes, fragment_id, %NodeData.DocumentFragment{})
     Table.append_children(state.nodes, fragment_id, extracted)
     Table.reindex(state.nodes, state.index)
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
 
     collapse_range_to_start(state, range_id)
-    reconcile_ranges(state, snapshot)
+    reconcile_ranges(state.nodes, state.index, snapshot)
 
     {:reply, node_handle(state.nodes, fragment_id), state}
   end
@@ -531,14 +531,14 @@ defmodule DOM do
 
   defp range_delete_contents_impl(range_id, _from, state) do
     {sc, so, ec, eo} = range_endpoints!(state.nodes, state.index, range_id)
-    snapshot = range_snapshot(state)
+    snapshot = range_snapshot(state.nodes, state.index)
     extracted = DOM.Range.Contents.extract(state.nodes, sc, so, ec, eo)
 
     Enum.each(extracted, &delete_subtree(state.nodes, state.index, &1))
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
 
     collapse_range_to_start(state, range_id)
-    reconcile_ranges(state, snapshot)
+    reconcile_ranges(state.nodes, state.index, snapshot)
 
     {:reply, :ok, state}
   end
@@ -626,7 +626,7 @@ defmodule DOM do
       )
 
       Table.reindex(state.nodes, state.index)
-      resync_spans(state)
+      resync_spans(state.nodes, state.index)
 
       {{start_key, so2}, _} = Table.range_boundaries(state.index, range_id)
       container = Table.node_at_start_key(state.nodes, start_key)
@@ -691,7 +691,7 @@ defmodule DOM do
   # boundaries whose container key changed (the generic remap), and drop boundaries
   # whose container no longer exists onto a still-live ancestor position. The
   # remap catches key changes; dangling boundaries are cleaned by re-resolving.
-  defp reconcile_ranges(state, snapshot), do: apply_remap(state, snapshot)
+  defp reconcile_ranges(nodes, index, snapshot), do: apply_remap(nodes, index, snapshot)
 
   # Resolve a range's stored boundaries into `{start_container_id, start_offset,
   # end_container_id, end_offset}` via the extent-key reverse lookup.
@@ -768,16 +768,16 @@ defmodule DOM do
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
         append_fragment(state.nodes, parent_id, child_id, child_data)
-        resync_spans(state)
+        resync_spans(state.nodes, state.index)
         {:reply, :ok, state}
 
       :else ->
-        snapshot = range_snapshot(state)
+        snapshot = range_snapshot(state.nodes, state.index)
         at = length(Table.children(state.nodes, parent_id))
         Table.append_child(state.nodes, parent_id, child_id)
-        resync_spans(state)
-        adjust_ranges(state, snapshot, {:insert, parent_id, at, 1})
-        recompute_slots(state, child_id)
+        resync_spans(state.nodes, state.index)
+        adjust_ranges(state.nodes, state.index, snapshot, {:insert, parent_id, at, 1})
+        recompute_slots(state.nodes, state.index, child_id)
         {:reply, :ok, state}
     end
   end
@@ -786,14 +786,14 @@ defmodule DOM do
   # into the index's span rows after an incremental mutation. Idempotent; the
   # extents are the order source, so this only copies them — no carve from the
   # `children` field.
-  defp resync_spans(state), do: Table.span_index_all(state.nodes, state.index)
+  defp resync_spans(nodes, index), do: Table.span_index_all(nodes, index)
 
   # Recompute slot assignment for the shadow host affected by a mutation, if any.
   # `node_id` is a node touched by the op (a light child of a host, or a slot in a
   # shadow tree); Slots.affected_host resolves which host's assignment to redo.
-  defp recompute_slots(state, node_id) do
-    if host = DOM.NodeData.Slots.affected_host(state.nodes, node_id) do
-      DOM.NodeData.Slots.recompute(state.nodes, state.index, host)
+  defp recompute_slots(nodes, index, node_id) do
+    if host = DOM.NodeData.Slots.affected_host(nodes, node_id) do
+      DOM.NodeData.Slots.recompute(nodes, index, host)
     end
 
     :ok
@@ -802,11 +802,11 @@ defmodule DOM do
   # A snapshot of every node's start key, captured BEFORE a structural mutation so
   # live-range adjustment can (a) remap boundaries whose container's key changed
   # (graft) and (b) find a parent/removed container by its pre-mutation key.
-  defp range_snapshot(state) do
-    if Table.range_all_rows(state.index) == [] do
+  defp range_snapshot(nodes, index) do
+    if Table.range_all_rows(index) == [] do
       nil
     else
-      for {id, %{start: start}} when start != nil <- :ets.tab2list(state.nodes),
+      for {id, %{start: start}} when start != nil <- :ets.tab2list(nodes),
           into: %{},
           do: {id, start}
     end
@@ -817,25 +817,25 @@ defmodule DOM do
   #   {:insert, parent_id, at_index, count} | {:remove, parent_id, at_index, removed_id}
   # The remap (containers whose start key changed) always runs; then the op's
   # child-index offset rule.
-  defp adjust_ranges(_state, nil, _op), do: :ok
+  defp adjust_ranges(_nodes, _index, nil, _op), do: :ok
 
-  defp adjust_ranges(state, snapshot, op) do
-    apply_remap(state, snapshot)
-    apply_offset_rule(state, snapshot, op)
+  defp adjust_ranges(nodes, index, snapshot, op) do
+    apply_remap(nodes, index, snapshot)
+    apply_offset_rule(nodes, index, snapshot, op)
     :ok
   end
 
   # Remap boundaries whose container node's start key changed between the snapshot
   # and now (a graft moved the container / its subtree).
-  defp apply_remap(state, snapshot) do
+  defp apply_remap(nodes, index, snapshot) do
     remap =
       for {id, old_key} <- snapshot,
-          new = current_start(state.nodes, id),
+          new = current_start(nodes, id),
           new != nil and new != old_key,
           into: %{},
           do: {old_key, new}
 
-    if remap != %{}, do: DOM.Range.Adjust.on_remap(state.nodes, state.index, remap)
+    if remap != %{}, do: DOM.Range.Adjust.on_remap(nodes, index, remap)
   end
 
   defp current_start(nodes, id) do
@@ -845,14 +845,14 @@ defmodule DOM do
     end
   end
 
-  defp apply_offset_rule(state, snapshot, {:insert, parent_id, at, count}) do
-    parent_key = Map.get(snapshot, parent_id) || current_start(state.nodes, parent_id)
-    DOM.Range.Adjust.on_insert(state.nodes, state.index, parent_key, at, count)
+  defp apply_offset_rule(nodes, index, snapshot, {:insert, parent_id, at, count}) do
+    parent_key = Map.get(snapshot, parent_id) || current_start(nodes, parent_id)
+    DOM.Range.Adjust.on_insert(nodes, index, parent_key, at, count)
   end
 
-  defp apply_offset_rule(state, snapshot, {:remove, parent_id, at, removed_keys}) do
-    parent_key = Map.get(snapshot, parent_id) || current_start(state.nodes, parent_id)
-    DOM.Range.Adjust.on_remove(state.nodes, state.index, parent_key, at, removed_keys)
+  defp apply_offset_rule(nodes, index, snapshot, {:remove, parent_id, at, removed_keys}) do
+    parent_key = Map.get(snapshot, parent_id) || current_start(nodes, parent_id)
+    DOM.Range.Adjust.on_remove(nodes, index, parent_key, at, removed_keys)
   end
 
   # Flatten a fragment's children onto `parent_id` (append), placing all of them in
@@ -937,16 +937,16 @@ defmodule DOM do
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
         insert_fragment(state.nodes, parent_id, child_id, child_data, reference_child_id)
-        resync_spans(state)
+        resync_spans(state.nodes, state.index)
         {:reply, :ok, state}
 
       :else ->
-        snapshot = range_snapshot(state)
+        snapshot = range_snapshot(state.nodes, state.index)
         at = child_index(state.nodes, parent_id, reference_child_id)
         Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
-        resync_spans(state)
-        adjust_ranges(state, snapshot, {:insert, parent_id, at, 1})
-        recompute_slots(state, child_id)
+        resync_spans(state.nodes, state.index)
+        adjust_ranges(state.nodes, state.index, snapshot, {:insert, parent_id, at, 1})
+        recompute_slots(state.nodes, state.index, child_id)
         {:reply, :ok, state}
     end
   end
@@ -975,7 +975,7 @@ defmodule DOM do
         Table.append_child(state.nodes, parent_id, child_id)
       end
 
-      resync_spans(state)
+      resync_spans(state.nodes, state.index)
       {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
     end
   end
@@ -1009,7 +1009,7 @@ defmodule DOM do
           Table.insert_before(state.nodes, parent_id, child_id, reference_child_id)
         end
 
-        resync_spans(state)
+        resync_spans(state.nodes, state.index)
         {:reply, {:ok, node_handle(state.nodes, child_id)}, state}
     end
   end
@@ -1034,12 +1034,12 @@ defmodule DOM do
 
   defp remove_child_impl(parent_id, child_id, _from, state) do
     if child_id in Table.children(state.nodes, parent_id) do
-      snapshot = range_snapshot(state)
+      snapshot = range_snapshot(state.nodes, state.index)
       at = child_index(state.nodes, parent_id, child_id)
       removed_keys = removed_subtree_keys(state.nodes, child_id)
       Table.remove_child(state.nodes, parent_id, child_id)
-      resync_spans(state)
-      adjust_ranges(state, snapshot, {:remove, parent_id, at, removed_keys})
+      resync_spans(state.nodes, state.index)
+      adjust_ranges(state.nodes, state.index, snapshot, {:remove, parent_id, at, removed_keys})
       # The removed node's parent may be a shadow host (or the removed subtree may
       # contain slots) — recompute assignment from the parent directly.
       if Slots.shadow_host?(state.nodes, parent_id) do
@@ -1174,7 +1174,7 @@ defmodule DOM do
         end
 
         Table.remove_child(state.nodes, parent_id, old_child_id)
-        resync_spans(state)
+        resync_spans(state.nodes, state.index)
         {:reply, {:ok, node_handle(state.nodes, new_child_id)}, state}
     end
   end
@@ -1195,7 +1195,7 @@ defmodule DOM do
     node_data = fetch_node!(state.nodes, node_id)
     detach_from_parent(state.nodes, node_id, node_data)
     delete_subtree(state.nodes, state.index, node_id)
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
     {:reply, :ok, state}
   end
 
@@ -1371,7 +1371,7 @@ defmodule DOM do
     Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
     Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
 
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
     {:reply, :ok, state}
   end
 
@@ -1401,9 +1401,9 @@ defmodule DOM do
     Enum.each(Table.children(state.nodes, node_id), &Table.remove_child(state.nodes, node_id, &1))
     Table.append_children(state.nodes, node_id, Table.children(state.nodes, root))
 
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
     # The shadow tree's <slot>s changed — reassign the host's light children.
-    recompute_slots(state, node_id)
+    recompute_slots(state.nodes, state.index, node_id)
     {:reply, :ok, state}
   end
 
@@ -1500,7 +1500,7 @@ defmodule DOM do
       )
 
       Table.remove_child(state.nodes, parent_id, node_id)
-      resync_spans(state)
+      resync_spans(state.nodes, state.index)
       {:reply, :ok, state}
     end
   end
@@ -1708,7 +1708,7 @@ defmodule DOM do
       Table.append_child(state.nodes, node_id, text_id)
     end
 
-    resync_spans(state)
+    resync_spans(state.nodes, state.index)
     {:reply, :ok, state}
   end
 
