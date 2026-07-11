@@ -1859,6 +1859,69 @@ defmodule DOM do
     end)
   end
 
+  @doc false
+  # CharacterData replace-data: splice `data` in for `count` units at `offset`, then
+  # adjust live Range boundaries in this node. `offset > length` raises IndexSizeError.
+  def _char_data_replace(server, node_id, offset, count, data) do
+    _atomic_ets_op(server, fn nodes, index ->
+      node = fetch_node!(nodes, node_id)
+      value = node.value
+      len = String.length(value)
+      if offset > len, do: raise(DOM.IndexSizeError)
+
+      count = min(count, len - offset)
+
+      new_value =
+        String.slice(value, 0, offset) <> data <> String.slice(value, offset + count, len)
+
+      put_node(nodes, node_id, %{node | value: new_value})
+
+      DOM.Range.Adjust.on_replace_data(
+        nodes,
+        index,
+        node.start,
+        offset,
+        count,
+        String.length(data)
+      )
+
+      :ok
+    end)
+  end
+
+  @doc false
+  # wholeText: concatenate the contiguous run of Text siblings including `node_id`.
+  def _text_whole_text(server, node_id) do
+    _atomic_ets_op(server, fn nodes, _index ->
+      case Table.parent(nodes, node_id) do
+        nil ->
+          fetch_node!(nodes, node_id).value
+
+        parent_id ->
+          nodes
+          |> Table.children(parent_id)
+          |> contiguous_text_run(nodes, node_id)
+          |> Enum.map_join("", &fetch_node!(nodes, &1).value)
+      end
+    end)
+  end
+
+  # The maximal run of adjacent :text children around `node_id` in `children`.
+  defp contiguous_text_run(children, nodes, node_id) do
+    text? = fn id -> Table.type(nodes, id) == :text end
+
+    before =
+      children
+      |> Enum.take_while(&(&1 != node_id))
+      |> Enum.reverse()
+      |> Enum.take_while(text?)
+      |> Enum.reverse()
+
+    after_ = children |> Enum.drop_while(&(&1 != node_id)) |> Enum.take_while(text?)
+
+    before ++ after_
+  end
+
   # Descendant node_data in tree order, excluding the node itself.
   defp descendants(nodes, node_id) do
     nodes

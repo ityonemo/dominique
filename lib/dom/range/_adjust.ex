@@ -87,6 +87,42 @@ defmodule DOM.Range.Adjust do
     :ok
   end
 
+  @doc """
+  CharacterData `replace data (offset, count, data)` on the node with start key
+  `key`: `count` code units at `offset` were replaced by `newlen` new ones. Per the
+  spec's replace-data steps, adjust boundaries in this node:
+
+    * a boundary strictly after the replaced region (`boffset > offset + count`)
+      shifts by `newlen - count`;
+    * a boundary inside the replaced region (`offset < boffset <= offset + count`)
+      clamps to `offset`;
+    * a boundary at or before `offset` is unchanged.
+  """
+  @spec on_replace_data(
+          :ets.tid(),
+          :ets.tid(),
+          binary(),
+          non_neg_integer(),
+          non_neg_integer(),
+          non_neg_integer()
+        ) :: :ok
+  def on_replace_data(_nodes, index, key, offset, count, newlen) do
+    for {kind, _key, ref, boffset} <- boundaries_in(index, key) do
+      cond do
+        boffset > offset + count ->
+          Table.range_set_boundary(index, kind, ref, key, boffset + newlen - count)
+
+        boffset > offset ->
+          Table.range_set_boundary(index, kind, ref, key, offset)
+
+        :else ->
+          :ok
+      end
+    end
+
+    :ok
+  end
+
   # All range boundary rows whose container key is `key`.
   defp boundaries_in(index, key) do
     Enum.filter(Table.range_all_rows(index), fn {_kind, k, _ref, _off} -> k == key end)

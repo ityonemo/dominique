@@ -18,4 +18,13 @@ defmodule DOM.Text do
   def split_text(%Node{type: :text} = text, offset) when is_integer(offset) and offset >= 0 do
     DOM._text_split(text.server, text.node_id, offset)
   end
+
+  @doc """
+  The concatenated data of the contiguous run of Text-node siblings that includes
+  `text` (the run stops at any non-Text sibling or the parent's edge).
+  """
+  @spec whole_text(Node.t()) :: String.t()
+  def whole_text(%Node{type: :text} = text) do
+    DOM._text_whole_text(text.server, text.node_id)
+  end
 end
