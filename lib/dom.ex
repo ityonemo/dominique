@@ -202,34 +202,44 @@ defmodule DOM do
 
   defp create(%Node{}, _node_data), do: raise(DOM.HierarchyRequestError)
 
-  def get_elements_by_tag_name(document, name) do
-    GenServer.call(document.server, {:get_elements_by_tag_name, document.node_id, name})
+  def get_elements_by_tag_name(%Node{server: server, node_id: node_id}, name) do
+    _atomic_ets_op(server, fn nodes, index ->
+      get_elements_by_tag_name(nodes, index, node_id, name)
+    end)
   end
 
-  def get_element_by_id(document, id) do
-    GenServer.call(document.server, {:get_element_by_id, document.node_id, id})
+  def get_element_by_id(%Node{server: server, node_id: root_id}, id) do
+    _atomic_ets_op(server, fn nodes, index -> get_element_by_id(nodes, index, root_id, id) end)
   end
 
-  def get_elements_by_class_name(document, names) do
-    GenServer.call(document.server, {:get_elements_by_class_name, document.node_id, names})
+  def get_elements_by_class_name(%Node{server: server, node_id: root_id}, names) do
+    _atomic_ets_op(server, fn nodes, index ->
+      get_elements_by_class_name(nodes, index, root_id, names)
+    end)
   end
 
-  def query_selector(document, selector) do
-    GenServer.call(
-      document.server,
-      {:query_selector, document.node_id, parse_selector!(selector)}
-    )
+  def query_selector(%Node{server: server, node_id: root_id}, selector) do
+    selector = parse_selector!(selector)
+
+    _atomic_ets_op(server, fn nodes, index ->
+      case query_ids(root_id, selector, nodes, index) do
+        [id | _] -> node_handle(nodes, id)
+        [] -> nil
+      end
+    end)
   end
 
-  def query_selector_all(document, selector) do
-    GenServer.call(
-      document.server,
-      {:query_selector_all, document.node_id, parse_selector!(selector)}
-    )
+  def query_selector_all(%Node{server: server, node_id: root_id}, selector) do
+    selector = parse_selector!(selector)
+
+    _atomic_ets_op(server, fn nodes, index ->
+      root_id |> query_ids(selector, nodes, index) |> Enum.map(&node_handle(nodes, &1))
+    end)
   end
 
-  def matches(node, selector) do
-    GenServer.call(node.server, {:matches, node.node_id, parse_selector!(selector)})
+  def matches(%Node{server: server, node_id: node_id}, selector) do
+    selector = parse_selector!(selector)
+    _atomic_ets_op(server, fn nodes, index -> matches?(nodes, index, node_id, selector) end)
   end
 
   # Parse and validate a selector in the CALLER's process, so a malformed or
@@ -1534,99 +1544,77 @@ defmodule DOM do
     {:reply, IO.iodata_to_binary(iodata), state}
   end
 
-  defp get_elements_by_tag_name_impl(node_id, name, _from, state) do
-    descendants = descendant_ids(state.nodes, node_id)
+  defp get_elements_by_tag_name(nodes, index, node_id, name) do
+    descendants = descendant_ids(nodes, node_id)
 
     ids =
       if name == "*" do
         # "*" wants every element descendant — the tag index gives no benefit, so
         # keep the element scan.
-        Enum.filter(descendants, &element?(state.nodes, &1))
+        Enum.filter(descendants, &element?(nodes, &1))
       else
         # A named tag is a point lookup in the tag index; keep tree order by
         # filtering the ordered descendant walk against the (scope-free) match set.
-        matched = MapSet.new(Table.index_lookup(state.index, :tag, name))
+        matched = MapSet.new(Table.index_lookup(index, :tag, name))
         Enum.filter(descendants, &MapSet.member?(matched, &1))
       end
 
-    {:reply, Enum.map(ids, &node_handle(state.nodes, &1)), state}
+    Enum.map(ids, &node_handle(nodes, &1))
   end
 
   defp element?(nodes, node_id), do: match?(%NodeData.Element{}, fetch_node!(nodes, node_id))
 
-  defp get_element_by_id_impl(root_id, id, _from, state) do
+  defp get_element_by_id(nodes, index, root_id, id) do
     # The index gives every node with this id doc-wide (unordered); intersect with
     # the scope root's descendants and return the first in tree order.
-    matches = MapSet.new(Table.index_lookup(state.index, :id, id))
+    matches = MapSet.new(Table.index_lookup(index, :id, id))
 
     match_id =
       if MapSet.size(matches) == 0 do
         nil
       else
-        Enum.find(descendant_ids(state.nodes, root_id), &MapSet.member?(matches, &1))
+        Enum.find(descendant_ids(nodes, root_id), &MapSet.member?(matches, &1))
       end
 
-    match = if match_id, do: node_handle(state.nodes, match_id)
-    {:reply, match, state}
+    if match_id, do: node_handle(nodes, match_id)
   end
 
-  defp get_elements_by_class_name_impl(root_id, names, _from, state) do
+  defp get_elements_by_class_name(nodes, index, root_id, names) do
     wanted = class_tokens(names)
 
-    matches =
-      if wanted == [] do
-        []
-      else
-        # Each token's index lookup yields all nodes carrying it doc-wide;
-        # intersect those sets (an element must carry EVERY token), then filter to
-        # the scope root's descendants in tree order.
-        matched =
-          wanted
-          |> Enum.map(&MapSet.new(Table.index_lookup(state.index, :class, &1)))
-          |> Enum.reduce(&MapSet.intersection/2)
+    if wanted == [] do
+      []
+    else
+      # Each token's index lookup yields all nodes carrying it doc-wide; intersect
+      # those sets (an element must carry EVERY token), then filter to the scope
+      # root's descendants in tree order.
+      matched =
+        wanted
+        |> Enum.map(&MapSet.new(Table.index_lookup(index, :class, &1)))
+        |> Enum.reduce(&MapSet.intersection/2)
 
-        state.nodes
-        |> descendant_ids(root_id)
-        |> Enum.filter(&MapSet.member?(matched, &1))
-        |> Enum.map(&node_handle(state.nodes, &1))
-      end
-
-    {:reply, matches, state}
-  end
-
-  defp query_selector_all_impl(root_id, selector, _from, state) do
-    ids = query_ids(root_id, selector, state)
-    {:reply, Enum.map(ids, &node_handle(state.nodes, &1)), state}
-  end
-
-  defp query_selector_impl(root_id, selector, _from, state) do
-    match =
-      case query_ids(root_id, selector, state) do
-        [id | _] -> node_handle(state.nodes, id)
-        [] -> nil
-      end
-
-    {:reply, match, state}
+      nodes
+      |> descendant_ids(root_id)
+      |> Enum.filter(&MapSet.member?(matched, &1))
+      |> Enum.map(&node_handle(nodes, &1))
+    end
   end
 
   # `selector` arrives already parsed and validated by the caller (parse_selector!).
   # In a `matches` context the node itself is the scoping root for `:scope`.
-  defp matches_impl(node_id, selector, _from, state) do
+  defp matches?(nodes, index, node_id, selector) do
     # The scope for :host is the node's own shadow root's host, if the node is in a
     # shadow tree — matches(node, ":host") on a shadow host is true.
     scoped = DOM.CSS.bind_scope(selector, node_id)
-    context = css_context(state, shadow_scope_host(state.nodes, node_id))
+    context = css_context(nodes, index, shadow_scope_host(nodes, node_id))
 
-    matched =
-      Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, [node_id]) != [] end)
-
-    {:reply, matched, state}
+    Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, [node_id]) != [] end)
   end
 
   # The tables a CSS match runs against (see DOM.CSS.context/0), plus the shadow
   # scope host (nil outside a shadow scope) for :host/:host-context/::slotted.
-  defp css_context(state, scope_host) do
-    %{nodes: state.nodes, index: state.index, scope_host: scope_host}
+  defp css_context(nodes, index, scope_host) do
+    %{nodes: nodes, index: index, scope_host: scope_host}
   end
 
   # The :host scope for matches(node): the node itself when it is a shadow host
@@ -1648,9 +1636,9 @@ defmodule DOM do
   # via the combinator chain. Per querySelectorAll, the candidate result set is
   # the root's descendants only — the root itself is never returned, so a bare
   # `:scope` matches nothing (mirrors the browser).
-  defp query_ids(root_id, selector, state) do
+  defp query_ids(root_id, selector, nodes, index) do
     scoped = DOM.CSS.bind_scope(selector, root_id)
-    candidates = descendant_ids(state.nodes, root_id)
+    candidates = descendant_ids(nodes, root_id)
 
     # A shadow-scoped query's candidate set is exactly the shadow root's
     # descendants — the host and the slots' assigned (light-DOM) nodes are NOT
@@ -1658,8 +1646,8 @@ defmodule DOM do
     # match nothing here (verified against Chromium+Firefox); `:host` is only
     # interrogable via matches/2, and `:host x` reaches the shadow tree through
     # the shadow-crossing combinator walk (Complex.related), not the candidate set.
-    scope_host = shadow_query_host(state.nodes, root_id)
-    context = css_context(state, scope_host)
+    scope_host = shadow_query_host(nodes, root_id)
+    context = css_context(nodes, index, scope_host)
 
     matched =
       scoped
@@ -1678,17 +1666,12 @@ defmodule DOM do
   defp class_tokens(names), do: String.split(names)
 
   def _node_text_content(server, node_id) do
-    GenServer.call(server, {:text_content, node_id})
-  end
-
-  defp text_content_impl(node_id, _from, state) do
-    text =
-      state.nodes
+    _atomic_ets_op(server, fn nodes, _index ->
+      nodes
       |> descendants(node_id)
       |> Enum.filter(&match?(%NodeData.Text{}, &1))
       |> Enum.map_join("", & &1.value)
-
-    {:reply, text, state}
+    end)
   end
 
   def _node_set_text_content(server, node_id, value) do
@@ -1978,41 +1961,6 @@ defmodule DOM do
   @impl true
   def handle_call({:outer_html, node_id}, from, state) do
     outer_html_impl(node_id, from, state)
-  end
-
-  @impl true
-  def handle_call({:get_elements_by_tag_name, node_id, name}, from, state) do
-    get_elements_by_tag_name_impl(node_id, name, from, state)
-  end
-
-  @impl true
-  def handle_call({:get_element_by_id, root_id, id}, from, state) do
-    get_element_by_id_impl(root_id, id, from, state)
-  end
-
-  @impl true
-  def handle_call({:get_elements_by_class_name, root_id, names}, from, state) do
-    get_elements_by_class_name_impl(root_id, names, from, state)
-  end
-
-  @impl true
-  def handle_call({:query_selector, root_id, selector}, from, state) do
-    query_selector_impl(root_id, selector, from, state)
-  end
-
-  @impl true
-  def handle_call({:query_selector_all, root_id, selector}, from, state) do
-    query_selector_all_impl(root_id, selector, from, state)
-  end
-
-  @impl true
-  def handle_call({:matches, node_id, selector}, from, state) do
-    matches_impl(node_id, selector, from, state)
-  end
-
-  @impl true
-  def handle_call({:text_content, node_id}, from, state) do
-    text_content_impl(node_id, from, state)
   end
 
   @impl true
