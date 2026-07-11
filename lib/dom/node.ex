@@ -10,7 +10,7 @@ defmodule DOM.Node do
   node kind. Element-only operations live in `DOM.Element`; whole-document
   operations live in `DOM`. Operations whose result is fixed by the node kind
   fail fast client-side via `type`-guarded clauses. Row-local reads drive the ETS
-  table through `DOM._select` with a `defmatchspecp` whose body builds the result
+  table through `DOM._select_nodes` with a `defmatchspecp` whose body builds the result
   (often a `%DOM.Node{}` handle, one clause per `DOM.NodeData.*` record); the rest
   call the owning server through a `DOM._node_*` bridge.
   """
@@ -222,7 +222,7 @@ defmodule DOM.Node do
   @doc "The DOM `nodeType` numeric constant."
   @spec node_type(t()) :: pos_integer()
   def node_type(%__MODULE__{} = node) do
-    [node_type] = DOM._select(node.server, node_type_spec(node.node_id))
+    [node_type] = DOM._select_nodes(node.server, node_type_spec(node.node_id))
     node_type
   end
 
@@ -239,7 +239,7 @@ defmodule DOM.Node do
   @doc "The DOM `nodeName`."
   @spec node_name(t()) :: String.t()
   def node_name(%__MODULE__{} = node) do
-    [node_name] = DOM._select(node.server, node_name_spec(node.node_id))
+    [node_name] = DOM._select_nodes(node.server, node_name_spec(node.node_id))
     node_name
   end
 
@@ -256,7 +256,7 @@ defmodule DOM.Node do
   @doc "A DocumentType's `{public_id, system_id}` (each `nil` when absent)."
   @spec doctype_ids(t()) :: {String.t() | nil, String.t() | nil}
   def doctype_ids(%__MODULE__{type: :document_type} = node) do
-    [ids] = DOM._select(node.server, doctype_ids_spec(node.node_id))
+    [ids] = DOM._select_nodes(node.server, doctype_ids_spec(node.node_id))
     ids
   end
 
@@ -267,7 +267,7 @@ defmodule DOM.Node do
   @doc "The node's character data value (Text/Comment), else `nil`."
   @spec value(t()) :: String.t() | nil
   def value(%__MODULE__{} = node) do
-    [value] = DOM._select(node.server, value_spec(node.node_id))
+    [value] = DOM._select_nodes(node.server, value_spec(node.node_id))
     value
   end
 

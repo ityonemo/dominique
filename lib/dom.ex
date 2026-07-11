@@ -64,6 +64,12 @@ defmodule DOM do
     nodes = :ets.new(__MODULE__, [:set, :private])
     index = :ets.new(:"#{__MODULE__}.Index", [:ordered_set, :private])
     :ets.insert(nodes, {document_id, %NodeData.Document{}})
+    # Stash the tids in the process dictionary so a re-entrant read from inside the
+    # server (e.g. an event listener running during dispatch) can reach the tables
+    # directly via NodeData._select_nodes/_select_index, without a deadlocking
+    # GenServer.call back into this same process. See DOM.NodeData.
+    Process.put(:nodes, nodes)
+    Process.put(:index, index)
     state = %__MODULE__{nodes: nodes, index: index, document_id: document_id}
 
     case build_continue(opts) do
@@ -96,8 +102,10 @@ defmodule DOM do
   @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
   @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
   @spec matches(Node.t(), String.t()) :: boolean()
-  @spec _select(GenServer.server(), :ets.match_spec()) :: [term()]
-  @spec _select_replace(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
+  @spec _select_nodes(GenServer.server(), :ets.match_spec()) :: [term()]
+  @spec _select_index(GenServer.server(), :ets.match_spec()) :: [term()]
+  @spec _select_replace_nodes(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
+  @spec _select_replace_index(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
   @spec _atomic_ets_op(GenServer.server(), (:ets.tid(), :ets.tid() -> result)) :: result
         when result: term()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
@@ -322,22 +330,51 @@ defmodule DOM do
   end
 
   # Generic ETS primitives. A caller module (DOM.Node/DOM.Element) builds a match
-  # spec with `defmatchspecp`/`fun2msfun` and drives the nodes table directly
-  # through these, instead of each row-local read/write needing its own bridge.
-  def _select(server, match_spec) do
-    GenServer.call(server, {:select, match_spec})
+  # spec with `defmatchspecp`/`fun2msfun` and drives a table directly through these,
+  # instead of each row-local read/write needing its own bridge.
+  #
+  # Each forks on re-entrancy: called from OUTSIDE the server it does a
+  # GenServer.call; called from INSIDE (server == self(), e.g. a listener running
+  # during dispatch) it reads the tid from the process dictionary and runs in place
+  # via the DOM.NodeData twins — a call back into the busy server would deadlock.
+  def _select_nodes(server, match_spec) do
+    if server == self(),
+      do: NodeData._select_nodes(server, match_spec),
+      else: GenServer.call(server, {:select_nodes, match_spec})
   end
 
-  defp select_impl(match_spec, _from, state) do
+  defp select_nodes_impl(match_spec, _from, state) do
     {:reply, :ets.select(state.nodes, match_spec), state}
   end
 
-  def _select_replace(server, match_spec) do
-    GenServer.call(server, {:select_replace, match_spec})
+  def _select_index(server, match_spec) do
+    if server == self(),
+      do: NodeData._select_index(server, match_spec),
+      else: GenServer.call(server, {:select_index, match_spec})
   end
 
-  defp select_replace_impl(match_spec, _from, state) do
+  defp select_index_impl(match_spec, _from, state) do
+    {:reply, :ets.select(state.index, match_spec), state}
+  end
+
+  def _select_replace_nodes(server, match_spec) do
+    if server == self(),
+      do: :ets.select_replace(Process.get(:nodes), match_spec),
+      else: GenServer.call(server, {:select_replace_nodes, match_spec})
+  end
+
+  defp select_replace_nodes_impl(match_spec, _from, state) do
     {:reply, :ets.select_replace(state.nodes, match_spec), state}
+  end
+
+  def _select_replace_index(server, match_spec) do
+    if server == self(),
+      do: :ets.select_replace(Process.get(:index), match_spec),
+      else: GenServer.call(server, {:select_replace_index, match_spec})
+  end
+
+  defp select_replace_index_impl(match_spec, _from, state) do
+    {:reply, :ets.select_replace(state.index, match_spec), state}
   end
 
   # Runs a multi-step ETS operation `op.(nodes)` atomically inside the server (a
@@ -1780,13 +1817,23 @@ defmodule DOM do
   end
 
   @impl true
-  def handle_call({:select, match_spec}, from, state) do
-    select_impl(match_spec, from, state)
+  def handle_call({:select_nodes, match_spec}, from, state) do
+    select_nodes_impl(match_spec, from, state)
   end
 
   @impl true
-  def handle_call({:select_replace, match_spec}, from, state) do
-    select_replace_impl(match_spec, from, state)
+  def handle_call({:select_index, match_spec}, from, state) do
+    select_index_impl(match_spec, from, state)
+  end
+
+  @impl true
+  def handle_call({:select_replace_nodes, match_spec}, from, state) do
+    select_replace_nodes_impl(match_spec, from, state)
+  end
+
+  @impl true
+  def handle_call({:select_replace_index, match_spec}, from, state) do
+    select_replace_index_impl(match_spec, from, state)
   end
 
   @impl true

@@ -34,4 +34,21 @@ defprotocol DOM.NodeData do
 after
   @doc "Parent id of the record, or `nil`."
   def parent(%{parent: parent}), do: parent
+
+  # Re-entrant twins of DOM._select_nodes/_select_index: when a read runs INSIDE
+  # the document server (e.g. an event listener during dispatch), a GenServer.call
+  # back into the same process would deadlock, so read the tid straight from the
+  # process dictionary (stashed in DOM.init) and run the select in place. `server`
+  # is ignored — the tables are process-ambient here.
+  def _select_nodes(_server, select) do
+    :nodes
+    |> Process.get()
+    |> :ets.select(select)
+  end
+
+  def _select_index(_server, select) do
+    :index
+    |> Process.get()
+    |> :ets.select(select)
+  end
 end

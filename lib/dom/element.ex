@@ -16,7 +16,7 @@ defmodule DOM.Element do
   @doc "The element's local name, or `nil` for a non-element node."
   @spec local_name(Node.t()) :: String.t() | nil
   def local_name(%Node{type: :element} = element) do
-    [local_name] = DOM._select(element.server, local_name_spec(element.node_id))
+    [local_name] = DOM._select_nodes(element.server, local_name_spec(element.node_id))
     local_name
   end
 
@@ -29,7 +29,7 @@ defmodule DOM.Element do
   @doc "The element's namespace (`:html | :svg | :mathml`), or `nil` for a non-element."
   @spec namespace(Node.t()) :: DOM.NodeData.Element.namespace() | nil
   def namespace(%Node{type: :element} = element) do
-    [namespace] = DOM._select(element.server, namespace_spec(element.node_id))
+    [namespace] = DOM._select_nodes(element.server, namespace_spec(element.node_id))
     namespace
   end
 
@@ -97,7 +97,7 @@ defmodule DOM.Element do
 
   # The element's raw attribute list, read straight from the record.
   defp attributes(%Node{} = element) do
-    [attributes] = DOM._select(element.server, attributes_spec(element.node_id))
+    [attributes] = DOM._select_nodes(element.server, attributes_spec(element.node_id))
     attributes
   end
 
