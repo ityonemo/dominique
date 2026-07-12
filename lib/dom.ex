@@ -91,6 +91,7 @@ defmodule DOM do
   # ==========================================================================
   # API
   # ==========================================================================
+  @type mutates() :: :mutates | nil
 
   @spec new(String.t() | nil) :: t()
   @spec create_element(t(), String.t()) :: Node.t()
@@ -108,7 +109,8 @@ defmodule DOM do
   @spec _select_index(GenServer.server(), :ets.match_spec()) :: [term()]
   @spec _select_replace_nodes(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
   @spec _select_replace_index(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
-  @spec _atomic_ets_op(GenServer.server(), (:ets.tid(), :ets.tid() -> result)) :: result
+  @spec _atomic_ets_op(GenServer.server(), (:ets.tid(), :ets.tid() -> result), mutates()) ::
+          result
         when result: term()
   @spec _node_append_child(GenServer.server(), reference(), Node.t()) :: Node.t()
   @spec _node_insert_before(GenServer.server(), reference(), Node.t(), Node.t() | nil) :: Node.t()
@@ -188,7 +190,11 @@ defmodule DOM do
   @doc false
   def _element_attach_shadow(server, node_id, mode) do
     result =
-      _atomic_ets_op(server, fn nodes, index -> attach_shadow(nodes, index, node_id, mode) end)
+      _atomic_ets_op(
+        server,
+        fn nodes, index -> attach_shadow(nodes, index, node_id, mode) end,
+        :mutates
+      )
 
     case result do
       {:ok, shadow} -> shadow
@@ -440,14 +446,62 @@ defmodule DOM do
   # tids, so no server state is involved and the direct run is equivalent. This is
   # the deep seam: every read-modify-write built on _atomic_ets_op is re-entrant-
   # safe for free.
-  def _atomic_ets_op(server, op) do
+  #
+  # Pass `:mutates` for a DOM MUTATION: after replying, the server runs a
+  # microtask checkpoint ({:continue, :drain_microtasks}), where the microtasks a
+  # mutation enqueues (slotchange, later MutationObserver) run. Only the OUTER
+  # (GenServer.call) path acts on it; a re-entrant call (server == self(), nested in
+  # a listener / running microtask / another mutation) NEVER drains regardless,
+  # since microtasks run after the whole outer task, not mid-operation — the nested
+  # frame only enqueues and inherits the outer frame's checkpoint. Reads omit it.
+  def _atomic_ets_op(server, op, mutates \\ nil) do
     if server == self(),
       do: op.(Process.get(:nodes), Process.get(:index)),
-      else: GenServer.call(server, {:atomic_ets_op, op})
+      else: GenServer.call(server, {:atomic_ets_op, op, mutates})
   end
 
-  defp atomic_ets_op_impl(op, _from, state) do
-    {:reply, op.(state.nodes, state.index), state}
+  defp atomic_ets_op_impl(op, mutates, _from, state) do
+    result = op.(state.nodes, state.index)
+
+    if mutates,
+      do: {:reply, result, state, {:continue, :drain_microtasks}},
+      else: {:reply, result, state}
+  end
+
+  @doc false
+  # Enqueue a one-shot microtask `lambda` on the document-global queue. Dual, like
+  # _atomic_ets_op: from OUTSIDE the server a GenServer.call whose handle_call
+  # schedules a checkpoint (a {:continue, :drain_microtasks}) after replying; from
+  # INSIDE (server == self(), e.g. a listener during dispatch, or a running
+  # microtask) it enqueues ONLY — no checkpoint, because it is not a top-level task
+  # but recursion under an outer frame that already owns the drain.
+  def _enqueue_microtask(server, lambda) do
+    if server == self(),
+      do: Table.microtask_enqueue(Process.get(:index), lambda),
+      else: GenServer.call(server, {:enqueue_microtask, lambda})
+  end
+
+  defp enqueue_microtask_impl(lambda, _from, state) do
+    Table.microtask_enqueue(state.index, lambda)
+    {:reply, :ok, state, {:continue, :drain_microtasks}}
+  end
+
+  # The microtask checkpoint: run the oldest microtask, then re-continue. Draining
+  # one-per-continue keeps every lambda.() running under the SAME non-preemptible
+  # continue chain — the runtime does not read the mailbox until the chain ends, so
+  # a queued timer/UI task cannot jump ahead of the checkpoint (the HTML "perform a
+  # microtask checkpoint" is uninterruptible), and microtasks enqueued mid-drain
+  # (including a deferred dispatch_event) are picked up before it exits. An infinite
+  # enqueue loop never returns to the mailbox — a faithful frozen tab.
+  defp drain_microtasks_impl(state) do
+    case Table.microtask_take_oldest(state.index) do
+      :empty ->
+        {:noreply, state}
+
+      {_seq, lambda} ->
+        lambda.()
+        {:noreply, state, {:continue, :drain_microtasks}}
+    end
   end
 
   @doc false
@@ -462,7 +516,9 @@ defmodule DOM do
   end
 
   defp lambda_impl(fun, _from, state) do
-    {:reply, fun.(), state}
+    # DOM.lambda runs arbitrary code inside the server — it is a top-level task, so
+    # it ends with a microtask checkpoint (a listener/op run under it may enqueue).
+    {:reply, fun.(), state, {:continue, :drain_microtasks}}
   end
 
   # ==========================================================================
@@ -510,7 +566,11 @@ defmodule DOM do
   # remainder. Boundaries in the original past `offset` move into the new node.
   def _text_split(server, node_id, offset) do
     result =
-      _atomic_ets_op(server, fn nodes, index -> text_split_op(nodes, index, node_id, offset) end)
+      _atomic_ets_op(
+        server,
+        fn nodes, index -> text_split_op(nodes, index, node_id, offset) end,
+        :mutates
+      )
 
     case result do
       {:ok, new_node} -> new_node
@@ -559,7 +619,11 @@ defmodule DOM do
 
   @doc false
   def _range_extract_contents(server, range_id) do
-    _atomic_ets_op(server, fn nodes, index -> range_extract_op(nodes, index, range_id) end)
+    _atomic_ets_op(
+      server,
+      fn nodes, index -> range_extract_op(nodes, index, range_id) end,
+      :mutates
+    )
   end
 
   defp range_extract_op(nodes, index, range_id) do
@@ -581,29 +645,37 @@ defmodule DOM do
 
   @doc false
   def _range_delete_contents(server, range_id) do
-    _atomic_ets_op(server, fn nodes, index ->
-      {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
-      snapshot = range_snapshot(nodes, index)
-      extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
+        snapshot = range_snapshot(nodes, index)
+        extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
 
-      Enum.each(extracted, &delete_subtree(nodes, index, &1))
-      resync_spans(nodes, index)
+        Enum.each(extracted, &delete_subtree(nodes, index, &1))
+        resync_spans(nodes, index)
 
-      collapse_range_to_start(index, range_id)
-      reconcile_ranges(nodes, index, snapshot)
+        collapse_range_to_start(index, range_id)
+        reconcile_ranges(nodes, index, snapshot)
 
-      :ok
-    end)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   @doc false
   def _range_insert_node(server, range_id, node_id) do
-    _atomic_ets_op(server, fn nodes, index ->
-      {{start_key, so}, _stop} = Table.range_boundaries(index, range_id)
-      container = Table.node_at_start_key(nodes, start_key)
-      do_insert_at_boundary(nodes, index, container, so, node_id)
-      :ok
-    end)
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        {{start_key, so}, _stop} = Table.range_boundaries(index, range_id)
+        container = Table.node_at_start_key(nodes, start_key)
+        do_insert_at_boundary(nodes, index, container, so, node_id)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   # Insert node_id at boundary (container, offset). Text container: split at offset
@@ -657,9 +729,13 @@ defmodule DOM do
   @doc false
   def _range_surround_contents(server, range_id, element_id) do
     result =
-      _atomic_ets_op(server, fn nodes, index ->
-        range_surround_op(nodes, index, range_id, element_id)
-      end)
+      _atomic_ets_op(
+        server,
+        fn nodes, index ->
+          range_surround_op(nodes, index, range_id, element_id)
+        end,
+        :mutates
+      )
 
     case result do
       :ok -> :ok
@@ -795,16 +871,24 @@ defmodule DOM do
   def _node_append_child(server, parent_id, %{server: child_server, node_id: child_id} = child) do
     result =
       if child_server == server do
-        _atomic_ets_op(server, fn nodes, index ->
-          append_child_op(nodes, index, parent_id, child_id)
-        end)
+        _atomic_ets_op(
+          server,
+          fn nodes, index ->
+            append_child_op(nodes, index, parent_id, child_id)
+          end,
+          :mutates
+        )
       else
         subtree = _export_subtree(child_server, child_id)
 
         result =
-          _atomic_ets_op(server, fn nodes, index ->
-            append_subtree_op(nodes, index, parent_id, child_id, subtree)
-          end)
+          _atomic_ets_op(
+            server,
+            fn nodes, index ->
+              append_subtree_op(nodes, index, parent_id, child_id, subtree)
+            end,
+            :mutates
+          )
 
         if match?({:ok, _transferred_child}, result) do
           _remove_subtree(child_server, child_id)
@@ -947,16 +1031,24 @@ defmodule DOM do
       ) do
     result =
       if child_server == server do
-        _atomic_ets_op(server, fn nodes, index ->
-          insert_before_op(nodes, index, parent_id, child_id, reference_child_id)
-        end)
+        _atomic_ets_op(
+          server,
+          fn nodes, index ->
+            insert_before_op(nodes, index, parent_id, child_id, reference_child_id)
+          end,
+          :mutates
+        )
       else
         subtree = _export_subtree(child_server, child_id)
 
         result =
-          _atomic_ets_op(server, fn nodes, index ->
-            insert_subtree_op(nodes, index, parent_id, child_id, reference_child_id, subtree)
-          end)
+          _atomic_ets_op(
+            server,
+            fn nodes, index ->
+              insert_subtree_op(nodes, index, parent_id, child_id, reference_child_id, subtree)
+            end,
+            :mutates
+          )
 
         if match?({:ok, _transferred_child}, result) do
           _remove_subtree(child_server, child_id)
@@ -1084,23 +1176,31 @@ defmodule DOM do
   # adoptNode: move `node_id` into `dst_server`, detached. Same server → just detach
   # it in place; cross server → export, materialize into dst, remove from source.
   def _adopt_node(dst_server, dst_server, node_id) do
-    _atomic_ets_op(dst_server, fn nodes, index ->
-      node_data = fetch_node!(nodes, node_id)
-      detach_from_parent(nodes, node_id, node_data)
-      resync_spans(nodes, index)
-      node_handle(nodes, node_id)
-    end)
+    _atomic_ets_op(
+      dst_server,
+      fn nodes, index ->
+        node_data = fetch_node!(nodes, node_id)
+        detach_from_parent(nodes, node_id, node_data)
+        resync_spans(nodes, index)
+        node_handle(nodes, node_id)
+      end,
+      :mutates
+    )
   end
 
   def _adopt_node(dst_server, src_server, node_id) do
     subtree = _export_subtree(src_server, node_id)
 
     handle =
-      _atomic_ets_op(dst_server, fn nodes, index ->
-        materialize_subtree(nodes, index, node_id, subtree)
-        resync_spans(nodes, index)
-        node_handle(nodes, node_id)
-      end)
+      _atomic_ets_op(
+        dst_server,
+        fn nodes, index ->
+          materialize_subtree(nodes, index, node_id, subtree)
+          resync_spans(nodes, index)
+          node_handle(nodes, node_id)
+        end,
+        :mutates
+      )
 
     _remove_subtree(src_server, node_id)
     handle
@@ -1111,12 +1211,16 @@ defmodule DOM do
   # leaving the source intact. Same server → Table.clone; cross server → export a
   # (possibly shallow) snapshot and materialize a fresh-keyed copy into dst.
   def _import_node(dst_server, dst_server, node_id, deep?) do
-    _atomic_ets_op(dst_server, fn nodes, index ->
-      clone_id = Table.clone(nodes, node_id, deep?)
-      Table.reindex(nodes, index)
-      Table.span_index_all(nodes, index)
-      node_handle(nodes, clone_id)
-    end)
+    _atomic_ets_op(
+      dst_server,
+      fn nodes, index ->
+        clone_id = Table.clone(nodes, node_id, deep?)
+        Table.reindex(nodes, index)
+        Table.span_index_all(nodes, index)
+        node_handle(nodes, clone_id)
+      end,
+      :mutates
+    )
   end
 
   def _import_node(dst_server, src_server, node_id, deep?) do
@@ -1124,11 +1228,15 @@ defmodule DOM do
     subtree = if deep?, do: subtree, else: shallow_subtree(subtree, node_id)
     {rekeyed, new_root} = rekey_subtree(subtree, node_id)
 
-    _atomic_ets_op(dst_server, fn nodes, index ->
-      materialize_subtree(nodes, index, new_root, rekeyed)
-      resync_spans(nodes, index)
-      node_handle(nodes, new_root)
-    end)
+    _atomic_ets_op(
+      dst_server,
+      fn nodes, index ->
+        materialize_subtree(nodes, index, new_root, rekeyed)
+        resync_spans(nodes, index)
+        node_handle(nodes, new_root)
+      end,
+      :mutates
+    )
   end
 
   # Keep only the root record from an exported subtree (shallow import).
@@ -1154,9 +1262,13 @@ defmodule DOM do
 
   def _node_remove_child(server, parent_id, %{node_id: child_id} = child) do
     result =
-      _atomic_ets_op(server, fn nodes, index ->
-        remove_child_op(nodes, index, parent_id, child_id)
-      end)
+      _atomic_ets_op(
+        server,
+        fn nodes, index ->
+          remove_child_op(nodes, index, parent_id, child_id)
+        end,
+        :mutates
+      )
 
     case result do
       :ok -> child
@@ -1206,16 +1318,24 @@ defmodule DOM do
       ) do
     result =
       if new_server == server do
-        _atomic_ets_op(server, fn nodes, index ->
-          replace_child_op(nodes, index, parent_id, new_child_id, old_child_id)
-        end)
+        _atomic_ets_op(
+          server,
+          fn nodes, index ->
+            replace_child_op(nodes, index, parent_id, new_child_id, old_child_id)
+          end,
+          :mutates
+        )
       else
         subtree = _export_subtree(new_server, new_child_id)
 
         result =
-          _atomic_ets_op(server, fn nodes, index ->
-            replace_subtree_op(nodes, index, parent_id, new_child_id, old_child_id, subtree)
-          end)
+          _atomic_ets_op(
+            server,
+            fn nodes, index ->
+              replace_subtree_op(nodes, index, parent_id, new_child_id, old_child_id, subtree)
+            end,
+            :mutates
+          )
 
         if match?({:ok, _replaced}, result) do
           _remove_subtree(new_server, new_child_id)
@@ -1320,13 +1440,17 @@ defmodule DOM do
   end
 
   def _remove_subtree(server, node_id) do
-    _atomic_ets_op(server, fn nodes, index ->
-      node_data = fetch_node!(nodes, node_id)
-      detach_from_parent(nodes, node_id, node_data)
-      delete_subtree(nodes, index, node_id)
-      resync_spans(nodes, index)
-      :ok
-    end)
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        node_data = fetch_node!(nodes, node_id)
+        detach_from_parent(nodes, node_id, node_data)
+        delete_subtree(nodes, index, node_id)
+        resync_spans(nodes, index)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   defp invalid_hierarchy?(nodes, parent, parent_id, child, child_id, reference_child_id, subtree) do
@@ -1505,10 +1629,14 @@ defmodule DOM do
 
   @doc false
   def _node_normalize(server, node_id) do
-    _atomic_ets_op(server, fn nodes, index ->
-      normalize_subtree(nodes, index, node_id)
-      :ok
-    end)
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        normalize_subtree(nodes, index, node_id)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   # Normalize `node_id`'s subtree: merge each maximal run of adjacent Text children
@@ -1580,13 +1708,21 @@ defmodule DOM do
   end
 
   @doc false
-  # Dispatch runs listeners (which may call DOM ops re-entrantly), so it goes
-  # through _atomic_ets_op like every other in-server operation. `server` is passed
-  # to the engine so the handles listeners receive carry the right pid.
+  # Dispatch runs listeners (which may call DOM ops re-entrantly). It has its OWN
+  # handle_call (not _atomic_ets_op) so that only enqueue + dispatch — the two ops
+  # that populate the microtask queue — carry the {:continue, :drain_microtasks}
+  # checkpoint; every other atomic op stays checkpoint-free. Dual: from INSIDE the
+  # server (a listener synchronously dispatching another event) it runs in-place —
+  # plain stack recursion, no checkpoint, inheriting the outer frame's drain.
   def _node_dispatch_event(server, node_id, event) do
-    _atomic_ets_op(server, fn nodes, index ->
-      Events.dispatch(nodes, index, server, node_id, event)
-    end)
+    if server == self(),
+      do: Events.dispatch(Process.get(:nodes), Process.get(:index), server, node_id, event),
+      else: GenServer.call(server, {:dispatch_event, node_id, event})
+  end
+
+  defp dispatch_event_impl(node_id, event, _from, state) do
+    result = Events.dispatch(state.nodes, state.index, self(), node_id, event)
+    {:reply, result, state, {:continue, :drain_microtasks}}
   end
 
   @doc false
@@ -1618,33 +1754,41 @@ defmodule DOM do
   # then replace the element's children with the parsed fragment's children. All
   # in-process on this server's table via DOM.NodeData.Table.
   def _element_set_inner_html(server, node_id, html) do
-    _atomic_ets_op(server, fn nodes, index ->
-      element = Table.fetch!(nodes, node_id)
-      context = %{name: element.local_name, namespace: element.namespace}
-      root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        element = Table.fetch!(nodes, node_id)
+        context = %{name: element.local_name, namespace: element.namespace}
+        root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-      Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
-      Table.append_children(nodes, node_id, Table.children(nodes, root))
-      resync_spans(nodes, index)
-      :ok
-    end)
+        Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
+        Table.append_children(nodes, node_id, Table.children(nodes, root))
+        resync_spans(nodes, index)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   @doc false
   # insertAdjacentHTML: parse `html` (context = the element for child positions, its
   # parent for sibling positions) then splice the parsed nodes at `position`.
   def _element_insert_adjacent_html(server, node_id, position, html) do
-    _atomic_ets_op(server, fn nodes, index ->
-      context_id = adjacent_context_id(nodes, node_id, position)
-      context_el = Table.fetch!(nodes, context_id)
-      context = %{name: context_el.local_name, namespace: context_el.namespace}
-      root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
-      parsed = Table.children(nodes, root)
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        context_id = adjacent_context_id(nodes, node_id, position)
+        context_el = Table.fetch!(nodes, context_id)
+        context = %{name: context_el.local_name, namespace: context_el.namespace}
+        root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
+        parsed = Table.children(nodes, root)
 
-      insert_adjacent(nodes, index, node_id, position, parsed)
-      resync_spans(nodes, index)
-      :ok
-    end)
+        insert_adjacent(nodes, index, node_id, position, parsed)
+        resync_spans(nodes, index)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   # The fragment-parse context element for a position (element itself for child
@@ -1694,23 +1838,27 @@ defmodule DOM do
   # Fragment-parse `html` in a default (div-like) context and replace the shadow
   # root's children with the result. Reuses the element innerHTML machinery.
   def _shadow_set_inner_html(server, node_id, html) do
-    _atomic_ets_op(server, fn nodes, index ->
-      root =
-        fragment_root_for(
-          html,
-          %{name: "div", namespace: :html},
-          nodes,
-          index,
-          Process.get(:document_id)
-        )
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        root =
+          fragment_root_for(
+            html,
+            %{name: "div", namespace: :html},
+            nodes,
+            index,
+            Process.get(:document_id)
+          )
 
-      Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
-      Table.append_children(nodes, node_id, Table.children(nodes, root))
-      resync_spans(nodes, index)
-      # The shadow tree's <slot>s changed — reassign the host's light children.
-      recompute_slots(nodes, index, node_id)
-      :ok
-    end)
+        Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
+        Table.append_children(nodes, node_id, Table.children(nodes, root))
+        resync_spans(nodes, index)
+        # The shadow tree's <slot>s changed — reassign the host's light children.
+        recompute_slots(nodes, index, node_id)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   @doc false
@@ -1768,22 +1916,26 @@ defmodule DOM do
   # element with no element parent cannot be replaced.
   def _element_set_outer_html(server, node_id, html) do
     result =
-      _atomic_ets_op(server, fn nodes, index ->
-        parent_id = Table.parent(nodes, node_id)
+      _atomic_ets_op(
+        server,
+        fn nodes, index ->
+          parent_id = Table.parent(nodes, node_id)
 
-        if is_nil(parent_id) or Table.type(nodes, parent_id) != :element do
-          {:error, :no_modification}
-        else
-          parent = Table.fetch!(nodes, parent_id)
-          context = %{name: parent.local_name, namespace: parent.namespace}
-          root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
+          if is_nil(parent_id) or Table.type(nodes, parent_id) != :element do
+            {:error, :no_modification}
+          else
+            parent = Table.fetch!(nodes, parent_id)
+            context = %{name: parent.local_name, namespace: parent.namespace}
+            root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-          Table.insert_children_before(nodes, parent_id, Table.children(nodes, root), node_id)
-          Table.remove_child(nodes, parent_id, node_id)
-          resync_spans(nodes, index)
-          :ok
-        end
-      end)
+            Table.insert_children_before(nodes, parent_id, Table.children(nodes, root), node_id)
+            Table.remove_child(nodes, parent_id, node_id)
+            resync_spans(nodes, index)
+            :ok
+          end
+        end,
+        :mutates
+      )
 
     case result do
       :ok -> :ok
@@ -1940,21 +2092,25 @@ defmodule DOM do
 
   # Replace all children with a single Text node (none when value is empty).
   def _node_set_text_content(server, node_id, value) do
-    _atomic_ets_op(server, fn nodes, index ->
-      nodes
-      |> Table.children(node_id)
-      |> Enum.each(&delete_subtree(nodes, index, &1))
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        nodes
+        |> Table.children(node_id)
+        |> Enum.each(&delete_subtree(nodes, index, &1))
 
-      if value != "" do
-        # append via the extent-authoritative mutator so the new text node is placed
-        # (extent written), then mirrored into the span rows by resync.
-        text_id = Table.create_text(nodes, value)
-        Table.append_child(nodes, node_id, text_id)
-      end
+        if value != "" do
+          # append via the extent-authoritative mutator so the new text node is placed
+          # (extent written), then mirrored into the span rows by resync.
+          text_id = Table.create_text(nodes, value)
+          Table.append_child(nodes, node_id, text_id)
+        end
 
-      resync_spans(nodes, index)
-      :ok
-    end)
+        resync_spans(nodes, index)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   # Delete a subtree from the node table and retract each node's index + span +
@@ -1971,41 +2127,49 @@ defmodule DOM do
   end
 
   def _node_set_value(server, node_id, value) do
-    _atomic_ets_op(server, fn nodes, _index ->
-      node = fetch_node!(nodes, node_id)
-      put_node(nodes, node_id, %{node | value: value})
-      :ok
-    end)
+    _atomic_ets_op(
+      server,
+      fn nodes, _index ->
+        node = fetch_node!(nodes, node_id)
+        put_node(nodes, node_id, %{node | value: value})
+        :ok
+      end,
+      :mutates
+    )
   end
 
   @doc false
   # CharacterData replace-data: splice `data` in for `count` units at `offset`, then
   # adjust live Range boundaries in this node. `offset > length` raises IndexSizeError.
   def _char_data_replace(server, node_id, offset, count, data) do
-    _atomic_ets_op(server, fn nodes, index ->
-      node = fetch_node!(nodes, node_id)
-      value = node.value
-      len = String.length(value)
-      if offset > len, do: raise(DOM.IndexSizeError)
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        node = fetch_node!(nodes, node_id)
+        value = node.value
+        len = String.length(value)
+        if offset > len, do: raise(DOM.IndexSizeError)
 
-      count = min(count, len - offset)
+        count = min(count, len - offset)
 
-      new_value =
-        String.slice(value, 0, offset) <> data <> String.slice(value, offset + count, len)
+        new_value =
+          String.slice(value, 0, offset) <> data <> String.slice(value, offset + count, len)
 
-      put_node(nodes, node_id, %{node | value: new_value})
+        put_node(nodes, node_id, %{node | value: new_value})
 
-      DOM.Range.Adjust.on_replace_data(
-        nodes,
-        index,
-        node.start,
-        offset,
-        count,
-        String.length(data)
-      )
+        DOM.Range.Adjust.on_replace_data(
+          nodes,
+          index,
+          node.start,
+          offset,
+          count,
+          String.length(data)
+        )
 
-      :ok
-    end)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   @doc false
@@ -2177,6 +2341,10 @@ defmodule DOM do
     fragment_impl(tokens, context, state)
   end
 
+  def handle_continue(:drain_microtasks, state) do
+    drain_microtasks_impl(state)
+  end
+
   # An owner process monitored for a range died — the monitor ref is the range id.
   @impl true
   def handle_info({:DOWN, range_id, :process, _pid, _reason}, state) do
@@ -2209,8 +2377,18 @@ defmodule DOM do
   end
 
   @impl true
-  def handle_call({:atomic_ets_op, op}, from, state) do
-    atomic_ets_op_impl(op, from, state)
+  def handle_call({:atomic_ets_op, op, mutates}, from, state) do
+    atomic_ets_op_impl(op, mutates, from, state)
+  end
+
+  @impl true
+  def handle_call({:enqueue_microtask, lambda}, from, state) do
+    enqueue_microtask_impl(lambda, from, state)
+  end
+
+  @impl true
+  def handle_call({:dispatch_event, node_id, event}, from, state) do
+    dispatch_event_impl(node_id, event, from, state)
   end
 
   @impl true

@@ -1086,6 +1086,56 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # Microtasks (:microtask rows)
+  # ==========================================================================
+  #
+  # The document-global microtask queue: `{{:microtask, seq}, lambda}` rows, `seq`
+  # a monotonic integer (next = max + 1). Because the index is an ordered_set, the
+  # smallest seq is the oldest, so draining lowest-first is FIFO (enqueue order) —
+  # the HTML microtask queue. A microtask is a ONE-SHOT deferred lambda (unlike a
+  # :listener, which is durable and fires on every matching dispatch); it is run
+  # once at the checkpoint and its row deleted. Not keyed by a node — microtasks
+  # belong to the document, not a node.
+
+  @doc "Enqueue `lambda` at the tail of the microtask queue."
+  @spec microtask_enqueue(tid, (-> any())) :: :ok
+  def microtask_enqueue(index, lambda) do
+    seq =
+      case :ets.select(index, microtask_seq_spec()) do
+        [] -> 0
+        seqs -> Enum.max(seqs) + 1
+      end
+
+    :ets.insert(index, {{:microtask, seq}, lambda})
+    :ok
+  end
+
+  defmatchspecp microtask_seq_spec() do
+    {{:microtask, seq}, _lambda} -> seq
+  end
+
+  @doc """
+  Dequeue the oldest microtask (smallest seq): return `{seq, lambda}` and delete
+  its row, or `:empty` when the queue is drained.
+  """
+  @spec microtask_take_oldest(tid) :: {non_neg_integer(), (-> any())} | :empty
+  def microtask_take_oldest(index) do
+    case :ets.select(index, microtask_rows_spec()) do
+      [] ->
+        :empty
+
+      rows ->
+        {seq, lambda} = Enum.min_by(rows, &elem(&1, 0))
+        :ets.delete(index, {:microtask, seq})
+        {seq, lambda}
+    end
+  end
+
+  defmatchspecp microtask_rows_spec() do
+    {{:microtask, seq}, lambda} -> {seq, lambda}
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.
@@ -1174,6 +1224,7 @@ defmodule DOM.NodeData.Table do
       check_ranges!(rows, index)
       check_slots!(rows, index)
       check_listeners!(rows, index)
+      check_microtasks!(index)
     end
 
     :ok
@@ -1203,6 +1254,22 @@ defmodule DOM.NodeData.Table do
 
     if dangling != [] do
       raise "dangling listener rows for dead nodes: #{inspect(Enum.uniq(dangling))}"
+    end
+  end
+
+  # Microtask consistency: OUTSIDE a checkpoint drain the queue must be empty. The
+  # drain (handle_continue) runs to completion before the server reads its next
+  # message, so any top-level call — including this consistency check — is processed
+  # only between operations, when a correctly-behaving checkpoint has already
+  # drained. A surviving :microtask row therefore means a checkpoint was skipped or
+  # failed to fire — a bug — so we raise rather than tolerate it. (To probe a
+  # deliberately-pending microtask, read the :microtask family directly; do not go
+  # through check_consistency!.)
+  defp check_microtasks!(index) do
+    pending = index_rows_of(index, :microtask)
+
+    if pending != [] do
+      raise "undrained microtask rows outside a checkpoint: #{inspect(pending)}"
     end
   end
 
