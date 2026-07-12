@@ -266,12 +266,16 @@ defmodule DOM.Element do
       element.server,
       fn nodes, index ->
         [{^node_id, record}] = :ets.lookup(nodes, node_id)
-        updated = %{record | attributes: fun.(record.attributes)}
+        before = record.attributes
+        after_attrs = fun.(before)
+        updated = %{record | attributes: after_attrs}
         :ets.insert(nodes, {node_id, updated})
         Table.index_put(index, node_id, updated)
         # A slot= (light child) or name= (a <slot>) change re-slots the affected
         # shadow host and signals slotchange on any slot whose assignment changed.
         DOM._recompute_slots(nodes, index, node_id)
+        # MutationObserver: one attributes record per changed attribute name.
+        DOM._queue_attribute_records(nodes, index, node_id, before, after_attrs)
 
         :ok
       end,

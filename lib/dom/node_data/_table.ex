@@ -1155,6 +1155,107 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # MutationObserver registry + record queues
+  # ==========================================================================
+  #
+  # Rows (all keyed by the observer ref):
+  #   {{:observer, ref}, callback}              -- the registry (a 1-arg lambda)
+  #   {{:observe, ref, target_id}, options}     -- one per observed target (opts map)
+  #   {{:mo_record, ref, seq}, record}          -- queued MutationRecords, seq order
+  # Records are one-shot (drained by the notify microtask or take_records) and the
+  # observe/registry rows are explicit-lifetime (until disconnect) — like :listener,
+  # they hold a lambda and are never mirror-checked, only asserted non-dangling.
+
+  @doc "Register `callback` under `ref`."
+  @spec observer_put(tid, reference(), (list() -> any())) :: :ok
+  def observer_put(index, ref, callback) do
+    :ets.insert(index, {{:observer, ref}, callback})
+    :ok
+  end
+
+  @doc "The callback for `ref`, or nil if the observer was disconnected."
+  @spec observer_callback(tid, reference()) :: (list() -> any()) | nil
+  def observer_callback(index, ref) do
+    case :ets.lookup(index, {:observer, ref}) do
+      [{_key, callback}] -> callback
+      [] -> nil
+    end
+  end
+
+  @doc "Record that `ref` observes `target_id` with `options` (replacing any prior)."
+  @spec observe_put(tid, reference(), id, map()) :: :ok
+  def observe_put(index, ref, target_id, options) do
+    :ets.insert(index, {{:observe, ref, target_id}, options})
+    :ok
+  end
+
+  @doc "Every `{ref, target_id, options}` currently observed (across all observers)."
+  @spec observations(tid) :: [{reference(), id, map()}]
+  def observations(index) do
+    for {{:observe, ref, target_id}, options} <- index_rows_of(index, :observe),
+        do: {ref, target_id, options}
+  end
+
+  @doc "Append `record` to `ref`'s queue (mutation order)."
+  @spec mo_record_put(tid, reference(), DOM.MutationRecord.t()) :: :ok
+  def mo_record_put(index, ref, record) do
+    seq =
+      case :ets.select(index, mo_record_seq_spec(ref)) do
+        [] -> 0
+        seqs -> Enum.max(seqs) + 1
+      end
+
+    :ets.insert(index, {{:mo_record, ref, seq}, record})
+    :ok
+  end
+
+  defmatchspecp mo_record_seq_spec(ref) do
+    {{:mo_record, ^ref, seq}, _record} -> seq
+  end
+
+  @doc "Distinct observer refs that currently have queued records."
+  @spec mo_record_refs(tid) :: [reference()]
+  def mo_record_refs(index) do
+    index
+    |> :ets.select(mo_record_refs_spec())
+    |> Enum.uniq()
+  end
+
+  defmatchspecp mo_record_refs_spec() do
+    {{:mo_record, ref, _seq}, _record} -> ref
+  end
+
+  @doc "Return `ref`'s queued records in order (does not clear)."
+  @spec mo_records(tid, reference()) :: [DOM.MutationRecord.t()]
+  def mo_records(index, ref) do
+    index
+    |> :ets.select(mo_records_spec(ref))
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
+  end
+
+  defmatchspecp mo_records_spec(ref) do
+    {{:mo_record, ^ref, seq}, record} -> {seq, record}
+  end
+
+  @doc "Return `ref`'s queued records in order AND delete them."
+  @spec mo_take_records(tid, reference()) :: [DOM.MutationRecord.t()]
+  def mo_take_records(index, ref) do
+    records = mo_records(index, ref)
+    :ets.match_delete(index, {{:mo_record, ref, :_}, :_})
+    records
+  end
+
+  @doc "Disconnect `ref`: drop its registry, observe, and record rows."
+  @spec observer_delete(tid, reference()) :: :ok
+  def observer_delete(index, ref) do
+    :ets.delete(index, {:observer, ref})
+    :ets.match_delete(index, {{:observe, ref, :_}, :_})
+    :ets.match_delete(index, {{:mo_record, ref, :_}, :_})
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.

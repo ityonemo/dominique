@@ -23,6 +23,7 @@ defmodule DOM do
   alias DOM.Event
   alias DOM.Events
   alias DOM.HTML.TreeBuilder
+  alias DOM.MutationRecord
   alias DOM.Node
   alias DOM.NodeData
   alias DOM.NodeData.Slots
@@ -505,6 +506,34 @@ defmodule DOM do
     end
   end
 
+  # ==========================================================================
+  # MutationObserver
+  # ==========================================================================
+
+  @doc false
+  def _mutation_observer_new(server, callback) do
+    ref = make_ref()
+    _atomic_ets_op(server, fn _nodes, index -> Table.observer_put(index, ref, callback) end)
+    ref
+  end
+
+  @doc false
+  def _mutation_observer_observe(server, ref, target_id, options) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      Table.observe_put(index, ref, target_id, options)
+    end)
+  end
+
+  @doc false
+  def _mutation_observer_disconnect(server, ref) do
+    _atomic_ets_op(server, fn _nodes, index -> Table.observer_delete(index, ref) end)
+  end
+
+  @doc false
+  def _mutation_observer_take_records(server, ref) do
+    _atomic_ets_op(server, fn _nodes, index -> Table.mo_take_records(index, ref) end)
+  end
+
   @doc false
   # Private, for testing purposes: run an arbitrary 0-arity `fun` INSIDE the
   # document server process, so a test can exercise a DOM operation under the exact
@@ -920,11 +949,14 @@ defmodule DOM do
 
       :else ->
         snapshot = range_snapshot(nodes, index)
-        at = length(Table.children(nodes, parent_id))
+        siblings = Table.children(nodes, parent_id)
+        at = length(siblings)
         Table.append_child(nodes, parent_id, child_id)
         resync_spans(nodes, index)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
+        # childList: appended at the end — previousSibling is the old last child.
+        queue_child_list_record(nodes, index, parent_id, [child_id], [], List.last(siblings), nil)
         :ok
     end
   end
@@ -968,6 +1000,147 @@ defmodule DOM do
           Event.new("slotchange", bubbles: true)
         )
       end)
+    end
+
+    :ok
+  end
+
+  # ==========================================================================
+  # MutationObserver record emission
+  # ==========================================================================
+  #
+  # Each mutating op, after mutating, calls one of the queue_* helpers below with
+  # the CONCRETE change (target + old value / added-removed / siblings). We find
+  # every observer whose observation matches this target — directly, or via an
+  # ancestor observed with subtree — and whose options select this mutation type,
+  # build a per-observer MutationRecord (honoring that observer's old-value flags
+  # and attributeFilter), queue it, and signal the observer. "Signal" enqueues a
+  # single "notify mutation observers" microtask per task (guarded like a slot
+  # signal) that invokes each observer-with-records callback once with its batch.
+
+  # childList: children of `target_id` changed. added/removed are id lists; prev/next
+  # are the sibling ids bracketing the change (or nil).
+  defp queue_child_list_record(nodes, index, target_id, added, removed, prev, next) do
+    for {ref, _options} <- observers_of(nodes, index, target_id, :child_list) do
+      record = %MutationRecord{
+        type: :child_list,
+        target: node_handle(nodes, target_id),
+        added_nodes: Enum.map(added, &node_handle(nodes, &1)),
+        removed_nodes: Enum.map(removed, &node_handle(nodes, &1)),
+        previous_sibling: prev && node_handle(nodes, prev),
+        next_sibling: next && node_handle(nodes, next)
+      }
+
+      queue_record(index, ref, record)
+    end
+
+    :ok
+  end
+
+  @doc false
+  # Diff `before`/`after` attribute lists and emit one attributes record per changed
+  # name (added, removed, or modified). @doc false so DOM.Element's attribute path
+  # can call it across the module boundary. Only string (qualified-name) keys are
+  # observable by name — namespaced triple keys are ignored, matching CSS/attr-index.
+  def _queue_attribute_records(nodes, index, target_id, before, after_attrs) do
+    b = for {k, v} <- before, is_binary(k), into: %{}, do: {k, v}
+    a = for {k, v} <- after_attrs, is_binary(k), into: %{}, do: {k, v}
+
+    names = Enum.uniq(Map.keys(b) ++ Map.keys(a))
+
+    for name <- names, Map.get(b, name) != Map.get(a, name) do
+      queue_attribute_record(nodes, index, target_id, name, Map.get(b, name))
+    end
+
+    :ok
+  end
+
+  # attributes: `name` on `target_id` changed; `old_value` is the prior value.
+  defp queue_attribute_record(nodes, index, target_id, name, old_value) do
+    for {ref, options} <- observers_of(nodes, index, target_id, :attributes),
+        attribute_selected?(options, name) do
+      record = %MutationRecord{
+        type: :attributes,
+        target: node_handle(nodes, target_id),
+        attribute_name: name,
+        old_value: if(options[:attribute_old_value], do: old_value)
+      }
+
+      queue_record(index, ref, record)
+    end
+
+    :ok
+  end
+
+  # characterData: the data of text/comment `target_id` changed; `old_value` prior.
+  defp queue_character_data_record(nodes, index, target_id, old_value) do
+    for {ref, options} <- observers_of(nodes, index, target_id, :character_data) do
+      record = %MutationRecord{
+        type: :character_data,
+        target: node_handle(nodes, target_id),
+        old_value: if(options[:character_data_old_value], do: old_value)
+      }
+
+      queue_record(index, ref, record)
+    end
+
+    :ok
+  end
+
+  # The {ref, options} of every observation that covers `target_id` for `kind`
+  # (`:child_list`/`:attributes`/`:character_data`): the observed node is target_id
+  # itself, or an ancestor observed with subtree. The matching kind option must be set.
+  defp observers_of(nodes, index, target_id, kind) do
+    ancestors = MapSet.new(ancestor_ids(nodes, target_id))
+
+    for {ref, observed_id, options} <- Table.observations(index),
+        Map.get(options, kind),
+        observed_id == target_id or
+          (options[:subtree] and MapSet.member?(ancestors, observed_id)),
+        do: {ref, options}
+  end
+
+  # `target_id` and every ancestor up to the document root.
+  defp ancestor_ids(nodes, node_id) do
+    case Table.parent(nodes, node_id) do
+      nil -> [node_id]
+      parent_id -> [node_id | ancestor_ids(nodes, parent_id)]
+    end
+  end
+
+  defp attribute_selected?(options, name) do
+    case options[:attribute_filter] do
+      nil -> true
+      filter -> name in filter
+    end
+  end
+
+  # Queue a record on `ref` and enqueue the per-task "notify" microtask once.
+  defp queue_record(index, ref, record) do
+    Table.mo_record_put(index, ref, record)
+    signal_notify_observers(index)
+  end
+
+  # Enqueue the single "notify mutation observers" microtask for this task (guarded
+  # by a {:signaled_slot, :mo_notify} row so N records enqueue ONE notify). The
+  # microtask clears the guard, then for each observer with queued records invokes
+  # its callback once with the drained batch (re-entrantly, server == self()).
+  defp signal_notify_observers(index) do
+    if Table.signal_slot(index, :mo_notify) do
+      _enqueue_microtask(self(), &notify_mutation_observers/0)
+    end
+
+    :ok
+  end
+
+  defp notify_mutation_observers do
+    index = Process.get(:index)
+    Table.unsignal_slot(index, :mo_notify)
+
+    for ref <- Table.mo_record_refs(index) do
+      records = Table.mo_take_records(index, ref)
+      callback = Table.observer_callback(index, ref)
+      if records != [] && callback, do: callback.(records)
     end
 
     :ok
@@ -1125,11 +1298,16 @@ defmodule DOM do
 
       :else ->
         snapshot = range_snapshot(nodes, index)
+        siblings = Table.children(nodes, parent_id)
         at = child_index(nodes, parent_id, reference_child_id)
         Table.insert_before(nodes, parent_id, child_id, reference_child_id)
         resync_spans(nodes, index)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
+        # childList: inserted before the reference — previousSibling is the child
+        # that preceded the reference (nil when inserting at the front).
+        prev = if at > 0, do: Enum.at(siblings, at - 1)
+        queue_child_list_record(nodes, index, parent_id, [child_id], [], prev, reference_child_id)
         :ok
     end
   end
@@ -1307,6 +1485,7 @@ defmodule DOM do
   defp remove_child_op(nodes, index, parent_id, child_id) do
     if child_id in Table.children(nodes, parent_id) do
       snapshot = range_snapshot(nodes, index)
+      siblings = Table.children(nodes, parent_id)
       at = child_index(nodes, parent_id, child_id)
       removed_keys = removed_subtree_keys(nodes, child_id)
       Table.remove_child(nodes, parent_id, child_id)
@@ -1318,6 +1497,10 @@ defmodule DOM do
         signal_slots(index, Slots.recompute(nodes, index, parent_id))
       end
 
+      # childList: the removed node with the siblings that bracketed it.
+      prev = if at > 0, do: Enum.at(siblings, at - 1)
+      next = Enum.at(siblings, at + 1)
+      queue_child_list_record(nodes, index, parent_id, [], [child_id], prev, next)
       :ok
     else
       {:error, :not_found}
@@ -2157,9 +2340,11 @@ defmodule DOM do
   def _node_set_value(server, node_id, value) do
     _atomic_ets_op(
       server,
-      fn nodes, _index ->
+      fn nodes, index ->
         node = fetch_node!(nodes, node_id)
         put_node(nodes, node_id, %{node | value: value})
+        # characterData: the node's data changed; old_value is the prior value.
+        queue_character_data_record(nodes, index, node_id, node.value)
         :ok
       end,
       :mutates
@@ -2194,6 +2379,8 @@ defmodule DOM do
           String.length(data)
         )
 
+        # characterData: data spliced; old_value is the whole prior value.
+        queue_character_data_record(nodes, index, node_id, value)
         :ok
       end,
       :mutates
