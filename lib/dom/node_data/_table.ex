@@ -1136,6 +1136,25 @@ defmodule DOM.NodeData.Table do
     {{:microtask, seq}, lambda} -> {seq, lambda}
   end
 
+  # "Signal a slot" dedup guard (:signaled_slot rows). A slot signaled for
+  # slotchange within one task carries a `{{:signaled_slot, slot_id}, true}` row so a
+  # second signal in the same task does not enqueue a second slotchange microtask;
+  # the microtask deletes the row when it fires, so a change in a LATER task
+  # re-signals. Transient (like :microtask) — never present outside a task.
+
+  @doc "Mark `slot_id` signaled; returns true iff newly signaled (was not already)."
+  @spec signal_slot(tid, id) :: boolean()
+  def signal_slot(index, slot_id) do
+    :ets.insert_new(index, {{:signaled_slot, slot_id}, true})
+  end
+
+  @doc "Clear `slot_id`'s signal (its slotchange microtask has fired)."
+  @spec unsignal_slot(tid, id) :: :ok
+  def unsignal_slot(index, slot_id) do
+    :ets.delete(index, {:signaled_slot, slot_id})
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.

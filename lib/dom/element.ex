@@ -269,11 +269,9 @@ defmodule DOM.Element do
         updated = %{record | attributes: fun.(record.attributes)}
         :ets.insert(nodes, {node_id, updated})
         Table.index_put(index, node_id, updated)
-        # A slot= (light child) or name= (a <slot>) change re-slots — recompute the
-        # affected shadow host's assignment.
-        if host = DOM.NodeData.Slots.affected_host(nodes, node_id) do
-          DOM.NodeData.Slots.recompute(nodes, index, host)
-        end
+        # A slot= (light child) or name= (a <slot>) change re-slots the affected
+        # shadow host and signals slotchange on any slot whose assignment changed.
+        DOM._recompute_slots(nodes, index, node_id)
 
         :ok
       end,

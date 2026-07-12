@@ -17,13 +17,30 @@ defmodule DOM.NodeData.Slots do
   alias DOM.NodeData
   alias DOM.NodeData.Table
 
-  @doc "Recompute and store the `:slot`/`:assigned` rows for `host_id`'s shadow tree."
-  @spec recompute(Table.tid(), Table.tid(), Table.id()) :: :ok
+  @doc """
+  Recompute and store the `:slot`/`:assigned` rows for `host_id`'s shadow tree.
+  Returns the ids of the slots whose assigned-node list actually CHANGED — the
+  slots to signal `slotchange` on (empty when nothing changed).
+  """
+  @spec recompute(Table.tid(), Table.tid(), Table.id()) :: [Table.id()]
   def recompute(nodes, index, host_id) do
     shadow = Table.shadow_root(nodes, host_id)
+
+    # Every slot that could be involved: those with an assignment before, plus the
+    # slots present in the shadow tree now. Snapshot each before, mutate, diff after.
+    slots =
+      MapSet.new(prior_slot_ids(index, host_id))
+      |> MapSet.union(MapSet.new(if shadow, do: slots_in(nodes, shadow), else: []))
+      |> MapSet.to_list()
+
+    before = Map.new(slots, &{&1, assigned_nodes(index, &1)})
+
     retract(index, host_id, shadow)
     if shadow, do: assign(nodes, index, host_id, shadow)
-    :ok
+
+    for slot_id <- slots, assigned_nodes(index, slot_id) != Map.fetch!(before, slot_id) do
+      slot_id
+    end
   end
 
   # Drop the host's old assignment rows. The `:assigned_host` rows record every
@@ -174,5 +191,16 @@ defmodule DOM.NodeData.Slots do
 
   defmatchspecp prior_assignments_spec(host_id) do
     {{:assigned_host, ^host_id, node_id}, slot_id} -> {node_id, slot_id}
+  end
+
+  # The distinct slot ids that had an assignment under `host_id` before a recompute.
+  defp prior_slot_ids(index, host_id) do
+    index
+    |> :ets.select(prior_slot_ids_spec(host_id))
+    |> Enum.uniq()
+  end
+
+  defmatchspecp prior_slot_ids_spec(host_id) do
+    {{:assigned_host, ^host_id, _node_id}, slot_id} -> slot_id
   end
 end

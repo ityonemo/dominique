@@ -20,6 +20,7 @@ defmodule DOM do
   use GenServer
   use MatchSpec
 
+  alias DOM.Event
   alias DOM.Events
   alias DOM.HTML.TreeBuilder
   alias DOM.Node
@@ -370,7 +371,7 @@ defmodule DOM do
       :else ->
         shadow_id = Table.create_shadow_root(nodes, id, mode)
         Table.span_index_all(nodes, index)
-        DOM.NodeData.Slots.recompute(nodes, index, id)
+        signal_slots(index, DOM.NodeData.Slots.recompute(nodes, index, id))
         {:ok, node_handle(nodes, shadow_id)}
     end
   end
@@ -923,7 +924,7 @@ defmodule DOM do
         Table.append_child(nodes, parent_id, child_id)
         resync_spans(nodes, index)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
-        recompute_slots(nodes, index, child_id)
+        _recompute_slots(nodes, index, child_id)
         :ok
     end
   end
@@ -934,12 +935,39 @@ defmodule DOM do
   # `children` field.
   defp resync_spans(nodes, index), do: Table.span_index_all(nodes, index)
 
-  # Recompute slot assignment for the shadow host affected by a mutation, if any.
-  # `node_id` is a node touched by the op (a light child of a host, or a slot in a
-  # shadow tree); Slots.affected_host resolves which host's assignment to redo.
-  defp recompute_slots(nodes, index, node_id) do
+  # Recompute slot assignment for the shadow host affected by a mutation, if any,
+  # and signal slotchange on the slots that changed. `node_id` is a node touched by
+  # the op (a light child of a host, or a slot in a shadow tree); Slots.affected_host
+  # resolves which host's assignment to redo. Public (@doc false) so DOM.Element's
+  # attribute path (slot=/name= changes) reuses it instead of duplicating the logic.
+  @doc false
+  def _recompute_slots(nodes, index, node_id) do
     if host = DOM.NodeData.Slots.affected_host(nodes, node_id) do
-      DOM.NodeData.Slots.recompute(nodes, index, host)
+      signal_slots(index, DOM.NodeData.Slots.recompute(nodes, index, host))
+    end
+
+    :ok
+  end
+
+  # "Signal a slot" (HTML §slot): for each slot whose assignment CHANGED, enqueue a
+  # slotchange microtask — but at most ONCE per slot per task. The `{:signaled_slot,
+  # slot_id}` guard row dedups within a task; the microtask deletes it (so a change
+  # in a later task re-signals) and dispatches slotchange at the slot. slotchange is
+  # bubbles:true, composed:false, run from inside the drain loop (server == self()),
+  # so its dispatch is a re-entrant in-place call.
+  defp signal_slots(index, changed_slots) do
+    for slot_id <- changed_slots, Table.signal_slot(index, slot_id) do
+      _enqueue_microtask(self(), fn ->
+        Table.unsignal_slot(Process.get(:index), slot_id)
+
+        Events.dispatch(
+          Process.get(:nodes),
+          Process.get(:index),
+          self(),
+          slot_id,
+          Event.new("slotchange", bubbles: true)
+        )
+      end)
     end
 
     :ok
@@ -1101,7 +1129,7 @@ defmodule DOM do
         Table.insert_before(nodes, parent_id, child_id, reference_child_id)
         resync_spans(nodes, index)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
-        recompute_slots(nodes, index, child_id)
+        _recompute_slots(nodes, index, child_id)
         :ok
     end
   end
@@ -1287,7 +1315,7 @@ defmodule DOM do
       # The removed node's parent may be a shadow host (or the removed subtree may
       # contain slots) — recompute assignment from the parent directly.
       if Slots.shadow_host?(nodes, parent_id) do
-        Slots.recompute(nodes, index, parent_id)
+        signal_slots(index, Slots.recompute(nodes, index, parent_id))
       end
 
       :ok
@@ -1854,7 +1882,7 @@ defmodule DOM do
         Table.append_children(nodes, node_id, Table.children(nodes, root))
         resync_spans(nodes, index)
         # The shadow tree's <slot>s changed — reassign the host's light children.
-        recompute_slots(nodes, index, node_id)
+        _recompute_slots(nodes, index, node_id)
         :ok
       end,
       :mutates
