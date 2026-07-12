@@ -303,14 +303,36 @@ fork); an in-flight event's mutable state lives in a ref-keyed `:active_event` r
 (`lib/dom/_events.ex`). Verified against the Chromium+Firefox oracle
 (`test/integration/event_test.exs`).
 
-**Deferred (need a microtask/event-loop model):** `slotchange` is dispatched
-**asynchronously as a microtask** (verified against both browsers — it fires *after*
-the mutation, not during), so it is blocked on a scheduling layer Dominique does not
-model yet. The same layer is the natural home for `MutationObserver` and
-custom-element reactions. Also still deferred: imperative `slot.assign()`
-(manual slotting), and default actions / interaction & navigation state (`:hover`,
-`:focus`, form submission, checkbox toggle, `preventDefault` actually suppressing
-anything — `preventDefault` currently only sets the flag `dispatchEvent` returns).
+**Microtasks (implemented):** the microtask/event-loop layer is built. A one-shot
+FIFO `{:microtask, seq}` index-row queue; `DOM._enqueue_microtask/2` is dual (like
+`_atomic_ets_op`). The checkpoint is `handle_continue(:drain_microtasks)` — it runs
+before the mailbox is read, so it is **uninterruptible** (a timer/UI task cannot
+preempt it; an infinite microtask loop freezes the "tab", matching WHATWG). A DOM
+mutation marks its op `_atomic_ets_op(server, op, :mutates)` so the outer call
+attaches the checkpoint; a re-entrant (`server == self()`) frame never drains — it
+enqueues and inherits the outer frame's checkpoint. `check_consistency!` asserts the
+queue is empty outside a drain. A raising microtask crashes the document server, by
+design (see `README.md`). Two customers are built on it:
+
+- **`slotchange`** — `Slots.recompute` diffs each slot's assigned nodes and returns the
+  changed slots; a slotchange microtask is enqueued once per slot per task (guarded by
+  a `{:signaled_slot, slot_id}` row), dispatched `bubbles:true composed:false` at the
+  slot. Browser-verified (`test/integration/slotchange_test.exs`).
+- **`MutationObserver`** (`DOM.MutationObserver` / `DOM.MutationRecord`) — registry +
+  per-observer record queue as index rows; records are emitted at each `:mutates` site
+  (childList with prev/next siblings, attributes with oldValue by before/after diff,
+  characterData with oldValue). One "notify mutation observers" microtask per task
+  batches each observer's records into a single callback. `observe`/`disconnect`/
+  `take_records`; `subtree`/`attributeFilter`/`*OldValue` options. Browser-verified
+  (`test/integration/mutation_observer_test.exs`).
+
+**Deferred (still need more than the queue):** **timer tasks** (`Process.send_after` →
+a `handle_info` returning `{:continue, :drain_microtasks}` — the design already fits,
+just not built) and their microtask checkpoints; **custom-element reactions** (would
+live on this same queue); imperative `slot.assign()` (manual slotting); and default
+actions / interaction & navigation state (`:hover`, `:focus`, form submission, checkbox
+toggle, `preventDefault` actually suppressing anything — it currently only sets the
+flag `dispatchEvent` returns).
 
 ## Before finishing any change
 
