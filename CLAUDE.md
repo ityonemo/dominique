@@ -343,8 +343,26 @@ timer wheel — unlike a `:microtask` row, whose presence means a skipped checkp
 Browser-verified task-vs-microtask ordering + interval repeat/clear
 (`test/integration/timer_test.exs`).
 
-**Deferred (still need more than the queue):** **custom-element reactions** (would live
-on this same queue); imperative `slot.assign()` (manual slotting); and default actions /
+**Custom elements (implemented):** `DOM.define_element/3` (`customElements.define`) +
+`DOM.custom_element_get/2`; a definition is a `DOM.CustomElementDefinition` struct of
+callbacks (`constructed`/`connected`/`disconnected`/`attribute_changed`) +
+`observed_attributes`, stored per document under a `{:custom_element_def, name}` index
+row. **Reactions run SYNCHRONOUSLY** — unlike slotchange/MutationObserver, the browser
+runs `connectedCallback` DURING `appendChild`, so the callbacks are invoked INLINE at
+the end of each triggering op (`create` → `constructed`, `append`/`insert` →
+`connected` in tree order if the parent is connected, `remove` → `disconnected`,
+`set_attribute` → `attribute_changed` for observed attrs, fired on **every** set even
+to the same value — captured via the `changed_name` threaded into
+`Element.update_attributes`). `define_element` upgrades existing matching elements
+(`constructed` → `attribute_changed` per existing observed attr → `connected`), guarded
+once-per-element by a `{:upgraded, node_id}` row. Redefining raises
+`DOM.NotSupportedError` (returned as an error tuple and raised caller-side, per the
+in-server-raise convention). The `:defined` CSS pseudo matches built-ins + registered
+custom elements. Browser-verified (`test/integration/custom_element_test.exs`).
+`adoptedCallback` is deferred (needs the cross-document adopt path).
+
+**Deferred (still need more than the queue):** custom-element `adoptedCallback` (needs
+`adopt_node` wiring); imperative `slot.assign()` (manual slotting); and default actions /
 interaction & navigation state (`:hover`, `:focus`, form submission, checkbox toggle,
 `preventDefault` actually suppressing anything — it currently only sets the flag
 `dispatchEvent` returns).

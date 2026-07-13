@@ -230,6 +230,11 @@ defmodule DOM do
       node_id = make_ref()
       Table.put(nodes, node_id, node_data)
       index_element(index, node_id, node_data)
+      # custom element: run `constructed` if the created element's name is defined.
+      if match?(%NodeData.Element{}, node_data) do
+        custom_element_constructed(nodes, index, node_id, node_data.local_name)
+      end
+
       node_handle(nodes, node_id)
     end)
   end
@@ -505,6 +510,182 @@ defmodule DOM do
         {:noreply, state, {:continue, :drain_microtasks}}
     end
   end
+
+  # ==========================================================================
+  # Custom elements (reactions run SYNCHRONOUSLY with their trigger)
+  # ==========================================================================
+  #
+  # A definition is a DOM.CustomElementDefinition (callbacks + observed_attributes)
+  # stored per document under {:custom_element_def, name}. Unlike slotchange /
+  # MutationObserver, custom-element reactions are NOT microtask-deferred — the
+  # browser runs connectedCallback DURING appendChild, etc. So we invoke the callbacks
+  # INLINE at the end of each triggering op (create / setAttribute / append / remove /
+  # define-upgrade). An element carries a {:upgraded, node_id} guard so `constructed`
+  # runs exactly once. See the custom-element-semantics memory.
+
+  @doc """
+  Define a custom element `name` (which must contain a hyphen) with `definition`, then
+  upgrade any already-existing elements of that name. Raises `DOM.NotSupportedError` if
+  `name` is already defined, `ArgumentError` if `name` is not a valid custom-element
+  name. This is the HTML `customElements.define`.
+  """
+  @spec define_element(Node.t(), String.t(), DOM.CustomElementDefinition.t()) :: :ok
+  def define_element(%Node{server: server}, name, %DOM.CustomElementDefinition{} = definition) do
+    unless custom_element_name?(name) do
+      raise ArgumentError, "#{inspect(name)} is not a valid custom element name (needs a hyphen)"
+    end
+
+    result =
+      _atomic_ets_op(
+        server,
+        fn nodes, index ->
+          if Table.custom_element_get(index, name) do
+            {:error, :already_defined}
+          else
+            Table.custom_element_put(index, name, definition)
+            upgrade_all(nodes, index, name, definition)
+            :ok
+          end
+        end,
+        :mutates
+      )
+
+    case result do
+      :ok -> :ok
+      {:error, :already_defined} -> raise DOM.NotSupportedError, "#{name} is already defined"
+    end
+  end
+
+  @doc "The definition registered for custom-element `name`, or nil. HTML `customElements.get`."
+  @spec custom_element_get(Node.t(), String.t()) :: DOM.CustomElementDefinition.t() | nil
+  def custom_element_get(%Node{server: server}, name) do
+    _atomic_ets_op(server, fn _nodes, index -> Table.custom_element_get(index, name) end)
+  end
+
+  # Upgrade every element of `name` in document order: constructed → attributeChanged
+  # for each existing observed attribute → connected (if in a document tree).
+  defp upgrade_all(nodes, index, name, definition) do
+    for node_id <- elements_named(nodes, name) do
+      upgrade(nodes, index, node_id, definition)
+    end
+  end
+
+  # Elements whose local_name is `name`, in document order.
+  defp elements_named(nodes, name) do
+    Table.elements_by_tag_name(nodes, Process.get(:document_id), name)
+  end
+
+  # Run the constructed reaction once (guarded by {:upgraded, node_id}); on upgrade of
+  # an existing element also replay attributeChanged for its observed attrs and, if it
+  # is connected, connectedCallback.
+  defp upgrade(nodes, index, node_id, definition) do
+    if Table.signal_slot(index, {:upgraded, node_id}) do
+      run_callback(definition.constructed, node_handle(nodes, node_id))
+
+      for {name, value} <- observed_attributes_present(nodes, node_id, definition) do
+        run_callback4(definition.attribute_changed, node_handle(nodes, node_id), name, nil, value)
+      end
+
+      if connected?(nodes, node_id) do
+        run_callback(definition.connected, node_handle(nodes, node_id))
+      end
+    end
+  end
+
+  # The element's string-keyed attributes that the definition observes, in order.
+  defp observed_attributes_present(nodes, node_id, definition) do
+    observed = definition.observed_attributes
+
+    for {key, value} <- fetch_node!(nodes, node_id).attributes,
+        is_binary(key),
+        key in observed,
+        do: {key, value}
+  end
+
+  # The reaction hooks called from the mutation ops (all synchronous, no microtask).
+
+  # constructed: at create_element, if `local_name` is a defined custom element.
+  defp custom_element_constructed(nodes, index, node_id, local_name) do
+    if definition = Table.custom_element_get(index, local_name) do
+      if Table.signal_slot(index, {:upgraded, node_id}) do
+        run_callback(definition.constructed, node_handle(nodes, node_id))
+      end
+    end
+
+    :ok
+  end
+
+  # connected: for each custom element in the inserted subtree, in tree order.
+  defp custom_element_connected(nodes, index, root_id) do
+    for node_id <- custom_elements_in_subtree(nodes, index, root_id) do
+      definition = Table.custom_element_get(index, local_name(nodes, node_id))
+      run_callback(definition.connected, node_handle(nodes, node_id))
+    end
+
+    :ok
+  end
+
+  # The {node_id, definition} of every defined custom element in the subtree being
+  # removed — captured BEFORE detaching, and only when the parent is connected (a
+  # remove from a detached subtree fires no disconnectedCallback). [] otherwise.
+  defp capture_disconnecting(nodes, index, parent_id, child_id) do
+    if connected?(nodes, parent_id) do
+      for id <- custom_elements_in_subtree(nodes, index, child_id),
+          do: {id, Table.custom_element_get(index, local_name(nodes, id))}
+    else
+      []
+    end
+  end
+
+  # disconnected: run for each pre-captured {node_id, definition} of the removed
+  # subtree (captured before detaching, since after removal they are no longer found).
+  defp custom_element_disconnected(nodes, removed) do
+    for {node_id, definition} <- removed do
+      run_callback(definition.disconnected, node_handle(nodes, node_id))
+    end
+
+    :ok
+  end
+
+  @doc false
+  # attributeChanged: fires for a defined element on EVERY set of an observed attr
+  # (even to the same value — unlike MutationObserver). @doc false so DOM.Element's
+  # attribute path can reach it across the module boundary.
+  def _custom_element_attribute_changed(nodes, index, node_id, name, old, new) do
+    definition = Table.custom_element_get(index, local_name(nodes, node_id))
+
+    if definition && name in definition.observed_attributes do
+      run_callback4(definition.attribute_changed, node_handle(nodes, node_id), name, old, new)
+    end
+
+    :ok
+  end
+
+  # The defined custom elements in `root_id`'s subtree (root inclusive), document order.
+  defp custom_elements_in_subtree(nodes, index, root_id) do
+    for {id, %NodeData.Element{local_name: ln}} <- subtree(nodes, root_id),
+        Table.custom_element_get(index, ln),
+        do: id
+  end
+
+  defp connected?(nodes, node_id), do: tree_root_id(nodes, node_id) == Process.get(:document_id)
+
+  defp tree_root_id(nodes, node_id) do
+    case Table.parent(nodes, node_id) do
+      nil -> node_id
+      parent -> tree_root_id(nodes, parent)
+    end
+  end
+
+  defp local_name(nodes, node_id), do: fetch_node!(nodes, node_id).local_name
+
+  defp run_callback(nil, _el), do: :ok
+  defp run_callback(fun, el) when is_function(fun, 1), do: fun.(el)
+
+  defp run_callback4(nil, _el, _name, _old, _new), do: :ok
+
+  defp run_callback4(fun, el, name, old, new) when is_function(fun, 4),
+    do: fun.(el, name, old, new)
 
   # ==========================================================================
   # Timers + queueMicrotask (HTML WindowOrWorkerGlobalScope)
@@ -1074,6 +1255,8 @@ defmodule DOM do
         _recompute_slots(nodes, index, child_id)
         # childList: appended at the end — previousSibling is the old last child.
         queue_child_list_record(nodes, index, parent_id, [child_id], [], List.last(siblings), nil)
+        # custom element: connectedCallback for the inserted subtree, if now connected.
+        if connected?(nodes, parent_id), do: custom_element_connected(nodes, index, child_id)
         :ok
     end
   end
@@ -1425,6 +1608,8 @@ defmodule DOM do
         # that preceded the reference (nil when inserting at the front).
         prev = if at > 0, do: Enum.at(siblings, at - 1)
         queue_child_list_record(nodes, index, parent_id, [child_id], [], prev, reference_child_id)
+        # custom element: connectedCallback for the inserted subtree, if now connected.
+        if connected?(nodes, parent_id), do: custom_element_connected(nodes, index, child_id)
         :ok
     end
   end
@@ -1605,6 +1790,10 @@ defmodule DOM do
       siblings = Table.children(nodes, parent_id)
       at = child_index(nodes, parent_id, child_id)
       removed_keys = removed_subtree_keys(nodes, child_id)
+      # custom element: capture the connected custom elements in the subtree BEFORE
+      # detaching (with their defs), to fire disconnectedCallback after.
+      disconnecting = capture_disconnecting(nodes, index, parent_id, child_id)
+
       Table.remove_child(nodes, parent_id, child_id)
       resync_spans(nodes, index)
       adjust_ranges(nodes, index, snapshot, {:remove, parent_id, at, removed_keys})
@@ -1618,6 +1807,8 @@ defmodule DOM do
       prev = if at > 0, do: Enum.at(siblings, at - 1)
       next = Enum.at(siblings, at + 1)
       queue_child_list_record(nodes, index, parent_id, [], [child_id], prev, next)
+      # custom element: disconnectedCallback for the (formerly connected) subtree.
+      custom_element_disconnected(nodes, disconnecting)
       :ok
     else
       {:error, :not_found}

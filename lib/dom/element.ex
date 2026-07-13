@@ -93,15 +93,25 @@ defmodule DOM.Element do
   """
   @spec set_attribute(Node.t(), String.t(), String.t()) :: :ok
   def set_attribute(%Node{type: :element} = element, name, value) do
-    update_attributes(element, &put_by_qualified_name(&1, name, value))
+    update_attributes(element, &put_by_qualified_name(&1, name, value), name)
   end
 
   @doc "Removes an attribute by qualified name (a no-op when absent)."
   @spec remove_attribute(Node.t(), String.t()) :: :ok
   def remove_attribute(%Node{type: :element} = element, name) do
-    update_attributes(element, fn attrs ->
-      Enum.reject(attrs, fn {key, _v} -> Element.matches_key?(key, name) end)
-    end)
+    update_attributes(
+      element,
+      fn attrs -> Enum.reject(attrs, fn {key, _v} -> Element.matches_key?(key, name) end) end,
+      name
+    )
+  end
+
+  # The plain-string-keyed value for `name` in an attribute list, or nil.
+  defp attr_value(attrs, name) do
+    case Enum.find(attrs, fn {key, _v} -> key == name end) do
+      {_key, value} -> value
+      nil -> nil
+    end
   end
 
   # Update the value of the attribute whose key matches `name` (preserving that
@@ -261,7 +271,11 @@ defmodule DOM.Element do
 
   # Atomically reads the record, applies `fun` to its attribute list, and writes
   # the updated record back — a single server hop so no operation interleaves.
-  defp update_attributes(%Node{node_id: node_id} = element, fun) do
+  # `changed_name` (a plain qualified name, or nil for the namespaced paths) is the
+  # attribute the caller set/removed — passed so the custom-element attributeChanged
+  # reaction can fire for exactly that name (it fires on every observed set, even to
+  # the same value, unlike the MutationObserver record which only logs real changes).
+  defp update_attributes(%Node{node_id: node_id} = element, fun, changed_name \\ nil) do
     DOM._atomic_ets_op(
       element.server,
       fn nodes, index ->
@@ -276,6 +290,17 @@ defmodule DOM.Element do
         DOM._recompute_slots(nodes, index, node_id)
         # MutationObserver: one attributes record per changed attribute name.
         DOM._queue_attribute_records(nodes, index, node_id, before, after_attrs)
+        # Custom element: attributeChanged for the set/removed name (if observed).
+        if changed_name do
+          DOM._custom_element_attribute_changed(
+            nodes,
+            index,
+            node_id,
+            changed_name,
+            attr_value(before, changed_name),
+            attr_value(after_attrs, changed_name)
+          )
+        end
 
         :ok
       end,

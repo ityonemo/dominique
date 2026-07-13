@@ -12,6 +12,7 @@ defmodule DOM.CSS.PseudoClass do
 
   alias DOM.CSS.Query
   alias DOM.CSS.Serialize
+  alias DOM.NodeData.Table
 
   @enforce_keys [:name]
   defstruct [:name, arg: nil]
@@ -153,6 +154,15 @@ defmodule DOM.CSS.PseudoClass do
   def match(%{name: "link"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, fn id ->
       Query.local_name(nodes, id) in ~w(a area) and Query.has_own_attribute?(nodes, id, "href")
+    end)
+  end
+
+  # :defined — a built-in element (non-hyphenated name) or a registered custom
+  # element (a hyphenated name whose definition is in the document registry).
+  def match(%{name: "defined"}, %{nodes: nodes, index: index}, candidates) do
+    Enum.filter(candidates, fn id ->
+      name = Query.local_name(nodes, id)
+      not String.contains?(name, "-") or Table.custom_element_get(index, name) != nil
     end)
   end
 

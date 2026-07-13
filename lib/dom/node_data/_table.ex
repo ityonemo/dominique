@@ -1292,6 +1292,31 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # Custom-element registry (:custom_element_def rows)
+  # ==========================================================================
+  #
+  # The document's customElements registry: `{{:custom_element_def, name}, def}` maps
+  # a custom-element name to its DOM.CustomElementDefinition. Document-level singleton
+  # state, stored as an index row like everything else. Definitions are permanent (a
+  # name cannot be redefined) and never mirror-checked.
+
+  @doc "Register `def` under custom-element `name` (caller enforces no-redefine)."
+  @spec custom_element_put(tid, String.t(), DOM.CustomElementDefinition.t()) :: :ok
+  def custom_element_put(index, name, def) do
+    :ets.insert(index, {{:custom_element_def, name}, def})
+    :ok
+  end
+
+  @doc "The definition for `name`, or nil if not defined."
+  @spec custom_element_get(tid, String.t()) :: DOM.CustomElementDefinition.t() | nil
+  def custom_element_get(index, name) do
+    case :ets.lookup(index, {:custom_element_def, name}) do
+      [{_key, def}] -> def
+      [] -> nil
+    end
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.
