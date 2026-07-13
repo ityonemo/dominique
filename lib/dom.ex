@@ -1782,8 +1782,7 @@ defmodule DOM do
         {:error, :hierarchy_request}
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
-        moved = append_fragment(nodes, parent_id, child_id, child_data)
-        Enum.each(moved, &Table.rehome_subtree(nodes, index, &1))
+        append_fragment(nodes, index, parent_id, child_id, child_data)
         :ok
 
       :else ->
@@ -2036,21 +2035,20 @@ defmodule DOM do
     DOM.Range.Adjust.on_remove(nodes, index, parent_key, at, removed_keys)
   end
 
-  # Flatten a fragment's children onto `parent_id` (append), placing all of them in
-  # one multispan-carved gap (snapshot the ordered children first — the bulk move
-  # re-parents them, emptying the fragment). Returns the moved child ids so the caller
-  # can re-home their span rows.
-  defp append_fragment(nodes, parent_id, fragment_id, _fragment) do
+  # Flatten a fragment's children onto `parent_id` (append), moving all of them into one
+  # multispan-carved gap in a single cross-table rehome (the fragment is emptied). Returns
+  # the moved child ids.
+  defp append_fragment(nodes, index, parent_id, fragment_id, _fragment) do
     moved = Table.children(nodes, fragment_id)
-    Table.append_children(nodes, parent_id, moved)
+    NodeData.graft_into(nodes, index, parent_id, moved, :last)
     moved
   end
 
-  # Flatten a fragment's children into `parent_id` before `reference_child_id`, in
-  # order, in one multispan-carved gap. Returns the moved child ids.
-  defp insert_fragment(nodes, parent_id, fragment_id, _fragment, reference_child_id) do
+  # Flatten a fragment's children into `parent_id` before `reference_child_id`, in order,
+  # in one multispan-carved gap. Returns the moved child ids.
+  defp insert_fragment(nodes, index, parent_id, fragment_id, _fragment, reference_child_id) do
     moved = Table.children(nodes, fragment_id)
-    Table.insert_children_before(nodes, parent_id, moved, reference_child_id)
+    NodeData.graft_into(nodes, index, parent_id, moved, {:before, reference_child_id})
     moved
   end
 
@@ -2126,16 +2124,14 @@ defmodule DOM do
         :ok
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
-        moved = insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
-        Enum.each(moved, &Table.rehome_subtree(nodes, index, &1))
+        insert_fragment(nodes, index, parent_id, child_id, child_data, reference_child_id)
         :ok
 
       :else ->
         snapshot = range_snapshot(nodes, index)
         siblings = Table.children(nodes, parent_id)
         at = child_index(nodes, parent_id, reference_child_id)
-        Table.insert_before(nodes, parent_id, child_id, reference_child_id)
-        Table.rehome_subtree(nodes, index, child_id)
+        NodeData.graft_into(nodes, index, parent_id, [child_id], {:before, reference_child_id})
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
         # childList: inserted before the reference — previousSibling is the child
@@ -2159,12 +2155,9 @@ defmodule DOM do
       materialize_subtree(nodes, index, child_id, subtree)
 
       if match?(%NodeData.DocumentFragment{}, child_data) do
-        moved = append_fragment(nodes, parent_id, child_id, child_data)
-        # the emptied fragment node was materialized without span rows — mirror it too.
-        Enum.each([child_id | moved], &Table.rehome_subtree(nodes, index, &1))
+        append_fragment(nodes, index, parent_id, child_id, child_data)
       else
-        Table.append_child(nodes, parent_id, child_id)
-        Table.rehome_subtree(nodes, index, child_id)
+        NodeData.graft_into(nodes, index, parent_id, [child_id], :last)
       end
 
       {:ok, node_handle(nodes, child_id)}
@@ -2195,12 +2188,9 @@ defmodule DOM do
         materialize_subtree(nodes, index, child_id, subtree)
 
         if match?(%NodeData.DocumentFragment{}, child_data) do
-          moved = insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
-          # the emptied fragment node was materialized without span rows — mirror it too.
-          Enum.each([child_id | moved], &Table.rehome_subtree(nodes, index, &1))
+          insert_fragment(nodes, index, parent_id, child_id, child_data, reference_child_id)
         else
-          Table.insert_before(nodes, parent_id, child_id, reference_child_id)
-          Table.rehome_subtree(nodes, index, child_id)
+          NodeData.graft_into(nodes, index, parent_id, [child_id], {:before, reference_child_id})
         end
 
         {:ok, node_handle(nodes, child_id)}
@@ -2210,17 +2200,16 @@ defmodule DOM do
   defp materialize_subtree(nodes, index, child_id, subtree) do
     # The exported records carry their SOURCE `.root`. In the destination the subtree is
     # a detached tree rooted at `child_id`, so re-root: `child_id` -> root self (parent
-    # nil), its descendants -> `child_id`. (place_child/graft re-roots again on re-attach.)
-    subtree =
-      Enum.map(subtree, fn
-        {^child_id, node_data} -> {child_id, %{node_data | parent: nil, root: child_id}}
-        {id, node_data} -> {id, %{node_data | root: child_id}}
-      end)
+    # nil), its descendants -> `child_id`. NodeData.insert writes each node into BOTH tables
+    # (span + membership, index-first) — a fully labeled detached tree that a subsequent
+    # `graft_into` can then move by transforming its span rows.
+    Enum.each(subtree, fn
+      {^child_id, node_data} ->
+        NodeData.insert(child_id, %{node_data | parent: nil, root: child_id}, nodes, index)
 
-    # index-first: membership rows for each element, then the records in bulk. (Span rows
-    # for the subtree are written by the caller's rehome after it is attached.)
-    Enum.each(subtree, fn {id, node_data} -> index_element(index, id, node_data) end)
-    true = :ets.insert(nodes, subtree)
+      {id, node_data} ->
+        NodeData.insert(id, %{node_data | root: child_id}, nodes, index)
+    end)
   end
 
   @doc false
@@ -2505,21 +2494,14 @@ defmodule DOM do
         # Splice the replacement in immediately before old_child (each moved node
         # via the extent-authoritative insert_before, so extents land in old's
         # neighborhood), then remove old_child — leaving its gap.
-        inserted =
-          if match?(%NodeData.DocumentFragment{}, new_child_data) do
-            # fragment (possibly materialized) → its emptied node + moved children.
-            [
-              new_child_id
-              | insert_fragment(nodes, parent_id, new_child_id, new_child_data, old_child_id)
-            ]
-          else
-            Table.insert_before(nodes, parent_id, new_child_id, old_child_id)
-            [new_child_id]
-          end
+        if match?(%NodeData.DocumentFragment{}, new_child_data) do
+          insert_fragment(nodes, index, parent_id, new_child_id, new_child_data, old_child_id)
+        else
+          NodeData.graft_into(nodes, index, parent_id, [new_child_id], {:before, old_child_id})
+        end
 
-        Table.remove_child(nodes, parent_id, old_child_id)
-        # mirror the inserted subtree(s) and the removed (re-rooted) old child's subtree.
-        Enum.each([old_child_id | inserted], &Table.rehome_subtree(nodes, index, &1))
+        # detach the replaced old child (cross-table re-root to self).
+        NodeData.detach(nodes, index, old_child_id)
         {:ok, node_handle(nodes, new_child_id)}
     end
   end
