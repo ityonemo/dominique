@@ -13,6 +13,9 @@ defmodule DOM.CustomElementDefinition do
     * `attribute_changed(element, name, old, new)` — on every `setAttribute` /
       `removeAttribute` of a name in `observed_attributes` (fires even when the value
       is unchanged, matching the browser). `old`/`new` are the values (nil when absent).
+    * `adopted(element, old_document, new_document)` — when the element is moved to a
+      different document via `DOM.adopt_node/2`. Each document has its own registry, so
+      the DESTINATION document's definition governs this callback.
 
   Each callback receives the element as a `DOM.Node` handle and may itself mutate the
   tree. A `nil` callback is simply not run. `observed_attributes` gates which attribute
@@ -25,7 +28,8 @@ defmodule DOM.CustomElementDefinition do
             constructed: nil,
             connected: nil,
             disconnected: nil,
-            attribute_changed: nil
+            attribute_changed: nil,
+            adopted: nil
 
   @type callback :: (Node.t() -> any())
 
@@ -36,6 +40,7 @@ defmodule DOM.CustomElementDefinition do
           disconnected: callback() | nil,
           attribute_changed:
             (Node.t(), String.t(), String.t() | nil, String.t() | nil -> any())
-            | nil
+            | nil,
+          adopted: (Node.t(), Node.t(), Node.t() -> any()) | nil
         }
 end

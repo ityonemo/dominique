@@ -637,6 +637,37 @@ defmodule DOM do
     end
   end
 
+  # Like capture_disconnecting, but keyed on the ADOPTED root itself being connected
+  # (adopt detaches the root, so the root's own connectedness decides disconnect).
+  defp capture_disconnecting_root(nodes, index, root_id) do
+    if connected?(nodes, root_id) do
+      for id <- custom_elements_in_subtree(nodes, index, root_id),
+          do: {id, Table.custom_element_get(index, local_name(nodes, id))}
+    else
+      []
+    end
+  end
+
+  # adopted: in the destination, for each defined custom element in the adopted
+  # subtree, fire adoptedCallback(element, old_document, new_document).
+  defp custom_element_adopted(nodes, index, root_id, old_doc) do
+    new_doc = document_handle(nodes, Process.get(:document_id))
+
+    for node_id <- custom_elements_in_subtree(nodes, index, root_id) do
+      definition = Table.custom_element_get(index, local_name(nodes, node_id))
+      run_adopted(definition.adopted, node_handle(nodes, node_id), old_doc, new_doc)
+    end
+
+    :ok
+  end
+
+  defp document_handle(_nodes, document_id) do
+    %Node{server: self(), node_id: document_id, type: :document}
+  end
+
+  defp run_adopted(nil, _el, _old, _new), do: :ok
+  defp run_adopted(fun, el, old, new) when is_function(fun, 3), do: fun.(el, old, new)
+
   # disconnected: run for each pre-captured {node_id, definition} of the removed
   # subtree (captured before detaching, since after removal they are no longer found).
   defp custom_element_disconnected(nodes, removed) do
@@ -1698,6 +1729,9 @@ defmodule DOM do
 
   def _adopt_node(dst_server, src_server, node_id) do
     subtree = _export_subtree(src_server, node_id)
+    # custom element: disconnectedCallback in the SOURCE for the (formerly connected)
+    # subtree, before removing it there.
+    src_doc = _adopt_disconnect(src_server, node_id)
 
     handle =
       _atomic_ets_op(
@@ -1705,6 +1739,9 @@ defmodule DOM do
         fn nodes, index ->
           materialize_subtree(nodes, index, node_id, subtree)
           resync_spans(nodes, index)
+          # custom element: adoptedCallback in the DESTINATION (its registry governs),
+          # passing (element, old_document, new_document).
+          custom_element_adopted(nodes, index, node_id, src_doc)
           node_handle(nodes, node_id)
         end,
         :mutates
@@ -1712,6 +1749,17 @@ defmodule DOM do
 
     _remove_subtree(src_server, node_id)
     handle
+  end
+
+  # In the SOURCE server: fire disconnectedCallback for the connected custom elements
+  # in `node_id`'s subtree (they are about to leave the document). Returns the source
+  # document handle (the adoptedCallback's old_document).
+  defp _adopt_disconnect(src_server, node_id) do
+    _atomic_ets_op(src_server, fn nodes, index ->
+      disconnecting = capture_disconnecting_root(nodes, index, node_id)
+      custom_element_disconnected(nodes, disconnecting)
+      document_handle(nodes, Process.get(:document_id))
+    end)
   end
 
   @doc false

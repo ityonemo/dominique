@@ -358,14 +358,21 @@ to the same value — captured via the `changed_name` threaded into
 once-per-element by a `{:upgraded, node_id}` row. Redefining raises
 `DOM.NotSupportedError` (returned as an error tuple and raised caller-side, per the
 in-server-raise convention). The `:defined` CSS pseudo matches built-ins + registered
-custom elements. Browser-verified (`test/integration/custom_element_test.exs`).
-`adoptedCallback` is deferred (needs the cross-document adopt path).
+custom elements. **`adoptedCallback`** fires on cross-document `adopt_node/2`: the source
+server fires `disconnected` for the (formerly connected) subtree before removing it, then
+the DESTINATION server fires `adopted(element, old_document, new_document)` using the
+**destination's** registry (each document server has its own registry — a documented
+Dominique model choice; a same-document adopt fires nothing). Browser-verified lifecycle
++ upgrade (`test/integration/custom_element_test.exs`); the adopted semantics are
+unit-tested (`test/dom/custom_element_adopted_test.exs`) rather than oracle-compared,
+because a browser fires `adopted` via the element's *original* definition while Dominique
+uses the destination's registry — the per-server-registry difference makes a faithful
+oracle comparison impossible.
 
-**Deferred (still need more than the queue):** custom-element `adoptedCallback` (needs
-`adopt_node` wiring); imperative `slot.assign()` (manual slotting); and default actions /
-interaction & navigation state (`:hover`, `:focus`, form submission, checkbox toggle,
-`preventDefault` actually suppressing anything — it currently only sets the flag
-`dispatchEvent` returns).
+**Deferred (still need more than the queue):** imperative `slot.assign()` (manual
+slotting); and default actions / interaction & navigation state (`:hover`, `:focus`,
+form submission, checkbox toggle, `preventDefault` actually suppressing anything — it
+currently only sets the flag `dispatchEvent` returns).
 
 ## Before finishing any change
 
