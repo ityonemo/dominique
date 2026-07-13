@@ -365,9 +365,16 @@ the DESTINATION server fires `adopted(element, old_document, new_document)` usin
 Dominique model choice; a same-document adopt fires nothing). Browser-verified lifecycle
 + upgrade (`test/integration/custom_element_test.exs`); the adopted semantics are
 unit-tested (`test/dom/custom_element_adopted_test.exs`) rather than oracle-compared,
-because a browser fires `adopted` via the element's *original* definition while Dominique
-uses the destination's registry — the per-server-registry difference makes a faithful
-oracle comparison impossible.
+because Dominique's model *deliberately differs* from the browser here (an oracle would
+fail, not merely be hard): in a browser an element **retains its definition** across
+adoption, so `adopted`/`connected` fire even when the destination document never
+registered the name (probe-verified: adopting into a fresh document with an empty
+registry still fires `adopted:true:true` and the element stays upgraded). Dominique
+attaches definitions to a **document server's registry**, not to the element, so an
+adopted element is governed by the *destination's* registry — the two agree when both
+documents define the name, and diverge exactly when the destination lacks it. That
+"undefined-in-destination" case is unit-tested as Dominique-correct (no callback),
+which is the point of divergence, so a browser oracle cannot be shared.
 
 **Deferred (still need more than the queue):** imperative `slot.assign()` (manual
 slotting); and default actions / interaction & navigation state (`:hover`, `:focus`,
