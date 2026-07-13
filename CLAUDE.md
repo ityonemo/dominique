@@ -238,21 +238,34 @@ with `href`), `:read-write`/`:read-only` (**contenteditable inherited via the
 ancestor walk**, honoring `contenteditable=false`). Verified against the
 Chromium+Firefox oracle (`query_selector_test.exs`, `derivable_pseudo_test.exs`).
 
-**Deferred — intended to be implemented:**
+**Interaction / form-state pseudo-classes — IMPLEMENTED** (see the interaction-state
+sections below and near the events docs): `:focus`/`:focus-visible`/`:focus-within`,
+`:hover`/`:active`, `:target`, user-toggled `:checked` (checkedness property),
+`:indeterminate` (checkbox property / radio group / progress), `:open`
+(`details`/`dialog`), `:any-link`, `:placeholder-shown`, and the constraint-validation
+set `:valid`/`:invalid`/`:in-range`/`:out-of-range`. Each reads a document/element state
+singleton or is attribute-derivable; all browser-verified.
 
-- **`:dir(auto)`** — needs bidi resolution of element text, which `NodeData` does
-  not model; stays match-nothing.
-- **Interaction/navigation-state pseudo-classes** — `:hover`, `:focus`, `:active`,
-  `:focus-visible`, `:focus-within`, user-toggled `:checked`, `:indeterminate`,
-  `:valid`, `:visited`, `:target`, `:current`, … These depend on input/focus
-  state, HTML element state machines, or navigation/history — **none of which
-  `NodeData` models today**. **We DO want to support these**, which will require
-  modeling that state (an input/focus model, HTML element interfaces, a
-  navigation/URL model — downstream of Events / a state layer). Until then they
-  are unmatchable.
-- **Policy for unmodelable pseudo-classes** (decide when building `match/3`):
-  prefer **match-nothing** over raising — that mirrors browser `querySelector`,
-  where e.g. `:hover` simply returns no elements rather than erroring.
+**Out of scope — need a whole subsystem a DOM library doesn't have** (these stay
+**match-nothing**, mirroring browser `querySelector` which returns no elements rather
+than erroring):
+
+- **`:visited`** / **`:current`** / **`:local-link`** — navigation/history/URL state
+  (Dominique has a fragment model for `:target` but no visited-history or live URL).
+- **`:playing`** / **`:paused`** / **`:seeking`** / **`:muted`** / **`:volume-locked`** —
+  `HTMLMediaElement` playback state (no media engine).
+- **`:modal`** / **`:fullscreen`** / **`:picture-in-picture`** / **`:popover-open`** —
+  rendering/presentation state (no layout/rendering engine or top-layer model).
+- **`:autofill`** / **`:user-invalid`** / **`:user-valid`** / **`:blank`** — user-agent
+  interaction state (autofill; user-has-edited-and-blurred) not modeled.
+- **`:dir(auto)`** — needs bidi resolution of element text, which `NodeData` does not
+  model (`:dir(ltr|rtl)` from the inherited attribute IS implemented).
+- **Finer constraint validation** — `step` mismatch, `minlength`/`maxlength` under live
+  editing, `type=number` `badInput`. The common constraints (required/type/pattern/range)
+  are implemented; these edge constraints need a live-value/editing model.
+
+**Policy for unmodelable pseudo-classes:** prefer **match-nothing** over raising (a
+`querySelector(":playing")` returns `[]`, it does not error).
 
 ## Shadow DOM (structural, Event-free)
 
@@ -430,8 +443,11 @@ and clears the rest of its `name` group. Non-cancelable clicks still toggle;
 (`test/integration/default_action_test.exs`). (Broader activation behavior — links
 navigate, forms submit, `<details>` toggles — is not modeled yet.)
 
-**Deferred:** other activation behaviors (link navigation, form submission, `<details>`);
-user-toggled `:indeterminate`; `:valid`/`:invalid` (form constraint validation).
+Also implemented as activation behaviors: a **`<summary>` click toggles its parent
+`<details>`'s `open` attribute** (with the `:open` pseudo for `details`/`dialog`), and a
+**checkbox click clears its `indeterminate`**. **Deferred activation:** link navigation
+and form submission (both need a navigation/submission model), and other element
+activations.
 
 ## Before finishing any change
 
