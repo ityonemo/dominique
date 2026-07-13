@@ -2231,9 +2231,7 @@ defmodule DOM do
     _atomic_ets_op(
       dst_server,
       fn nodes, index ->
-        node_data = fetch_node!(nodes, node_id)
-        detach_from_parent(nodes, node_id, node_data)
-        Table.rehome_subtree(nodes, index, node_id)
+        NodeData.detach(nodes, index, node_id)
         node_handle(nodes, node_id)
       end,
       :mutates
@@ -2449,7 +2447,7 @@ defmodule DOM do
       new_child_data,
       old_child_id,
       nil,
-      fn -> detach_from_parent(nodes, new_child_id, new_child_data) end
+      fn -> Table.detach(nodes, new_child_id) end
     )
   end
 
@@ -2535,9 +2533,9 @@ defmodule DOM do
     _atomic_ets_op(
       server,
       fn nodes, index ->
-        node_data = fetch_node!(nodes, node_id)
-        detach_from_parent(nodes, node_id, node_data)
-        # delete_subtree retracts each removed node's span rows; nothing remaining moved.
+        # unlink (record-only) then delete — delete_subtree retracts every removed node's
+        # index rows, so no rehome is needed (nothing remaining moved).
+        Table.detach(nodes, node_id)
         delete_subtree(nodes, index, node_id)
         :ok
       end,
@@ -2647,10 +2645,6 @@ defmodule DOM do
     |> Enum.any?(fn node_id ->
       node_id != except_id and fetch_node!(nodes, node_id).__struct__ == kind
     end)
-  end
-
-  defp detach_from_parent(nodes, child_id, _child) do
-    Table.detach(nodes, child_id)
   end
 
   defp inclusive_ancestor?(nodes, ancestor_id, node_id) do
