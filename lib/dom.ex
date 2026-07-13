@@ -2263,10 +2263,8 @@ defmodule DOM do
     _atomic_ets_op(
       dst_server,
       fn nodes, index ->
-        clone_id = Table.clone(nodes, node_id, deep?)
-        # clone builds a fresh labeled subtree rooted at clone_id — mirror just it
-        # (span + id/class/tag/attr index rows).
-        Table.rehome_subtree(nodes, index, clone_id)
+        # clone writes a fresh labeled subtree into both tables (span + membership).
+        clone_id = Table.clone(nodes, index, node_id, deep?)
         node_handle(nodes, clone_id)
       end,
       :mutates
@@ -2648,10 +2646,8 @@ defmodule DOM do
 
   def _node_clone_node(server, node_id, deep?) do
     _atomic_ets_op(server, fn nodes, index ->
-      clone_id = Table.clone(nodes, node_id, deep?)
-      # clone builds a fresh labeled subtree rooted at clone_id — mirror just it
-      # (span + id/class/tag/attr index rows).
-      Table.rehome_subtree(nodes, index, clone_id)
+      # clone writes a fresh labeled subtree into both tables (span + membership).
+      clone_id = Table.clone(nodes, index, node_id, deep?)
       node_handle(nodes, clone_id)
     end)
   end

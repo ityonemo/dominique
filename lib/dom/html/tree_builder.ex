@@ -165,7 +165,7 @@ defmodule DOM.HTML.TreeBuilder do
   # Deep-clone each of `children` and append the clones to `target`.
   defp clone_children_into(tid, target, children) do
     Enum.each(children, fn child ->
-      Table.append_child(tid, target, Table.clone(tid, child, true))
+      Table.append_child(tid, target, Table.clone_record(tid, child, true))
     end)
   end
 

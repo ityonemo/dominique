@@ -765,7 +765,7 @@ defmodule DOM.NodeData.TableTest do
       el = Table.create_element(tid, index, "div")
       Table.set_attribute(tid, el, "a", "1")
       Table.append_child(tid, el, Table.create_text(tid, index, "x"))
-      clone = Table.clone(tid, el, false)
+      clone = Table.clone_record(tid, el, false)
       assert Table.node_name(tid, clone) == "div"
       assert Table.get_attribute(tid, clone, "a") == "1"
       assert Table.children(tid, clone) == []
@@ -777,7 +777,7 @@ defmodule DOM.NodeData.TableTest do
       inner = Table.create_element(tid, index, "span")
       Table.append_child(tid, el, inner)
       Table.append_child(tid, inner, Table.create_text(tid, index, "x"))
-      clone = Table.clone(tid, el, true)
+      clone = Table.clone_record(tid, el, true)
       [clone_span] = Table.children(tid, clone)
       assert clone_span != inner
       assert Table.node_name(tid, clone_span) == "span"

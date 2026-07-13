@@ -645,20 +645,26 @@ defmodule DOM.NodeData.Table do
   `<<0x00>>..<<0x80>>`, descendants carved inside from the SOURCE's extent order),
   so appending it later grafts the whole subtree.
   """
-  @spec clone(tid, id, boolean()) :: id
-  def clone(tid, id, deep?) do
+  @spec clone(tid, tid, id, boolean()) :: id
+  def clone(nodes, index, id, deep?) do
     clone_id = make_ref()
-    clone_subtree(tid, id, deep?, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
+    clone_subtree(nodes, index, id, deep?, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
     clone_id
   end
 
-  # Copy `src_id`'s record onto `clone_id` with the given extent (tree `root`,
-  # `parent`), then (deep) clone its source children in extent order, carving each
-  # into a fresh sub-interval. Single pass: order from the source's extents,
-  # adjacency from parent pointers — no `children` field.
-  defp clone_subtree(tid, src_id, deep?, clone_id, root, parent, start, stop) do
-    put(tid, clone_id, %{
-      fetch!(tid, src_id)
+  # Record-only clone (nodes tid, no index) — the TEMPORARY seam for DOM.Range.Contents /
+  # the tree builder's <template> path, which build a detached tree and let the caller's
+  # rehome mirror the index. Remove with the _contents.ex create-in-place rewrite.
+  @spec clone_record(tid, id, boolean()) :: id
+  def clone_record(nodes, id, deep?) do
+    clone_id = make_ref()
+    clone_record_subtree(nodes, id, deep?, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
+    clone_id
+  end
+
+  defp clone_record_subtree(nodes, src_id, deep?, clone_id, root, parent, start, stop) do
+    put(nodes, clone_id, %{
+      fetch!(nodes, src_id)
       | parent: parent,
         root: root,
         start: start,
@@ -666,11 +672,30 @@ defmodule DOM.NodeData.Table do
     })
 
     if deep? do
-      tid
+      nodes
       |> children_by_extent(src_id)
       |> Enum.reduce(start, fn src_child, prev ->
         {cstart, cstop} = interval(prev, stop)
-        clone_subtree(tid, src_child, true, make_ref(), root, clone_id, cstart, cstop)
+        clone_record_subtree(nodes, src_child, true, make_ref(), root, clone_id, cstart, cstop)
+        cstop
+      end)
+    end
+  end
+
+  # Copy `src_id`'s record onto `clone_id` with the given extent (tree `root`, `parent`) and
+  # write it into BOTH tables (span + membership, index-first via NodeData.insert), then
+  # (deep) clone its source children in extent order, carving each into a fresh sub-interval.
+  # Single pass: order from the source's extents, adjacency from parent pointers.
+  defp clone_subtree(nodes, index, src_id, deep?, clone_id, root, parent, start, stop) do
+    record = %{fetch!(nodes, src_id) | parent: parent, root: root, start: start, stop: stop}
+    NodeData.insert(clone_id, record, nodes, index)
+
+    if deep? do
+      nodes
+      |> children_by_extent(src_id)
+      |> Enum.reduce(start, fn src_child, prev ->
+        {cstart, cstop} = interval(prev, stop)
+        clone_subtree(nodes, index, src_child, true, make_ref(), root, clone_id, cstart, cstop)
         cstop
       end)
     end

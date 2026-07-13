@@ -187,7 +187,7 @@ defmodule DOM.Range.Contents do
 
     kids
     |> Enum.slice(from, max(to - from, 0))
-    |> Enum.map(&Table.clone(tid, &1, true))
+    |> Enum.map(&Table.clone_record(tid, &1, true))
   end
 
   # First fully-contained child index: `so` when sc is common (the boundary is a
@@ -248,7 +248,7 @@ defmodule DOM.Range.Contents do
   defp new_char_node(tid, %NodeData.Text{}, value), do: Table.create_text_record(tid, value)
   defp new_char_node(tid, %NodeData.Comment{}, value), do: Table.create_comment_record(tid, value)
 
-  defp shallow_clone(tid, id), do: Table.clone(tid, id, false)
+  defp shallow_clone(tid, id), do: Table.clone_record(tid, id, false)
 
   defp append_all(tid, parent, ids), do: Enum.each(ids, &Table.append_child(tid, parent, &1))
 
