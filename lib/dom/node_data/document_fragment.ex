@@ -4,16 +4,16 @@ defmodule DOM.NodeData.DocumentFragment do
   # `root`/`start`/`stop`: a fragment is a tree root (until adopted), so it carries
   # its own extent. Child adjacency is extent-borne (no `children` field); see
   # DOM.NodeData.Table.
-  defstruct parent: nil, root: nil, start: nil, stop: nil
-
   use DOM.NodeData
   use DOM.HTML
 
+  defstruct @enforce_keys ++ [:parent]
+
   @type t :: %__MODULE__{
-          parent: reference() | nil,
-          root: reference() | nil,
-          start: binary() | nil,
-          stop: binary() | nil
+          parent: nil,
+          root: reference(),
+          start: binary(),
+          stop: binary()
         }
 
   @impl DOM.NodeData

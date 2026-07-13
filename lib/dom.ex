@@ -67,10 +67,13 @@ defmodule DOM do
     document_id = Keyword.fetch!(opts, :document_id)
     nodes = :ets.new(__MODULE__, [:set, :private])
     index = :ets.new(:"#{__MODULE__}.Index", [:ordered_set, :private])
-    # The document node is a labeled tree root from birth (root nil = itself, the
+    # The document node is a labeled tree root from birth (root == self, parent nil, the
     # fixed root window), and mirrored into the span index — the same "labeled from
     # creation" invariant every node obeys.
-    :ets.insert(nodes, {document_id, %NodeData.Document{start: <<0x00>>, stop: <<0x80>>}})
+    :ets.insert(
+      nodes,
+      {document_id, %NodeData.Document{root: document_id, start: <<0x00>>, stop: <<0x80>>}}
+    )
 
     Table.span_put(index, document_id, %{
       root: document_id,
@@ -167,7 +170,9 @@ defmodule DOM do
   end
 
   def create_element(document, local_name) do
-    create(document, %NodeData.Element{local_name: local_name})
+    create(document, fn nodes, index ->
+      Table.create_element(nodes, index, local_name)
+    end)
   end
 
   @doc """
@@ -178,7 +183,10 @@ defmodule DOM do
   @spec create_element_ns(Node.t(), String.t(), String.t()) :: Node.t()
   def create_element_ns(%Node{type: :document} = document, url, qualified_name) do
     namespace = DOM.Namespace.element_atom(url) || :html
-    create(document, %NodeData.Element{local_name: qualified_name, namespace: namespace})
+
+    create(document, fn nodes, index ->
+      Table.create_element_ns(nodes, index, qualified_name, namespace, [])
+    end)
   end
 
   @doc false
@@ -186,11 +194,9 @@ defmodule DOM do
   # attribute list in one hop (used by the HTML tree builder for foreign
   # content). Attributes are stored verbatim — no name normalization.
   def _create_element_ns(document, local_name, namespace, attributes) do
-    create(document, %NodeData.Element{
-      local_name: local_name,
-      namespace: namespace,
-      attributes: attributes
-    })
+    create(document, fn nodes, index ->
+      Table.create_element_ns(nodes, index, local_name, namespace, attributes)
+    end)
   end
 
   @doc false
@@ -227,33 +233,37 @@ defmodule DOM do
     end)
   end
 
-  def create_text_node(document, value), do: create(document, %NodeData.Text{value: value})
+  def create_text_node(document, value),
+    do: create(document, &Table.create_text(&1, &2, value))
 
-  def create_comment(document, value), do: create(document, %NodeData.Comment{value: value})
+  def create_comment(document, value),
+    do: create(document, &Table.create_comment(&1, &2, value))
 
-  def create_document_fragment(document), do: create(document, %NodeData.DocumentFragment{})
+  def create_document_fragment(document),
+    do: create(document, &Table.create_document_fragment/2)
 
-  def create_document_type(document, name, public_id, system_id) do
-    node_data = %NodeData.DocumentType{name: name, public_id: public_id, system_id: system_id}
-    create(document, node_data)
-  end
+  def create_document_type(document, name, public_id, system_id),
+    do: create(document, &Table.create_doctype(&1, &2, name, public_id, system_id))
 
-  defp create(%Node{type: :document, server: server}, node_data) do
+  # `create_node` is a `(nodes, index -> id)` that mints the labeled node (index-first,
+  # via Table.create_*). A created node is a labeled 1-node tree from birth.
+  defp create(%Node{type: :document, server: server}, create_node) do
     _atomic_ets_op(server, fn nodes, index ->
-      # a created node is a labeled 1-node tree from birth: seed its root extent and
-      # its span rows together.
-      node_id = Table.seed_root(nodes, index, node_data)
-      index_element(index, node_id, node_data)
+      node_id = create_node.(nodes, index)
       # custom element: run `constructed` if the created element's name is defined.
-      if match?(%NodeData.Element{}, node_data) do
-        custom_element_constructed(nodes, index, node_id, node_data.local_name)
+      case fetch_node!(nodes, node_id) do
+        %NodeData.Element{local_name: local_name} ->
+          custom_element_constructed(nodes, index, node_id, local_name)
+
+        _ ->
+          :ok
       end
 
       node_handle(nodes, node_id)
     end)
   end
 
-  defp create(%Node{}, _node_data), do: raise(DOM.HierarchyRequestError)
+  defp create(%Node{}, _create_node), do: raise(DOM.HierarchyRequestError)
 
   def get_elements_by_tag_name(%Node{server: server, node_id: node_id}, name) do
     _atomic_ets_op(server, fn nodes, index ->
@@ -464,8 +474,7 @@ defmodule DOM do
         {:error, :not_supported}
 
       :else ->
-        shadow_id = Table.create_shadow_root(nodes, id, mode, slot_assignment)
-        Table.span_index_all(nodes, index)
+        shadow_id = Table.create_shadow_root(nodes, index, id, mode, slot_assignment)
         signal_slots(index, DOM.NodeData.Slots.recompute(nodes, index, id))
         {:ok, node_handle(nodes, shadow_id)}
     end
@@ -1445,12 +1454,16 @@ defmodule DOM do
       Table.set_value(nodes, node_id, before)
       # create the tail directly in its final slot (immediately after node_id) — no
       # detached-then-graft; the shortened original keeps its extent (value-only change).
+      root = Table.fetch!(nodes, parent_id).root
+
       new_id =
         Table.create_child(
           nodes,
           index,
           parent_id,
-          %NodeData.Text{value: rest},
+          fn _id, {start, stop} ->
+            %NodeData.Text{value: rest, root: root, parent: parent_id, start: start, stop: stop}
+          end,
           {:after, node_id}
         )
 
@@ -1469,7 +1482,7 @@ defmodule DOM do
 
       # labeled 1-node tree from birth (so an empty/collapsed-range fragment is still
       # labeled); appending children carves inside its window.
-      fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
+      fragment_id = Table.create_document_fragment(nodes, index)
       Table.append_children(nodes, fragment_id, clones)
       # everything built this op lives under the fragment now — mirror its whole subtree
       # (span + id/class/tag/attr index rows).
@@ -1494,7 +1507,7 @@ defmodule DOM do
     extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
 
     # labeled 1-node tree from birth (empty/collapsed range → still labeled).
-    fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
+    fragment_id = Table.create_document_fragment(nodes, index)
     Table.append_children(nodes, fragment_id, extracted)
     # the extracted subtrees are now under the fragment; rehome_subtree retracts their
     # old (source) rows by id and re-mirrors the whole fragment subtree (span + index).
@@ -1572,7 +1585,17 @@ defmodule DOM do
     {before, rest} = String.split_at(Table.value(nodes, text_id), offset)
     Table.set_value(nodes, text_id, before)
     parent_id = Table.parent(nodes, text_id)
-    Table.create_child(nodes, index, parent_id, %NodeData.Text{value: rest}, {:after, text_id})
+    root = Table.fetch!(nodes, parent_id).root
+
+    Table.create_child(
+      nodes,
+      index,
+      parent_id,
+      fn _id, {start, stop} ->
+        %NodeData.Text{value: rest, root: root, parent: parent_id, start: start, stop: stop}
+      end,
+      {:after, text_id}
+    )
   end
 
   defp insert_at_child_index(nodes, index, container, offset, node_id) do
@@ -2193,11 +2216,11 @@ defmodule DOM do
 
   defp materialize_subtree(nodes, index, child_id, subtree) do
     # The exported records carry their SOURCE `.root`. In the destination the subtree is
-    # a detached tree rooted at `child_id`, so re-root: `child_id` -> root nil (itself),
-    # its descendants -> `child_id`. (place_child/graft re-roots again on re-attach.)
+    # a detached tree rooted at `child_id`, so re-root: `child_id` -> root self (parent
+    # nil), its descendants -> `child_id`. (place_child/graft re-roots again on re-attach.)
     subtree =
       Enum.map(subtree, fn
-        {^child_id, node_data} -> {child_id, %{node_data | parent: nil, root: nil}}
+        {^child_id, node_data} -> {child_id, %{node_data | parent: nil, root: child_id}}
         {id, node_data} -> {id, %{node_data | root: child_id}}
       end)
 
@@ -3317,15 +3340,22 @@ defmodule DOM do
         |> Table.children(node_id)
         |> Enum.each(&delete_subtree(nodes, index, &1))
 
-        if value != "" do
-          # create the sole text child directly in place under node_id (now empty).
-          Table.create_child(nodes, index, node_id, %NodeData.Text{value: value}, :last)
-        end
-
+        if value != "", do: append_text_child(nodes, index, node_id, value)
         :ok
       end,
       :mutates
     )
+  end
+
+  # Create a single Text child directly in place under `parent_id` (its sole child).
+  defp append_text_child(nodes, index, parent_id, value) do
+    root = Table.fetch!(nodes, parent_id).root
+
+    build = fn _id, {start, stop} ->
+      %NodeData.Text{value: value, root: root, parent: parent_id, start: start, stop: stop}
+    end
+
+    Table.create_child(nodes, index, parent_id, build, :last)
   end
 
   # Delete a subtree from the node table and retract each node's index + span +

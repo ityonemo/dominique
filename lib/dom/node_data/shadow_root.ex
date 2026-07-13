@@ -7,16 +7,10 @@ defmodule DOM.NodeData.ShadowRoot do
   other detached roots in the nodes table.
   """
 
-  defstruct host: nil,
-            mode: :open,
-            slot_assignment: :named,
-            parent: nil,
-            root: nil,
-            start: nil,
-            stop: nil
-
   use DOM.NodeData
   use DOM.HTML
+
+  defstruct @enforce_keys ++ [:host, :parent, mode: :open, slot_assignment: :named]
 
   @type mode :: :open | :closed
   @type slot_assignment :: :named | :manual
@@ -26,9 +20,9 @@ defmodule DOM.NodeData.ShadowRoot do
           mode: mode(),
           slot_assignment: slot_assignment(),
           parent: reference() | nil,
-          root: reference() | nil,
-          start: binary() | nil,
-          stop: binary() | nil
+          root: reference(),
+          start: binary(),
+          stop: binary()
         }
 
   @impl DOM.NodeData

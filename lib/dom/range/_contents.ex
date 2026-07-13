@@ -245,8 +245,8 @@ defmodule DOM.Range.Contents do
     new_char_node(tid, data, slice)
   end
 
-  defp new_char_node(tid, %NodeData.Text{}, value), do: Table.create_text(tid, value)
-  defp new_char_node(tid, %NodeData.Comment{}, value), do: Table.create_comment(tid, value)
+  defp new_char_node(tid, %NodeData.Text{}, value), do: Table.create_text_record(tid, value)
+  defp new_char_node(tid, %NodeData.Comment{}, value), do: Table.create_comment_record(tid, value)
 
   defp shallow_clone(tid, id), do: Table.clone(tid, id, false)
 

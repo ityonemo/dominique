@@ -204,8 +204,9 @@ defmodule DOM.HTML.TreeBuilder do
       |> reset_insertion_mode()
 
     state = tokens |> Enum.reduce(state, &step/2) |> eof()
-    # Seed the synthetic Document record bulk_load assumes present at its root.
-    :ets.insert(tid, {doc, %DOM.NodeData.Document{}})
+    # Seed the synthetic Document record bulk_load assumes present at its root — a
+    # labeled tree root (root == self, the fixed root window).
+    :ets.insert(tid, {doc, %DOM.NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
     Tree.bulk_load(state.tree, tid, index, doc)
     reflect_selectedcontent(tid, root)
     root

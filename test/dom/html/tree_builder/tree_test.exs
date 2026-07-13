@@ -109,7 +109,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
         |> Tree.append_child(b, c)
 
       # doc's id is the pre-inserted document record; bulk_load writes every node.
-      :ets.insert(tid, {doc, %NodeData.Document{}})
+      :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
       Table.span_index_all(tid, index)
 
@@ -134,7 +134,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       kids = Enum.reverse(kids)
 
-      :ets.insert(tid, {doc, %NodeData.Document{}})
+      :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
       Table.span_index_all(tid, index)
 
@@ -149,7 +149,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
       {tree, t} = Tree.create_text(tree, "hi")
       tree = tree |> Tree.append_child(doc, svg) |> Tree.append_child(svg, t)
 
-      :ets.insert(tid, {doc, %NodeData.Document{}})
+      :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
       Table.span_index_all(tid, index)
 
@@ -171,7 +171,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
       {tree, inner} = Tree.create_element(tree, "span")
       tree = tree |> Tree.append_child(doc, template) |> Tree.append_child(content, inner)
 
-      :ets.insert(tid, {doc, %NodeData.Document{}})
+      :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
       Table.span_index_all(tid, index)
 

@@ -1,46 +1,26 @@
 defmodule DOM.NodeData.Element do
   @moduledoc "ETS record for an element node."
 
-  @enforce_keys [:local_name]
-  defstruct [
-    :local_name,
-    :content,
-    # The element's shadow root id (a DOM.NodeData.ShadowRoot, a detached root
-    # tree), or nil. Parallel to `content` (template contents); the serializer
-    # never reads it, so the shadow tree is invisible to the host's outerHTML.
-    :shadow_root,
-    # The custom-element definition (a DOM.CustomElementDefinition) once this element
-    # is UPGRADED, else nil. Stored on the element — not just a registry lookup — so it
-    # RIDES the element across cross-document adoption (the browser: an upgraded element
-    # retains its definition). `nil` = undefined; a later `define` upgrades only nil
-    # elements. `:defined` = a built-in name OR definition != nil.
-    definition: nil,
-    # Manually-assigned node ids for a `<slot>` in a manual-slot-assignment shadow
-    # root (the ordered arguments of slot.assign()); [] otherwise. Only meaningful on
-    # a `<slot>` element. The effective assignment filters these to host children.
-    manual_assigned: [],
-    # Checkedness OVERRIDE for an input (WHATWG checkedness + dirty flag, compressed):
-    # nil = "clean" — use the `checked` ATTRIBUTE as the default; true/false = "dirty" —
-    # user-toggled checkedness (a click activation), the attribute no longer drives it.
-    # :checked reads the override if set, else the attribute.
-    checked: nil,
-    # The input `indeterminate` PROPERTY (a checkbox tri-state marker, not an attribute).
-    # false by default; set via DOM.set_indeterminate; cleared by a click. :indeterminate.
-    indeterminate: false,
-    namespace: :html,
-    parent: nil,
-    attributes: [],
-    # Nested-set extent: `root` is the tree root's id; `{start, stop}` are binary
-    # order-keys containing all descendants' extents. This IS the child adjacency —
-    # a node's ordered children are the rows whose `parent` is it, by `start` key
-    # (DOM.NodeData.Table.children_by_extent/2). See DOM.NodeData.Table.
-    root: nil,
-    start: nil,
-    stop: nil
-  ]
-
   use DOM.NodeData
   use DOM.HTML
+
+  # `@enforce_keys` from DOM.NodeData is `[:root, :start, :stop]` (the nested-set extent:
+  # `root` is the tree root's id, `{start, stop}` the binary order-keys containing all
+  # descendants — this IS the child adjacency; see DOM.NodeData.Table). `:local_name` is
+  # enforced too. `content`/`shadow_root`/`definition`/`checked`/`parent` default nil.
+  @enforce_keys @enforce_keys ++ [:local_name]
+  defstruct @enforce_keys ++
+              [
+                :content,
+                :shadow_root,
+                :definition,
+                :checked,
+                :parent,
+                manual_assigned: [],
+                indeterminate: false,
+                namespace: :html,
+                attributes: []
+              ]
 
   @type namespace :: :html | :svg | :mathml
 
@@ -61,9 +41,9 @@ defmodule DOM.NodeData.Element do
           indeterminate: boolean(),
           parent: reference() | nil,
           attributes: [{attr_key(), String.t()}],
-          root: reference() | nil,
-          start: binary() | nil,
-          stop: binary() | nil
+          root: reference(),
+          start: binary(),
+          stop: binary()
         }
 
   @doc "The DOM qualified name of an attribute key (`prefix:local`, or the bare name)."

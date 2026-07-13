@@ -10,24 +10,37 @@ defmodule DOM.NodeData.TableTest do
   alias DOM.NodeData.Table
 
   setup do
-    {:ok, tid: :ets.new(:test_nodes, [:set, :private])}
+    {:ok,
+     tid: :ets.new(:test_nodes, [:set, :private]),
+     index: :ets.new(:test_index, [:ordered_set, :private])}
   end
 
   # A minimal element record for the index primitives (index_put takes a record).
   defp el(attributes, local_name \\ "div") do
-    %NodeData.Element{local_name: local_name, attributes: attributes}
+    ref = make_ref()
+
+    %NodeData.Element{
+      local_name: local_name,
+      attributes: attributes,
+      root: ref,
+      start: <<0>>,
+      stop: <<0x80>>
+    }
   end
 
   describe "creation" do
-    test "create_element inserts a detached, labeled 1-node tree record", %{tid: tid} do
-      id = Table.create_element(tid, "div")
+    test "create_element inserts a detached, labeled 1-node tree record", %{
+      tid: tid,
+      index: index
+    } do
+      id = Table.create_element(tid, index, "div")
 
-      # a node is labeled from birth: parentless (its own tree root) with the fixed
-      # root-window extent seeded, so it is always in the extent order.
+      # a node is labeled from birth: parentless (parent nil) but its own tree root
+      # (root == self), with the fixed root-window extent seeded.
       assert %NodeData.Element{
                local_name: "div",
                parent: nil,
-               root: nil,
+               root: ^id,
                start: <<0x00>>,
                stop: <<0x80>>
              } =
@@ -37,25 +50,28 @@ defmodule DOM.NodeData.TableTest do
       assert Table.type(tid, id) == :element
     end
 
-    test "create_text / create_comment carry their value", %{tid: tid} do
-      t = Table.create_text(tid, "hi")
-      c = Table.create_comment(tid, "note")
+    test "create_text / create_comment carry their value", %{tid: tid, index: index} do
+      t = Table.create_text(tid, index, "hi")
+      c = Table.create_comment(tid, index, "note")
       assert Table.value(tid, t) == "hi"
       assert Table.node_name(tid, t) == "#text"
       assert Table.node_name(tid, c) == "#comment"
     end
 
-    test "create_template links the content fragment via the content field", %{tid: tid} do
-      {template, content} = Table.create_template(tid, [{"id", "x"}])
+    test "create_template links the content fragment via the content field", %{
+      tid: tid,
+      index: index
+    } do
+      {template, content} = Table.create_template(tid, index, [{"id", "x"}])
       assert Table.node_name(tid, template) == "template"
       assert Table.content(tid, template) == content
       assert %NodeData.DocumentFragment{} = Table.fetch!(tid, content)
     end
 
-    test "node_name covers every node kind", %{tid: tid} do
-      assert Table.node_name(tid, Table.create_document(tid)) == "#document"
-      assert Table.node_name(tid, Table.create_doctype(tid, "html", nil, nil)) == "html"
-      {_t, content} = Table.create_template(tid, [])
+    test "node_name covers every node kind", %{tid: tid, index: index} do
+      assert Table.node_name(tid, Table.create_document(tid, index)) == "#document"
+      assert Table.node_name(tid, Table.create_doctype(tid, index, "html", nil, nil)) == "html"
+      {_t, content} = Table.create_template(tid, index, [])
       assert Table.node_name(tid, content) == "#document-fragment"
     end
   end
@@ -68,10 +84,10 @@ defmodule DOM.NodeData.TableTest do
     # Adjacency is now the nested-set extents mirrored into span rows; the checker
     # needs the index. Build via the extent-authoritative mutators, sync spans.
     defp synced_tree(tid, index) do
-      doc = Table.create_document(tid)
-      ul = Table.create_element(tid, "ul")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
+      doc = Table.create_document(tid, index)
+      ul = Table.create_element(tid, index, "ul")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
       Table.append_child(tid, doc, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
@@ -87,8 +103,8 @@ defmodule DOM.NodeData.TableTest do
 
     test "passes for a legitimately detached subtree (nil-rooted, self-consistent)",
          %{tid: tid, index: index} do
-      frag = Table.create_element(tid, "section")
-      child = Table.create_element(tid, "p")
+      frag = Table.create_element(tid, index, "section")
+      child = Table.create_element(tid, index, "p")
       Table.append_child(tid, frag, child)
       Table.rehome_subtree(tid, index, frag)
 
@@ -329,7 +345,7 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "passes when the id index mirrors the element rows", %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.set_attribute(tid, a, "id", "one")
       Table.index_put(index, a, Table.fetch!(tid, a))
       # the node is labeled from birth — mirror its span rows so the full net passes.
@@ -339,7 +355,7 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "raises when an element's id is missing from the index", %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.set_attribute(tid, a, "id", "one")
       # index intentionally NOT updated
 
@@ -348,14 +364,14 @@ defmodule DOM.NodeData.TableTest do
 
     test "raises when the index points at a node with no such id (stale row)",
          %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.index_put(index, a, el([{"id", "ghost"}], "a"))
 
       assert_raise RuntimeError, ~r/index/i, fn -> Table.check_consistency!(tid, index) end
     end
 
     test "raises when the index points at a deleted node", %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.set_attribute(tid, a, "id", "one")
       Table.index_put(index, a, el([{"id", "one"}]))
       :ets.delete(tid, a)
@@ -364,7 +380,7 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "passes when the class index mirrors the element rows", %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.set_attribute(tid, a, "class", "box highlight")
       Table.index_put(index, a, Table.fetch!(tid, a))
       # the node is labeled from birth — mirror its span rows so the full net passes.
@@ -375,7 +391,7 @@ defmodule DOM.NodeData.TableTest do
 
     test "raises when an element's class token is missing from the index",
          %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.set_attribute(tid, a, "class", "box highlight")
       Table.index_put(index, a, el([{"class", "box"}], "a"))
       # "highlight" token intentionally missing from the index
@@ -384,7 +400,7 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "raises when the class index has a stale token", %{tid: tid, index: index} do
-      a = Table.create_element(tid, "a")
+      a = Table.create_element(tid, index, "a")
       Table.set_attribute(tid, a, "class", "box")
       Table.index_put(index, a, el([{"class", "box ghost"}], "a"))
 
@@ -399,12 +415,12 @@ defmodule DOM.NodeData.TableTest do
 
     # Build a tree via the extent-authoritative mutators (which write start/stop
     # live), no index yet.
-    defp field_tree(tid) do
-      root = Table.create_document(tid)
-      ul = Table.create_element(tid, "ul")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-      c = Table.create_element(tid, "c")
+    defp field_tree(tid, index) do
+      root = Table.create_document(tid, index)
+      ul = Table.create_element(tid, index, "ul")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
+      c = Table.create_element(tid, index, "c")
       Table.append_child(tid, root, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
@@ -414,7 +430,7 @@ defmodule DOM.NodeData.TableTest do
 
     test "mirrors extents so check_consistency! passes and span reads match",
          %{tid: tid, index: index} do
-      ids = field_tree(tid)
+      ids = field_tree(tid, index)
       # mirror span + membership index rows for the built tree in one subtree walk.
       Table.rehome_subtree(tid, index, ids.root)
 
@@ -425,10 +441,10 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "handles multiple roots (a detached second tree)", %{tid: tid, index: index} do
-      ids = field_tree(tid)
+      ids = field_tree(tid, index)
       # a second, detached root (parent nil) — e.g. a template content fragment
-      frag = Table.create_document(tid)
-      x = Table.create_element(tid, "x")
+      frag = Table.create_document(tid, index)
+      x = Table.create_element(tid, index, "x")
       Table.append_child(tid, frag, x)
 
       # mirror each root's subtree (span + membership rows).
@@ -443,12 +459,15 @@ defmodule DOM.NodeData.TableTest do
     # A tree built via the mutators must be readable by extent order WITHOUT any
     # span_build_all pass — the mutators assign start/stop live, so children_by_extent
     # reflects the field order immediately. This is the tree-builder path (no index).
-    test "append_child assigns extents so children_by_extent matches the field", %{tid: tid} do
-      root = Table.create_document(tid)
-      ul = Table.create_element(tid, "ul")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-      c = Table.create_element(tid, "c")
+    test "append_child assigns extents so children_by_extent matches the field", %{
+      tid: tid,
+      index: index
+    } do
+      root = Table.create_document(tid, index)
+      ul = Table.create_element(tid, index, "ul")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
+      c = Table.create_element(tid, index, "c")
       Table.append_child(tid, root, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
@@ -465,11 +484,11 @@ defmodule DOM.NodeData.TableTest do
       assert extent_inside?(tid, c, b)
     end
 
-    test "insert_before assigns an extent between neighbors", %{tid: tid} do
-      p = Table.create_element(tid, "p")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-      x = Table.create_element(tid, "x")
+    test "insert_before assigns an extent between neighbors", %{tid: tid, index: index} do
+      p = Table.create_element(tid, index, "p")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
+      x = Table.create_element(tid, index, "x")
       Table.append_child(tid, p, a)
       Table.append_child(tid, p, b)
       Table.insert_before(tid, p, x, b)
@@ -478,12 +497,12 @@ defmodule DOM.NodeData.TableTest do
       assert extent_inside?(tid, x, p)
     end
 
-    test "append_child MOVES an already-labeled subtree via graft", %{tid: tid} do
-      root = Table.create_document(tid)
-      old = Table.create_element(tid, "old")
-      new = Table.create_element(tid, "new")
-      c = Table.create_element(tid, "c")
-      gc = Table.create_element(tid, "gc")
+    test "append_child MOVES an already-labeled subtree via graft", %{tid: tid, index: index} do
+      root = Table.create_document(tid, index)
+      old = Table.create_element(tid, index, "old")
+      new = Table.create_element(tid, index, "new")
+      c = Table.create_element(tid, index, "c")
+      gc = Table.create_element(tid, index, "gc")
       Table.append_child(tid, root, old)
       Table.append_child(tid, root, new)
       Table.append_child(tid, old, c)
@@ -499,10 +518,13 @@ defmodule DOM.NodeData.TableTest do
       assert extent_inside?(tid, gc, c)
     end
 
-    test "append_children places N siblings in one multispan-carved gap", %{tid: tid} do
-      p = Table.create_element(tid, "p")
-      a = Table.create_element(tid, "a")
-      kids = for i <- 1..6, do: Table.create_element(tid, "k#{i}")
+    test "append_children places N siblings in one multispan-carved gap", %{
+      tid: tid,
+      index: index
+    } do
+      p = Table.create_element(tid, index, "p")
+      a = Table.create_element(tid, index, "a")
+      kids = for i <- 1..6, do: Table.create_element(tid, index, "k#{i}")
       Table.append_child(tid, p, a)
 
       # bulk-append all six after the existing child `a`
@@ -512,18 +534,21 @@ defmodule DOM.NodeData.TableTest do
       Enum.each(kids, &assert(extent_inside?(tid, &1, p)))
     end
 
-    test "append_children moves already-labeled subtrees (graft per window)", %{tid: tid} do
-      root = Table.create_document(tid)
-      frag = Table.create_element(tid, "frag")
-      dest = Table.create_element(tid, "dest")
+    test "append_children moves already-labeled subtrees (graft per window)", %{
+      tid: tid,
+      index: index
+    } do
+      root = Table.create_document(tid, index)
+      frag = Table.create_element(tid, index, "frag")
+      dest = Table.create_element(tid, index, "dest")
       Table.append_child(tid, root, frag)
       Table.append_child(tid, root, dest)
 
       # frag has three labeled subtrees, each with a child
       subs =
         for i <- 1..3 do
-          s = Table.create_element(tid, "s#{i}")
-          gc = Table.create_element(tid, "g#{i}")
+          s = Table.create_element(tid, index, "s#{i}")
+          gc = Table.create_element(tid, index, "g#{i}")
           Table.append_child(tid, frag, s)
           Table.append_child(tid, s, gc)
           {s, gc}
@@ -542,14 +567,14 @@ defmodule DOM.NodeData.TableTest do
       end)
     end
 
-    test "insert_children_before splices N siblings before a reference", %{tid: tid} do
-      p = Table.create_element(tid, "p")
-      a = Table.create_element(tid, "a")
-      z = Table.create_element(tid, "z")
+    test "insert_children_before splices N siblings before a reference", %{tid: tid, index: index} do
+      p = Table.create_element(tid, index, "p")
+      a = Table.create_element(tid, index, "a")
+      z = Table.create_element(tid, index, "z")
       Table.append_child(tid, p, a)
       Table.append_child(tid, p, z)
 
-      kids = for i <- 1..4, do: Table.create_element(tid, "k#{i}")
+      kids = for i <- 1..4, do: Table.create_element(tid, index, "k#{i}")
       Table.insert_children_before(tid, p, kids, z)
 
       assert Table.children_by_extent(tid, p) == [a | kids] ++ [z]
@@ -573,10 +598,10 @@ defmodule DOM.NodeData.TableTest do
          %{tid: tid, index: index} do
       # Build via the extent-authoritative mutators — extents already correct, no
       # span_build carve needed. span_index_all just copies extents -> span rows.
-      root = Table.create_document(tid)
-      ul = Table.create_element(tid, "ul")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
+      root = Table.create_document(tid, index)
+      ul = Table.create_element(tid, index, "ul")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
       Table.append_child(tid, root, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
@@ -589,8 +614,8 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "idempotent — re-running leaves the same span rows", %{tid: tid, index: index} do
-      root = Table.create_document(tid)
-      x = Table.create_element(tid, "x")
+      root = Table.create_document(tid, index)
+      x = Table.create_element(tid, index, "x")
       Table.append_child(tid, root, x)
 
       Table.span_index_all(tid, index)
@@ -607,7 +632,7 @@ defmodule DOM.NodeData.TableTest do
 
     test "returns children in start-key order, reading only the nodes tid",
          %{tid: tid, index: index} do
-      ids = field_tree(tid)
+      ids = field_tree(tid, index)
       Table.rehome_subtree(tid, index, ids.root)
 
       # Same document order as the span-index read, but derived from the record
@@ -620,7 +645,7 @@ defmodule DOM.NodeData.TableTest do
 
     test "agrees with span_children_of and the children field for every node",
          %{tid: tid, index: index} do
-      ids = field_tree(tid)
+      ids = field_tree(tid, index)
       Table.rehome_subtree(tid, index, ids.root)
 
       for id <- Map.values(ids) do
@@ -638,12 +663,12 @@ defmodule DOM.NodeData.TableTest do
     test "moving a subtree preserves consistency and its internal structure",
          %{tid: tid, index: index} do
       # root -> [ul -> [a, b -> [c]], target]; move `b`'s subtree under `target`.
-      root = Table.create_document(tid)
-      ul = Table.create_element(tid, "ul")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-      c = Table.create_element(tid, "c")
-      target = Table.create_element(tid, "target")
+      root = Table.create_document(tid, index)
+      ul = Table.create_element(tid, index, "ul")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
+      c = Table.create_element(tid, index, "c")
+      target = Table.create_element(tid, index, "target")
       Table.append_child(tid, root, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
@@ -663,27 +688,30 @@ defmodule DOM.NodeData.TableTest do
   end
 
   describe "mutation" do
-    test "append_child links parent and child both ways", %{tid: tid} do
-      p = Table.create_element(tid, "ul")
-      c = Table.create_element(tid, "li")
+    test "append_child links parent and child both ways", %{tid: tid, index: index} do
+      p = Table.create_element(tid, index, "ul")
+      c = Table.create_element(tid, index, "li")
       Table.append_child(tid, p, c)
       assert Table.children(tid, p) == [c]
       assert Table.parent(tid, c) == p
     end
 
-    test "append_child preserves order", %{tid: tid} do
-      p = Table.create_element(tid, "ul")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
+    test "append_child preserves order", %{tid: tid, index: index} do
+      p = Table.create_element(tid, index, "ul")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
       Table.append_child(tid, p, a)
       Table.append_child(tid, p, b)
       assert Table.children(tid, p) == [a, b]
     end
 
-    test "append_child MOVES a node that already has a parent (detach first)", %{tid: tid} do
-      old = Table.create_element(tid, "old")
-      new = Table.create_element(tid, "new")
-      c = Table.create_element(tid, "c")
+    test "append_child MOVES a node that already has a parent (detach first)", %{
+      tid: tid,
+      index: index
+    } do
+      old = Table.create_element(tid, index, "old")
+      new = Table.create_element(tid, index, "new")
+      c = Table.create_element(tid, index, "c")
       Table.append_child(tid, old, c)
       Table.append_child(tid, new, c)
       assert Table.children(tid, old) == []
@@ -691,11 +719,11 @@ defmodule DOM.NodeData.TableTest do
       assert Table.parent(tid, c) == new
     end
 
-    test "insert_before splices immediately before the reference", %{tid: tid} do
-      p = Table.create_element(tid, "p")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-      x = Table.create_element(tid, "x")
+    test "insert_before splices immediately before the reference", %{tid: tid, index: index} do
+      p = Table.create_element(tid, index, "p")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
+      x = Table.create_element(tid, index, "x")
       Table.append_child(tid, p, a)
       Table.append_child(tid, p, b)
       Table.insert_before(tid, p, x, b)
@@ -703,9 +731,9 @@ defmodule DOM.NodeData.TableTest do
       assert Table.parent(tid, x) == p
     end
 
-    test "remove_child unlinks both ways", %{tid: tid} do
-      p = Table.create_element(tid, "p")
-      c = Table.create_element(tid, "c")
+    test "remove_child unlinks both ways", %{tid: tid, index: index} do
+      p = Table.create_element(tid, index, "p")
+      c = Table.create_element(tid, index, "c")
       Table.append_child(tid, p, c)
       Table.remove_child(tid, p, c)
       assert Table.children(tid, p) == []
@@ -714,16 +742,16 @@ defmodule DOM.NodeData.TableTest do
   end
 
   describe "attributes" do
-    test "set / get / has, first-wins keystore", %{tid: tid} do
-      el = Table.create_element(tid, "div")
+    test "set / get / has, first-wins keystore", %{tid: tid, index: index} do
+      el = Table.create_element(tid, index, "div")
       refute Table.has_attribute(tid, el, "a")
       Table.set_attribute(tid, el, "a", "1")
       assert Table.has_attribute(tid, el, "a")
       assert Table.get_attribute(tid, el, "a") == "1"
     end
 
-    test "put_attribute_if_absent keeps the existing value", %{tid: tid} do
-      el = Table.create_element(tid, "div")
+    test "put_attribute_if_absent keeps the existing value", %{tid: tid, index: index} do
+      el = Table.create_element(tid, index, "div")
       Table.set_attribute(tid, el, "a", "1")
       Table.put_attribute_if_absent(tid, el, "a", "2")
       assert Table.get_attribute(tid, el, "a") == "1"
@@ -733,10 +761,10 @@ defmodule DOM.NodeData.TableTest do
   end
 
   describe "clone" do
-    test "shallow clone is a detached leaf copy", %{tid: tid} do
-      el = Table.create_element(tid, "div")
+    test "shallow clone is a detached leaf copy", %{tid: tid, index: index} do
+      el = Table.create_element(tid, index, "div")
       Table.set_attribute(tid, el, "a", "1")
-      Table.append_child(tid, el, Table.create_text(tid, "x"))
+      Table.append_child(tid, el, Table.create_text(tid, index, "x"))
       clone = Table.clone(tid, el, false)
       assert Table.node_name(tid, clone) == "div"
       assert Table.get_attribute(tid, clone, "a") == "1"
@@ -744,11 +772,11 @@ defmodule DOM.NodeData.TableTest do
       assert Table.parent(tid, clone) == nil
     end
 
-    test "deep clone copies the subtree with reparented children", %{tid: tid} do
-      el = Table.create_element(tid, "div")
-      inner = Table.create_element(tid, "span")
+    test "deep clone copies the subtree with reparented children", %{tid: tid, index: index} do
+      el = Table.create_element(tid, index, "div")
+      inner = Table.create_element(tid, index, "span")
       Table.append_child(tid, el, inner)
-      Table.append_child(tid, inner, Table.create_text(tid, "x"))
+      Table.append_child(tid, inner, Table.create_text(tid, index, "x"))
       clone = Table.clone(tid, el, true)
       [clone_span] = Table.children(tid, clone)
       assert clone_span != inner
@@ -760,11 +788,11 @@ defmodule DOM.NodeData.TableTest do
   end
 
   describe "queries" do
-    test "descendant_ids / elements_by_tag_name in tree order", %{tid: tid} do
-      root = Table.create_element(tid, "div")
-      a = Table.create_element(tid, "a")
-      b = Table.create_element(tid, "b")
-      a2 = Table.create_element(tid, "a")
+    test "descendant_ids / elements_by_tag_name in tree order", %{tid: tid, index: index} do
+      root = Table.create_element(tid, index, "div")
+      a = Table.create_element(tid, index, "a")
+      b = Table.create_element(tid, index, "b")
+      a2 = Table.create_element(tid, index, "a")
       Table.append_child(tid, root, a)
       Table.append_child(tid, a, b)
       Table.append_child(tid, root, a2)

@@ -28,6 +28,11 @@ defmodule DOM.NodeData.Table do
   @type tid :: :ets.tid()
   @type id :: reference()
 
+  # The fixed tree-root extent window (a node is a labeled 1-node tree from birth: its
+  # own root, parent nil, this window). Every `create_*` seeds it via `insert_new`.
+  @root_start <<0x00>>
+  @root_stop <<0x80>>
+
   # ==========================================================================
   # Low-level record access
   # ==========================================================================
@@ -50,83 +55,158 @@ defmodule DOM.NodeData.Table do
   # Node creation (each mints a fresh id and inserts a detached record)
   # ==========================================================================
 
-  @spec create_element(tid, String.t()) :: id
-  def create_element(tid, local_name) do
-    insert_new(tid, %NodeData.Element{local_name: local_name})
+  @spec create_element(tid, tid, String.t()) :: id
+  def create_element(nodes, index, local_name) do
+    id = make_ref()
+
+    NodeData.insert(
+      id,
+      %NodeData.Element{local_name: local_name, root: id, start: @root_start, stop: @root_stop},
+      nodes,
+      index
+    )
   end
 
-  @spec create_element_ns(tid, String.t(), NodeData.Element.namespace(), [
+  @spec create_element_ns(tid, tid, String.t(), NodeData.Element.namespace(), [
           {String.t(), String.t()}
-        ]) ::
-          id
-  def create_element_ns(tid, local_name, namespace, attributes) do
-    insert_new(tid, %NodeData.Element{
-      local_name: local_name,
-      namespace: namespace,
-      attributes: attributes
-    })
+        ]) :: id
+  def create_element_ns(nodes, index, local_name, namespace, attributes) do
+    id = make_ref()
+
+    NodeData.insert(
+      id,
+      %NodeData.Element{
+        local_name: local_name,
+        namespace: namespace,
+        attributes: attributes,
+        root: id,
+        start: @root_start,
+        stop: @root_stop
+      },
+      nodes,
+      index
+    )
   end
 
-  @spec create_text(tid, String.t()) :: id
-  def create_text(tid, value), do: insert_new(tid, %NodeData.Text{value: value})
+  @spec create_text(tid, tid, String.t()) :: id
+  def create_text(nodes, index, value) do
+    id = make_ref()
 
-  @spec create_comment(tid, String.t()) :: id
-  def create_comment(tid, value), do: insert_new(tid, %NodeData.Comment{value: value})
-
-  @spec create_doctype(tid, String.t(), String.t() | nil, String.t() | nil) :: id
-  def create_doctype(tid, name, public_id, system_id) do
-    insert_new(tid, %NodeData.DocumentType{name: name, public_id: public_id, system_id: system_id})
+    NodeData.insert(
+      id,
+      %NodeData.Text{value: value, root: id, start: @root_start, stop: @root_stop},
+      nodes,
+      index
+    )
   end
 
-  @spec create_document(tid) :: id
-  def create_document(tid), do: insert_new(tid, %NodeData.Document{})
+  @spec create_comment(tid, tid, String.t()) :: id
+  def create_comment(nodes, index, value) do
+    id = make_ref()
+
+    NodeData.insert(
+      id,
+      %NodeData.Comment{value: value, root: id, start: @root_start, stop: @root_stop},
+      nodes,
+      index
+    )
+  end
+
+  # Record-only (nodes tid, no index) char-node creators. TEMPORARY seam for
+  # DOM.Range.Contents, which builds a detached fragment and lets the caller's
+  # `rehome_subtree(fragment)` write the index rows. To be removed when _contents.ex
+  # is restructured to create-in-place (index-threaded). See create-in-place arc.
+  @spec create_text_record(tid, String.t()) :: id
+  def create_text_record(nodes, value) do
+    id = make_ref()
+    put(nodes, id, %NodeData.Text{value: value, root: id, start: @root_start, stop: @root_stop})
+    id
+  end
+
+  @spec create_comment_record(tid, String.t()) :: id
+  def create_comment_record(nodes, value) do
+    id = make_ref()
+
+    put(nodes, id, %NodeData.Comment{value: value, root: id, start: @root_start, stop: @root_stop})
+
+    id
+  end
+
+  @spec create_doctype(tid, tid, String.t(), String.t() | nil, String.t() | nil) :: id
+  def create_doctype(nodes, index, name, public_id, system_id) do
+    id = make_ref()
+
+    NodeData.insert(
+      id,
+      %NodeData.DocumentType{
+        name: name,
+        public_id: public_id,
+        system_id: system_id,
+        root: id,
+        start: @root_start,
+        stop: @root_stop
+      },
+      nodes,
+      index
+    )
+  end
+
+  @spec create_document(tid, tid) :: id
+  def create_document(nodes, index) do
+    id = make_ref()
+
+    NodeData.insert(
+      id,
+      %NodeData.Document{root: id, start: @root_start, stop: @root_stop},
+      nodes,
+      index
+    )
+  end
+
+  @spec create_document_fragment(tid, tid) :: id
+  def create_document_fragment(nodes, index) do
+    id = make_ref()
+
+    NodeData.insert(
+      id,
+      %NodeData.DocumentFragment{root: id, start: @root_start, stop: @root_stop},
+      nodes,
+      index
+    )
+  end
 
   @doc """
   Create a template element together with its "template contents" DocumentFragment,
   linked via the element's `content` field. Returns `{template_id, content_id}`.
   """
-  @spec create_template(tid, [{String.t(), String.t()}]) :: {id, id}
-  def create_template(tid, attributes) do
-    content_id = insert_new(tid, %NodeData.DocumentFragment{})
+  @spec create_template(tid, tid, [{String.t(), String.t()}]) :: {id, id}
+  def create_template(nodes, index, attributes) do
+    content_id = make_ref()
 
-    template_id =
-      insert_new(tid, %NodeData.Element{
+    NodeData.insert(
+      content_id,
+      %NodeData.DocumentFragment{root: content_id, start: @root_start, stop: @root_stop},
+      nodes,
+      index
+    )
+
+    template_id = make_ref()
+
+    NodeData.insert(
+      template_id,
+      %NodeData.Element{
         local_name: "template",
         attributes: attributes,
-        content: content_id
-      })
+        content: content_id,
+        root: template_id,
+        start: @root_start,
+        stop: @root_stop
+      },
+      nodes,
+      index
+    )
 
     {template_id, content_id}
-  end
-
-  defp insert_new(tid, data) do
-    id = make_ref()
-    # A node is a labeled 1-node tree from birth: seed the fixed root window
-    # (root nil = itself via ns_root, parent nil). So it is always in the extent
-    # order and mirrorable into the span index — no unlabeled regime.
-    true = :ets.insert(tid, {id, %{data | root: nil, start: <<0x00>>, stop: <<0x80>>}})
-    id
-  end
-
-  @doc """
-  Create a node as a labeled 1-node tree AND mirror its span rows in one shot — the
-  index-aware creator used when the caller already holds the index (e.g. the public
-  `create_*` path). `insert_new` seeds the record extent; this additionally writes the
-  node's two span rows, so the fresh node is fully present in the span order.
-  """
-  @spec seed_root(tid, tid, struct()) :: id
-  def seed_root(nodes, index, data) do
-    id = insert_new(nodes, data)
-
-    span_put(index, id, %{
-      root: id,
-      parent: nil,
-      start: <<0x00>>,
-      stop: <<0x80>>,
-      type: NodeData.type(data)
-    })
-
-    id
   end
 
   @doc """
@@ -140,30 +220,32 @@ defmodule DOM.NodeData.Table do
   `position` selects the slot: `:last` (append after the last child), `{:before, ref}`,
   or `{:after, ref}` (both siblings of `ref` under `parent_id`). Returns the new id.
   """
-  @spec create_child(tid, tid, id, struct(), :last | {:before, id} | {:after, id}) :: id
-  def create_child(nodes, index, parent_id, data, position) do
+  @spec create_child(
+          tid,
+          tid,
+          id,
+          (id, {binary(), binary()} -> struct()),
+          :last | {:before, id} | {:after, id}
+        ) :: id
+  def create_child(nodes, index, parent_id, build, position) do
+    # Build the child DIRECTLY in its final carved slot — no fake seed, no re-carve. Mint
+    # the id, compute the slot in the parent's gap, then `build.(id, {start, stop})` makes
+    # the FINAL record (real extent, root = parent's tree root, parent = parent_id). Index
+    # rows first, then the record.
     id = make_ref()
-    # mint with no extent so `place_child` takes the fresh-node branch (a single
-    # `interval` carve into the slot — no graft), writing the final root/parent/start/stop.
-    true = :ets.insert(nodes, {id, %{data | parent: nil, root: nil, start: nil, stop: nil}})
     parent = ensure_extent(nodes, parent_id)
-    place_child(nodes, parent_id, id, child_slot(nodes, parent_id, parent, position))
-    put(nodes, id, %{fetch!(nodes, id) | parent: parent_id})
-    # mirror the new node's derived rows in place (it is a single node — no subtree walk).
-    data = fetch!(nodes, id)
-    span_mirror_one(index, id, data)
-    if match?(%NodeData.Element{}, data), do: index_put(index, id, data)
-    id
+    {gap_a, gap_b} = gap(nodes, parent_id, parent, position)
+    {start, stop} = interval(gap_a, gap_b)
+    NodeData.insert(id, build.(id, {start, stop}), nodes, index)
   end
 
-  # The (gap_a, gap_b) slot for a create/insert `position` under `parent_id`.
-  defp child_slot(nodes, parent_id, parent, :last),
-    do: extent_after_last(nodes, parent_id, parent)
+  # The (gap_a, gap_b) window for a create/insert `position` under `parent_id`.
+  defp gap(nodes, parent_id, parent, :last), do: extent_after_last(nodes, parent_id, parent)
 
-  defp child_slot(nodes, parent_id, parent, {:before, ref}),
+  defp gap(nodes, parent_id, parent, {:before, ref}),
     do: extent_before(nodes, parent_id, parent, ref)
 
-  defp child_slot(nodes, parent_id, parent, {:after, ref}),
+  defp gap(nodes, parent_id, parent, {:after, ref}),
     do: extent_after(nodes, parent_id, parent, ref)
 
   # ==========================================================================
@@ -233,7 +315,7 @@ defmodule DOM.NodeData.Table do
   # its extent directly; an already-labeled subtree is grafted into it (window as
   # the destination gap). Then link the child's parent pointer.
   defp place_children(tid, parent_id, child_ids, gap_a, gap_b) do
-    root = ns_root(fetch!(tid, parent_id), parent_id)
+    root = fetch!(tid, parent_id).root
 
     child_ids
     |> carve_windows(gap_a, gap_b)
@@ -264,7 +346,7 @@ defmodule DOM.NodeData.Table do
   # `interval`; an already-labeled subtree is relocated wholesale by `graft` (its
   # descendants' relative keys preserved, `root` rewritten to the new tree).
   defp place_child(tid, parent_id, child_id, {gap_a, gap_b}) do
-    root = ns_root(fetch!(tid, parent_id), parent_id)
+    root = fetch!(tid, parent_id).root
     child = fetch!(tid, child_id)
 
     if child.start == nil do
@@ -342,20 +424,20 @@ defmodule DOM.NodeData.Table do
 
   @doc """
   Detach `id` from its current parent (no-op when already detached). `id`'s `parent`
-  is nilled and its subtree is RE-ROOTED at `id` (its own `.root` -> nil = itself, its
+  is nilled and its subtree is RE-ROOTED at `id` (its own `.root` -> `id` = itself, its
   descendants' `.root` -> `id`) so the `.root`/extent bookkeeping stays truthful to the
   parent topology — the consistency net asserts `.root` == the walked parent root. The
   caller overwrites `parent`/`root` again on re-attach (via `place_child`/`graft`).
   """
   @spec detach(tid, id) :: :ok
   def detach(tid, id) do
-    put(tid, id, %{fetch!(tid, id) | parent: nil, root: nil})
+    put(tid, id, %{fetch!(tid, id) | parent: nil, root: id})
     reroot_descendants(tid, id)
     :ok
   end
 
   # Point every descendant of `id`'s `.root` at `id` (its new tree root). `id` itself
-  # keeps `root: nil` (a tree root; ns_root resolves it to itself).
+  # is its own root (`root: id`); a tree root has `parent: nil` but `root: self`.
   defp reroot_descendants(tid, id) do
     for descendant <- descendant_ids(tid, id) do
       put(tid, descendant, %{fetch!(tid, descendant) | root: id})
@@ -468,17 +550,26 @@ defmodule DOM.NodeData.Table do
   own root; `ensure_extent` seeds its window on first append, like template
   content) and back-link it on the host element. Returns the shadow root id.
   """
-  @spec create_shadow_root(tid, id, :open | :closed, :named | :manual) :: id
-  def create_shadow_root(tid, host_id, mode, slot_assignment \\ :named) do
-    shadow_id =
-      insert_new(tid, %NodeData.ShadowRoot{
+  @spec create_shadow_root(tid, tid, id, :open | :closed, :named | :manual) :: id
+  def create_shadow_root(nodes, index, host_id, mode, slot_assignment \\ :named) do
+    shadow_id = make_ref()
+
+    NodeData.insert(
+      shadow_id,
+      %NodeData.ShadowRoot{
         host: host_id,
         mode: mode,
-        slot_assignment: slot_assignment
-      })
+        slot_assignment: slot_assignment,
+        root: shadow_id,
+        start: @root_start,
+        stop: @root_stop
+      },
+      nodes,
+      index
+    )
 
-    host = fetch!(tid, host_id)
-    put(tid, host_id, %{host | shadow_root: shadow_id})
+    host = fetch!(nodes, host_id)
+    put(nodes, host_id, %{host | shadow_root: shadow_id})
     shadow_id
   end
 
@@ -984,18 +1075,74 @@ defmodule DOM.NodeData.Table do
       {root, key, kind, parent, node_id, type}
   end
 
+  @doc """
+  The WHOLE span rows of the subtree occupying `(root, start..stop)` — every row whose
+  order-key lies within the root's own window, inclusive of the endpoints. Returns the
+  raw `{{:span, root, key, kind, parent}, {node_id, type}}` tuples so a relocation can
+  transform and re-insert them. Bounded ordered-set range scan; backs `NodeData.rehome`.
+  """
+  @spec span_window(tid, id, binary(), binary()) :: [tuple()]
+  def span_window(index, root, start, stop) do
+    :ets.select(index, span_window_spec(root, start, stop))
+  end
+
+  @doc "Delete every span row in the `(root, start..stop)` window (same match as `span_window`)."
+  @spec span_window_delete(tid, id, binary(), binary()) :: non_neg_integer()
+  def span_window_delete(index, root, start, stop) do
+    :ets.select_delete(index, span_window_delete_spec(root, start, stop))
+  end
+
+  defmatchspecp span_window_spec(root, start, stop) do
+    {{:span, ^root, key, _kind, _parent}, _val} = row when key >= start and key <= stop ->
+      row
+  end
+
+  defmatchspecp span_window_delete_spec(root, start, stop) do
+    {{:span, ^root, key, _kind, _parent}, _val} when key >= start and key <= stop ->
+      true
+  end
+
+  @doc """
+  Fetch the `{id, record}` rows for exactly the ids in `id_set` (a map used as a set —
+  membership is `is_map_key`). One bounded select, no per-id round trip. Backs the
+  record-rollup step of `NodeData.rehome`.
+  """
+  @spec records_of(tid, %{optional(id) => term()}) :: [{id, struct()}]
+  def records_of(nodes, id_set) do
+    :ets.select(nodes, records_of_spec(id_set))
+  end
+
+  @doc """
+  Bulk-replace records from `replacements` (`%{id => new_record}`) in ONE `select_replace`:
+  a single-clause spec closing over the map (`is_map_key`/`map_get`), so it is independent
+  of subtree size. The record key (id) is unchanged, so `select_replace` is legal here (a
+  value-only swap). Backs the record-write step of `NodeData.rehome`.
+  """
+  @spec records_replace(tid, %{optional(id) => struct()}) :: non_neg_integer()
+  def records_replace(nodes, replacements) do
+    :ets.select_replace(nodes, records_replace_spec(replacements))
+  end
+
+  defmatchspec records_of_spec(id_set) do
+    {id, _} = entry when is_map_key(id_set, id) -> entry
+  end
+
+  defmatchspec records_replace_spec(replacements) do
+    {id, _} when is_map_key(replacements, id) -> {id, :erlang.map_get(id, replacements)}
+  end
+
   @doc "Ordered child ids of `node_id`, read from its record's extent + span rows."
   @spec span_children_of(tid, tid, id) :: [id]
   def span_children_of(nodes, index, node_id) do
     node = fetch!(nodes, node_id)
-    span_children(index, ns_root(node, node_id), node_id, node.start, node.stop)
+    span_children(index, node.root, node_id, node.start, node.stop)
   end
 
   @doc "Ordered ELEMENT child ids of `node_id` (backs `ParentNode.children`)."
   @spec span_element_children_of(tid, tid, id) :: [id]
   def span_element_children_of(nodes, index, node_id) do
     node = fetch!(nodes, node_id)
-    span_element_children(index, ns_root(node, node_id), node_id, node.start, node.stop)
+    span_element_children(index, node.root, node_id, node.start, node.stop)
   end
 
   @doc """
@@ -1064,7 +1211,7 @@ defmodule DOM.NodeData.Table do
     span_retract(index, id)
 
     span_put(index, id, %{
-      root: ns_root(data, id),
+      root: data.root,
       parent: data.parent,
       start: data.start,
       stop: data.stop,
@@ -1687,17 +1834,17 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
-  # Root ↔ topology consistency: every node's stored tree-root (`ns_root`) must equal
-  # the root reached by walking `.parent` to the top. A parentless node is its own tree
-  # root, so its `.root` field must be nil (ns_root resolves to itself). This guards the
-  # extent/`.root` bookkeeping against drifting from the actual parent topology — e.g. a
-  # detached subtree must be re-rooted, not left pointing at its old tree.
+  # Root ↔ topology consistency: every node's stored tree-root (`.root`) must equal the
+  # root reached by walking `.parent` to the top. A parentless node is its own tree root,
+  # so its `.root` field IS its own id (root == self). This guards the extent/`.root`
+  # bookkeeping against drifting from the actual parent topology — e.g. a detached subtree
+  # must be re-rooted, not left pointing at its old tree.
   defp check_roots!(rows) do
     by_id = Map.new(rows)
 
     for {id, data} <- rows do
       walked = walked_root(by_id, id)
-      stored = ns_root(data, id)
+      stored = data.root
 
       unless walked == stored do
         raise "root drift: #{inspect(id)} stores root #{inspect(stored)} " <>
@@ -1874,9 +2021,9 @@ defmodule DOM.NodeData.Table do
     expected =
       for {id, %{start: start} = data} <- rows,
           start != nil,
-          kind_key <- [{start, :start}, {ns_stop(data), :stop}] do
+          kind_key <- [{start, :start}, {data.stop, :stop}] do
         {key, kind} = kind_key
-        {ns_root(data, id), key, kind, data.parent, id, NodeData.type(data)}
+        {data.root, key, kind, data.parent, id, NodeData.type(data)}
       end
 
     if Enum.sort(expected) != Enum.sort(spans) do
@@ -1887,21 +2034,16 @@ defmodule DOM.NodeData.Table do
 
   # containment: each of `id`'s extent-children sits strictly inside its window.
   defp check_node_containment!(id, data, by_id) do
-    {start, stop} = {ns_start(data), ns_stop(data)}
+    {start, stop} = {data.start, data.stop}
 
     for {kid, k} <- by_id, k.parent == id do
-      unless start < ns_start(k) and ns_start(k) < ns_stop(k) and ns_stop(k) < stop do
+      unless start < k.start and k.start < k.stop and k.stop < stop do
         raise "extent containment violated: child #{inspect(kid)} " <>
-                "#{inspect({ns_start(k), ns_stop(k)})} not inside " <>
+                "#{inspect({k.start, k.stop})} not inside " <>
                 "#{inspect(id)} #{inspect({start, stop})}"
       end
     end
   end
-
-  # A root node (parent nil) is its own tree root; else read the stored root.
-  defp ns_root(data, id), do: Map.get(data, :root) || id
-  defp ns_start(data), do: Map.fetch!(data, :start)
-  defp ns_stop(data), do: Map.fetch!(data, :stop)
 
   # The index must equal, as a sorted list of {membership, node} pairs, the
   # memberships (tag/id/class/attr) of the element rows — no missing, stale,

@@ -72,13 +72,19 @@ defmodule CSSTable do
 
     :ets.insert(
       table,
-      {id,
-       %NodeData.Element{
-         local_name: node.local_name,
-         namespace: node.namespace,
-         attributes: node.attributes,
-         parent: parent_id
-       }}
+      {
+        id,
+        # extent is placeholder (root: id, root window) — carve_extents overwrites it.
+        %NodeData.Element{
+          local_name: node.local_name,
+          namespace: node.namespace,
+          attributes: node.attributes,
+          parent: parent_id,
+          root: id,
+          start: <<0x00>>,
+          stop: <<0x80>>
+        }
+      }
     )
 
     ids = Map.put(ids, index, id)
@@ -88,7 +94,19 @@ defmodule CSSTable do
 
   defp insert(table, %{kind: :text} = node, parent_id, index, ids, kids) do
     id = make_ref()
-    :ets.insert(table, {id, %NodeData.Text{value: node.value, parent: parent_id}})
+    # extent is placeholder (root: id, root window) — carve_extents overwrites it.
+    :ets.insert(
+      table,
+      {id,
+       %NodeData.Text{
+         value: node.value,
+         parent: parent_id,
+         root: id,
+         start: <<0x00>>,
+         stop: <<0x80>>
+       }}
+    )
+
     {index + 1, Map.put(ids, index, id), kids}
   end
 
