@@ -263,13 +263,14 @@ defmodule DOM.HTML.TreeBuilder.Tree do
     Enum.zip(kids, Table.multispan(start, stop, length(kids)))
   end
 
-  # Build the DOM.NodeData.* record for `id`, insert it, and index it if element.
+  # Build the DOM.NodeData.* record for `id`, index it if element, then insert it —
+  # index-first, like every other both-tables write. (Span rows are mirrored in bulk by
+  # the caller's `span_index_all` after the whole tree is loaded.)
   defp write_record(tree, tid, index, id, root, parent, start, stop) do
     data = fetch(tree, id)
     record = to_record(data, parent, root, start, stop)
-    :ets.insert(tid, {id, record})
-
     if data.kind == :element, do: Table.index_put(index, id, record)
+    :ets.insert(tid, {id, record})
     :ok
   end
 

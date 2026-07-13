@@ -10,15 +10,16 @@ Table.create_child + text-split/textContent.
 
 ---
 
-## 6. Convention: INDEX-FIRST (index writes before nodes record) — PARTIAL
+## 6. Convention: INDEX-FIRST (index writes before nodes record) — DONE
 **Decision:** any op writing BOTH tables writes the index row(s) FIRST, then the nodes record.
 **Audit (this session):** 6 WRONG (nodes-first) sites found — `seed_root`, `create_child`
 (_table.ex); `write_record` (tree.ex); `init`, `materialize_subtree`, `set_definition`
 (dom.ex). `rehome`, `delete_subtree` already correct.
-**Status:** seed_root/create_child FIXED (rewritten via NodeData.insert, index-first). `init`
-document-node: still record-then-span_put — TODO. `materialize_subtree`, `set_definition`,
-`write_record`: TODO. (create_child itself: place-then-mirror; the mirror reads the placed
-record — a legit exception since extent isn't known until carved.)
+**Status:** ALL FIXED. seed_root/create_child rewritten via NodeData.insert; `init` now uses
+`NodeData.insert` for the document node; `set_definition`, `materialize_subtree`,
+`write_record` reordered (membership/index write before the nodes record). Only exception:
+`create_child`'s span mirror runs after `place_child` carves (extent isn't known until then)
+— its membership/span write is still bounded to the one new node. Full suite green.
 
 ## 7. `_contents.ex` (range clone/extract) — DEFERRED via temporary seam
 **Decision:** the whole module is tid-only; its char-node minting (`new_char_node`) needs the

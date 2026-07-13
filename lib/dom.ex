@@ -68,20 +68,13 @@ defmodule DOM do
     nodes = :ets.new(__MODULE__, [:set, :private])
     index = :ets.new(:"#{__MODULE__}.Index", [:ordered_set, :private])
     # The document node is a labeled tree root from birth (root == self, parent nil, the
-    # fixed root window), and mirrored into the span index — the same "labeled from
-    # creation" invariant every node obeys.
-    :ets.insert(
+    # fixed root window). `NodeData.insert` writes it index-first, like every other node.
+    NodeData.insert(
+      document_id,
+      %NodeData.Document{root: document_id, start: <<0x00>>, stop: <<0x80>>},
       nodes,
-      {document_id, %NodeData.Document{root: document_id, start: <<0x00>>, stop: <<0x80>>}}
+      index
     )
-
-    Table.span_put(index, document_id, %{
-      root: document_id,
-      parent: nil,
-      start: <<0x00>>,
-      stop: <<0x80>>,
-      type: :document
-    })
 
     # Stash the tids in the process dictionary so a re-entrant read from inside the
     # server (e.g. an event listener running during dispatch) can reach the tables
@@ -694,8 +687,9 @@ defmodule DOM do
   defp set_definition(nodes, index, node_id, definition) do
     record = fetch_node!(nodes, node_id)
     updated = %{record | definition: definition}
-    :ets.insert(nodes, {node_id, updated})
+    # index-first: refresh membership rows, then the record.
     Table.index_put(index, node_id, updated)
+    :ets.insert(nodes, {node_id, updated})
     :ok
   end
 
@@ -2224,8 +2218,10 @@ defmodule DOM do
         {id, node_data} -> {id, %{node_data | root: child_id}}
       end)
 
-    true = :ets.insert(nodes, subtree)
+    # index-first: membership rows for each element, then the records in bulk. (Span rows
+    # for the subtree are written by the caller's rehome after it is attached.)
     Enum.each(subtree, fn {id, node_data} -> index_element(index, id, node_data) end)
+    true = :ets.insert(nodes, subtree)
   end
 
   @doc false
