@@ -2156,12 +2156,14 @@ defmodule DOM do
       materialize_subtree(nodes, index, child_id, subtree)
 
       if match?(%NodeData.DocumentFragment{}, child_data) do
-        append_fragment(nodes, parent_id, child_id, child_data)
+        moved = append_fragment(nodes, parent_id, child_id, child_data)
+        # the emptied fragment node was materialized without span rows — mirror it too.
+        Enum.each([child_id | moved], &Table.span_rehome(nodes, index, &1))
       else
         Table.append_child(nodes, parent_id, child_id)
+        Table.span_rehome(nodes, index, child_id)
       end
 
-      resync_spans(nodes, index)
       {:ok, node_handle(nodes, child_id)}
     end
   end
@@ -2190,12 +2192,14 @@ defmodule DOM do
         materialize_subtree(nodes, index, child_id, subtree)
 
         if match?(%NodeData.DocumentFragment{}, child_data) do
-          insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
+          moved = insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
+          # the emptied fragment node was materialized without span rows — mirror it too.
+          Enum.each([child_id | moved], &Table.span_rehome(nodes, index, &1))
         else
           Table.insert_before(nodes, parent_id, child_id, reference_child_id)
+          Table.span_rehome(nodes, index, child_id)
         end
 
-        resync_spans(nodes, index)
         {:ok, node_handle(nodes, child_id)}
     end
   end
@@ -2223,7 +2227,7 @@ defmodule DOM do
       fn nodes, index ->
         node_data = fetch_node!(nodes, node_id)
         detach_from_parent(nodes, node_id, node_data)
-        resync_spans(nodes, index)
+        Table.span_rehome(nodes, index, node_id)
         node_handle(nodes, node_id)
       end,
       :mutates
@@ -2241,7 +2245,7 @@ defmodule DOM do
         dst_server,
         fn nodes, index ->
           materialize_subtree(nodes, index, node_id, subtree)
-          resync_spans(nodes, index)
+          Table.span_rehome(nodes, index, node_id)
           # custom element: adoptedCallback in the DESTINATION (its registry governs),
           # passing (element, old_document, new_document).
           custom_element_adopted(nodes, node_id, src_doc)
@@ -2291,7 +2295,7 @@ defmodule DOM do
       dst_server,
       fn nodes, index ->
         materialize_subtree(nodes, index, new_root, rekeyed)
-        resync_spans(nodes, index)
+        Table.span_rehome(nodes, index, new_root)
         node_handle(nodes, new_root)
       end,
       :mutates
@@ -2349,7 +2353,9 @@ defmodule DOM do
       adjust_node_iterators(nodes, index, parent_id, child_id, at)
 
       Table.remove_child(nodes, parent_id, child_id)
-      resync_spans(nodes, index)
+      # detach re-roots the removed subtree (root → child_id, its parent → nil); mirror
+      # just that subtree's span rows to the re-rooted records.
+      Table.span_rehome(nodes, index, child_id)
       adjust_ranges(nodes, index, snapshot, {:remove, parent_id, at, removed_keys})
       # The removed node's parent may be a shadow host (or the removed subtree may
       # contain slots) — recompute assignment from the parent directly.
