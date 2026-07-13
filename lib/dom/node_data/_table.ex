@@ -807,21 +807,6 @@ defmodule DOM.NodeData.Table do
   # so `class="x x"` yields one `x`). Mirrored in check_consistency!.
   defp class_tokens(value), do: value |> String.split() |> Enum.uniq()
 
-  @doc """
-  Populate `index` from every element row in `nodes` — the bulk path used once a
-  subtree is built directly into the node table (e.g. after HTML parsing, where
-  the tree builder writes only the node table). Assumes the relevant index rows
-  are not already present.
-  """
-  @spec reindex(tid, tid) :: :ok
-  def reindex(nodes, index) do
-    for {node_id, %NodeData.Element{} = element} <- :ets.tab2list(nodes) do
-      index_put(index, node_id, element)
-    end
-
-    :ok
-  end
-
   @doc "All node ids carrying `value` for the given index kind (`:tag`/`:id`/`:class`)."
   @spec index_lookup(tid, :tag | :id | :class, String.t()) :: [id]
   def index_lookup(index, :tag, value), do: :ets.select(index, index_tag_spec(value))
@@ -1002,17 +987,23 @@ defmodule DOM.NodeData.Table do
   end
 
   @doc """
-  Mirror the span rows for exactly the subtree rooted at `root_id` from its records —
-  the incremental replacement for a whole-table `span_index_all` after a graft/move.
-  An extent mutator (`append_child`/`insert_before`/`remove_child`/…) has already
-  written the moved subtree's new extents onto the records (`graft` computed them);
-  this copies that result into the span rows, retract-then-put per node. Bounded to
-  the moved subtree (`subtree_ids/2`), not the whole table.
+  Mirror all derived index rows for exactly the subtree rooted at `root_id` from its
+  records — the incremental replacement for the whole-table `span_index_all` +
+  `reindex` after a graft/move. An extent mutator
+  (`append_child`/`insert_before`/`remove_child`/…) has already written the moved
+  subtree's new extents onto the records (`graft` computed them); this copies that
+  result per node, retract-then-put: the span rows (from the extent) and, for
+  elements, the tag/id/class/attr membership rows. Bounded to the moved subtree
+  (`subtree_ids/2`), not the whole table.
   """
-  @spec span_rehome(tid, tid, id) :: :ok
-  def span_rehome(nodes, index, root_id) do
+  @spec rehome_subtree(tid, tid, id) :: :ok
+  def rehome_subtree(nodes, index, root_id) do
     for id <- subtree_ids(nodes, root_id) do
-      span_mirror_one(index, id, fetch!(nodes, id))
+      data = fetch!(nodes, id)
+      span_mirror_one(index, id, data)
+      # element membership (tag/id/class/attr) rows follow the moved subtree too, so a
+      # built/relocated subtree needs no separate whole-table `reindex`.
+      if match?(%NodeData.Element{}, data), do: index_put(index, id, data)
     end
 
     :ok

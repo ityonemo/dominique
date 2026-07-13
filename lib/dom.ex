@@ -1465,9 +1465,9 @@ defmodule DOM do
       # labeled); appending children carves inside its window.
       fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
       Table.append_children(nodes, fragment_id, clones)
-      Table.reindex(nodes, index)
-      # everything built this op lives under the fragment now — mirror its whole subtree.
-      Table.span_rehome(nodes, index, fragment_id)
+      # everything built this op lives under the fragment now — mirror its whole subtree
+      # (span + id/class/tag/attr index rows).
+      Table.rehome_subtree(nodes, index, fragment_id)
 
       node_handle(nodes, fragment_id)
     end)
@@ -1490,10 +1490,9 @@ defmodule DOM do
     # labeled 1-node tree from birth (empty/collapsed range → still labeled).
     fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
     Table.append_children(nodes, fragment_id, extracted)
-    Table.reindex(nodes, index)
-    # the extracted subtrees are now under the fragment; span_rehome retracts their old
-    # (source) span rows by id and re-mirrors the whole fragment subtree.
-    Table.span_rehome(nodes, index, fragment_id)
+    # the extracted subtrees are now under the fragment; rehome_subtree retracts their
+    # old (source) rows by id and re-mirrors the whole fragment subtree (span + index).
+    Table.rehome_subtree(nodes, index, fragment_id)
 
     collapse_range_to_start(index, range_id)
     reconcile_ranges(nodes, index, snapshot)
@@ -1615,9 +1614,9 @@ defmodule DOM do
       moved = Table.children(nodes, fragment.node_id)
       Enum.each(moved, &Table.append_child(nodes, element_id, &1))
 
-      Table.reindex(nodes, index)
-      # the fragment's children are now under element_id — mirror each moved subtree.
-      Enum.each(moved, &Table.span_rehome(nodes, index, &1))
+      # the fragment's children are now under element_id — mirror each moved subtree
+      # (span + index rows); element_id itself is mirrored when it is inserted below.
+      Enum.each(moved, &Table.rehome_subtree(nodes, index, &1))
 
       {{start_key, so2}, _} = Table.range_boundaries(index, range_id)
       container = Table.node_at_start_key(nodes, start_key)
@@ -1702,7 +1701,7 @@ defmodule DOM do
       next -> Table.insert_before(nodes, parent_id, new_id, next)
     end
 
-    Table.span_rehome(nodes, index, new_id)
+    Table.rehome_subtree(nodes, index, new_id)
   end
 
   # split rule (boundaries past the split move into the new node) + the insert of
@@ -1776,7 +1775,7 @@ defmodule DOM do
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
         moved = append_fragment(nodes, parent_id, child_id, child_data)
-        Enum.each(moved, &Table.span_rehome(nodes, index, &1))
+        Enum.each(moved, &Table.rehome_subtree(nodes, index, &1))
         :ok
 
       :else ->
@@ -1784,7 +1783,7 @@ defmodule DOM do
         siblings = Table.children(nodes, parent_id)
         at = length(siblings)
         Table.append_child(nodes, parent_id, child_id)
-        Table.span_rehome(nodes, index, child_id)
+        Table.rehome_subtree(nodes, index, child_id)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
         # childList: appended at the end — previousSibling is the old last child.
@@ -2121,7 +2120,7 @@ defmodule DOM do
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
         moved = insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
-        Enum.each(moved, &Table.span_rehome(nodes, index, &1))
+        Enum.each(moved, &Table.rehome_subtree(nodes, index, &1))
         :ok
 
       :else ->
@@ -2129,7 +2128,7 @@ defmodule DOM do
         siblings = Table.children(nodes, parent_id)
         at = child_index(nodes, parent_id, reference_child_id)
         Table.insert_before(nodes, parent_id, child_id, reference_child_id)
-        Table.span_rehome(nodes, index, child_id)
+        Table.rehome_subtree(nodes, index, child_id)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
         # childList: inserted before the reference — previousSibling is the child
@@ -2155,10 +2154,10 @@ defmodule DOM do
       if match?(%NodeData.DocumentFragment{}, child_data) do
         moved = append_fragment(nodes, parent_id, child_id, child_data)
         # the emptied fragment node was materialized without span rows — mirror it too.
-        Enum.each([child_id | moved], &Table.span_rehome(nodes, index, &1))
+        Enum.each([child_id | moved], &Table.rehome_subtree(nodes, index, &1))
       else
         Table.append_child(nodes, parent_id, child_id)
-        Table.span_rehome(nodes, index, child_id)
+        Table.rehome_subtree(nodes, index, child_id)
       end
 
       {:ok, node_handle(nodes, child_id)}
@@ -2191,10 +2190,10 @@ defmodule DOM do
         if match?(%NodeData.DocumentFragment{}, child_data) do
           moved = insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
           # the emptied fragment node was materialized without span rows — mirror it too.
-          Enum.each([child_id | moved], &Table.span_rehome(nodes, index, &1))
+          Enum.each([child_id | moved], &Table.rehome_subtree(nodes, index, &1))
         else
           Table.insert_before(nodes, parent_id, child_id, reference_child_id)
-          Table.span_rehome(nodes, index, child_id)
+          Table.rehome_subtree(nodes, index, child_id)
         end
 
         {:ok, node_handle(nodes, child_id)}
@@ -2224,7 +2223,7 @@ defmodule DOM do
       fn nodes, index ->
         node_data = fetch_node!(nodes, node_id)
         detach_from_parent(nodes, node_id, node_data)
-        Table.span_rehome(nodes, index, node_id)
+        Table.rehome_subtree(nodes, index, node_id)
         node_handle(nodes, node_id)
       end,
       :mutates
@@ -2242,7 +2241,7 @@ defmodule DOM do
         dst_server,
         fn nodes, index ->
           materialize_subtree(nodes, index, node_id, subtree)
-          Table.span_rehome(nodes, index, node_id)
+          Table.rehome_subtree(nodes, index, node_id)
           # custom element: adoptedCallback in the DESTINATION (its registry governs),
           # passing (element, old_document, new_document).
           custom_element_adopted(nodes, node_id, src_doc)
@@ -2275,9 +2274,9 @@ defmodule DOM do
       dst_server,
       fn nodes, index ->
         clone_id = Table.clone(nodes, node_id, deep?)
-        Table.reindex(nodes, index)
-        # clone builds a fresh labeled subtree rooted at clone_id — mirror just it.
-        Table.span_rehome(nodes, index, clone_id)
+        # clone builds a fresh labeled subtree rooted at clone_id — mirror just it
+        # (span + id/class/tag/attr index rows).
+        Table.rehome_subtree(nodes, index, clone_id)
         node_handle(nodes, clone_id)
       end,
       :mutates
@@ -2293,7 +2292,7 @@ defmodule DOM do
       dst_server,
       fn nodes, index ->
         materialize_subtree(nodes, index, new_root, rekeyed)
-        Table.span_rehome(nodes, index, new_root)
+        Table.rehome_subtree(nodes, index, new_root)
         node_handle(nodes, new_root)
       end,
       :mutates
@@ -2353,7 +2352,7 @@ defmodule DOM do
       Table.remove_child(nodes, parent_id, child_id)
       # detach re-roots the removed subtree (root → child_id, its parent → nil); mirror
       # just that subtree's span rows to the re-rooted records.
-      Table.span_rehome(nodes, index, child_id)
+      Table.rehome_subtree(nodes, index, child_id)
       adjust_ranges(nodes, index, snapshot, {:remove, parent_id, at, removed_keys})
       # The removed node's parent may be a shadow host (or the removed subtree may
       # contain slots) — recompute assignment from the parent directly.
@@ -2514,7 +2513,7 @@ defmodule DOM do
 
         Table.remove_child(nodes, parent_id, old_child_id)
         # mirror the inserted subtree(s) and the removed (re-rooted) old child's subtree.
-        Enum.each([old_child_id | inserted], &Table.span_rehome(nodes, index, &1))
+        Enum.each([old_child_id | inserted], &Table.rehome_subtree(nodes, index, &1))
         {:ok, node_handle(nodes, new_child_id)}
     end
   end
@@ -2671,9 +2670,9 @@ defmodule DOM do
   def _node_clone_node(server, node_id, deep?) do
     _atomic_ets_op(server, fn nodes, index ->
       clone_id = Table.clone(nodes, node_id, deep?)
-      Table.reindex(nodes, index)
-      # clone builds a fresh labeled subtree rooted at clone_id — mirror just it.
-      Table.span_rehome(nodes, index, clone_id)
+      # clone builds a fresh labeled subtree rooted at clone_id — mirror just it
+      # (span + id/class/tag/attr index rows).
+      Table.rehome_subtree(nodes, index, clone_id)
       node_handle(nodes, clone_id)
     end)
   end
@@ -2965,7 +2964,7 @@ defmodule DOM do
         parsed = Table.children(nodes, root)
         Table.append_children(nodes, node_id, parsed)
         # mirror the detached old children and the newly-appended parsed subtrees.
-        Enum.each(old ++ parsed, &Table.span_rehome(nodes, index, &1))
+        Enum.each(old ++ parsed, &Table.rehome_subtree(nodes, index, &1))
         :ok
       end,
       :mutates
@@ -2987,7 +2986,7 @@ defmodule DOM do
 
         insert_adjacent(nodes, index, node_id, position, parsed)
         # each parsed subtree was spliced into place — mirror them.
-        Enum.each(parsed, &Table.span_rehome(nodes, index, &1))
+        Enum.each(parsed, &Table.rehome_subtree(nodes, index, &1))
         :ok
       end,
       :mutates
@@ -3057,7 +3056,7 @@ defmodule DOM do
         Enum.each(old, &Table.remove_child(nodes, node_id, &1))
         parsed = Table.children(nodes, root)
         Table.append_children(nodes, node_id, parsed)
-        Enum.each(old ++ parsed, &Table.span_rehome(nodes, index, &1))
+        Enum.each(old ++ parsed, &Table.rehome_subtree(nodes, index, &1))
         # The shadow tree's <slot>s changed — reassign the host's light children.
         _recompute_slots(nodes, index, node_id)
         :ok
@@ -3158,7 +3157,7 @@ defmodule DOM do
             Table.insert_children_before(nodes, parent_id, parsed, node_id)
             Table.remove_child(nodes, parent_id, node_id)
             # the parsed subtrees were spliced in and node_id was removed (re-rooted).
-            Enum.each([node_id | parsed], &Table.span_rehome(nodes, index, &1))
+            Enum.each([node_id | parsed], &Table.rehome_subtree(nodes, index, &1))
             :ok
           end
         end,
@@ -3332,7 +3331,7 @@ defmodule DOM do
           # (extent written), then mirror just that node's span rows.
           text_id = Table.create_text(nodes, value)
           Table.append_child(nodes, node_id, text_id)
-          Table.span_rehome(nodes, index, text_id)
+          Table.rehome_subtree(nodes, index, text_id)
         end
 
         :ok

@@ -56,8 +56,8 @@ defmodule CSSTable do
     # Carve nested-set extents over the built tree (adjacency the matcher reads
     # comes from these + their span rows) — the shape DOM.CSS.match/3 expects.
     carve_extents(table, kids, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
-    Table.reindex(table, index)
-    Table.span_index_all(table, index)
+    # mirror span + membership index rows for the built tree in one subtree walk.
+    Table.rehome_subtree(table, index, Map.fetch!(ids, 0))
     {%{nodes: table, index: index}, ids}
   end
 

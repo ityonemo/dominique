@@ -75,8 +75,8 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, doc, ul)
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      # mirror span + id/class index rows for the built tree in one subtree walk.
+      Table.rehome_subtree(tid, index, doc)
       %{doc: doc, ul: ul, a: a, b: b}
     end
 
@@ -90,8 +90,7 @@ defmodule DOM.NodeData.TableTest do
       frag = Table.create_element(tid, "section")
       child = Table.create_element(tid, "p")
       Table.append_child(tid, frag, child)
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      Table.rehome_subtree(tid, index, frag)
 
       assert Table.check_consistency!(tid, index) == :ok
     end
@@ -416,9 +415,8 @@ defmodule DOM.NodeData.TableTest do
     test "mirrors extents so check_consistency! passes and span reads match",
          %{tid: tid, index: index} do
       ids = field_tree(tid)
-      # the real parse seam runs both: memberships (reindex) + span rows (span_index_all)
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      # mirror span + membership index rows for the built tree in one subtree walk.
+      Table.rehome_subtree(tid, index, ids.root)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, ids.root) == [ids.ul]
@@ -427,14 +425,15 @@ defmodule DOM.NodeData.TableTest do
     end
 
     test "handles multiple roots (a detached second tree)", %{tid: tid, index: index} do
-      field_tree(tid)
+      ids = field_tree(tid)
       # a second, detached root (parent nil) — e.g. a template content fragment
       frag = Table.create_document(tid)
       x = Table.create_element(tid, "x")
       Table.append_child(tid, frag, x)
 
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      # mirror each root's subtree (span + membership rows).
+      Table.rehome_subtree(tid, index, ids.root)
+      Table.rehome_subtree(tid, index, frag)
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, frag) == [x]
     end
@@ -582,8 +581,7 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
 
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      Table.rehome_subtree(tid, index, root)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, root) == [ul]
@@ -594,7 +592,6 @@ defmodule DOM.NodeData.TableTest do
       root = Table.create_document(tid)
       x = Table.create_element(tid, "x")
       Table.append_child(tid, root, x)
-      Table.reindex(tid, index)
 
       Table.span_index_all(tid, index)
       first = :ets.tab2list(index) |> Enum.sort()
@@ -611,8 +608,7 @@ defmodule DOM.NodeData.TableTest do
     test "returns children in start-key order, reading only the nodes tid",
          %{tid: tid, index: index} do
       ids = field_tree(tid)
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      Table.rehome_subtree(tid, index, ids.root)
 
       # Same document order as the span-index read, but derived from the record
       # `start` keys on the nodes tid — no index consulted.
@@ -625,8 +621,7 @@ defmodule DOM.NodeData.TableTest do
     test "agrees with span_children_of and the children field for every node",
          %{tid: tid, index: index} do
       ids = field_tree(tid)
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      Table.rehome_subtree(tid, index, ids.root)
 
       for id <- Map.values(ids) do
         assert Table.children_by_extent(tid, id) == Table.span_children_of(tid, index, id)
@@ -658,8 +653,7 @@ defmodule DOM.NodeData.TableTest do
       # append_child(target, b) grafts b's whole ([b, c]) subtree into target,
       # writing the new extents live — no separate graft/carve step.
       Table.append_child(tid, target, b)
-      Table.reindex(tid, index)
-      Table.span_index_all(tid, index)
+      Table.rehome_subtree(tid, index, root)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, target) == [b]
