@@ -2182,10 +2182,13 @@ defmodule DOM do
   end
 
   defp materialize_subtree(nodes, index, child_id, subtree) do
+    # The exported records carry their SOURCE `.root`. In the destination the subtree is
+    # a detached tree rooted at `child_id`, so re-root: `child_id` -> root nil (itself),
+    # its descendants -> `child_id`. (place_child/graft re-roots again on re-attach.)
     subtree =
       Enum.map(subtree, fn
-        {^child_id, node_data} -> {child_id, %{node_data | parent: nil}}
-        entry -> entry
+        {^child_id, node_data} -> {child_id, %{node_data | parent: nil, root: nil}}
+        {id, node_data} -> {id, %{node_data | root: child_id}}
       end)
 
     true = :ets.insert(nodes, subtree)

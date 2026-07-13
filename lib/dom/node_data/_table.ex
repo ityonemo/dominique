@@ -194,11 +194,9 @@ defmodule DOM.NodeData.Table do
   defp carve_windows([only], a, b), do: [{only, interval(a, b)}]
   defp carve_windows(ids, a, b), do: Enum.zip(ids, multispan(a, b, length(ids)))
 
-  @doc "Remove `child_id` from `parent_id` (child keeps its own subtree, parent nil)."
+  @doc "Remove `child_id` from `parent_id` (child keeps its own subtree, re-rooted at it)."
   @spec remove_child(tid, id, id) :: :ok
-  def remove_child(tid, _parent_id, child_id) do
-    put(tid, child_id, %{fetch!(tid, child_id) | parent: nil})
-  end
+  def remove_child(tid, _parent_id, child_id), do: detach(tid, child_id)
 
   # Give `child_id` an extent in the `(gap_a, gap_b)` gap under `parent_id`'s tree,
   # writing its `root`/`start`/`stop`. A fresh child (no extent yet) gets a single
@@ -269,14 +267,26 @@ defmodule DOM.NodeData.Table do
   end
 
   @doc """
-  Detach `id` from its current parent (no-op when already detached). Adjacency is
-  the child's `parent` pointer + its extent, so detaching is just nilling `parent`
-  — the extent-order children scan (`children_by_extent/2`) then no longer sees it.
-  The caller overwrites `parent` on re-attach.
+  Detach `id` from its current parent (no-op when already detached). `id`'s `parent`
+  is nilled and its subtree is RE-ROOTED at `id` (its own `.root` -> nil = itself, its
+  descendants' `.root` -> `id`) so the `.root`/extent bookkeeping stays truthful to the
+  parent topology — the consistency net asserts `.root` == the walked parent root. The
+  caller overwrites `parent`/`root` again on re-attach (via `place_child`/`graft`).
   """
   @spec detach(tid, id) :: :ok
   def detach(tid, id) do
-    put(tid, id, %{fetch!(tid, id) | parent: nil})
+    put(tid, id, %{fetch!(tid, id) | parent: nil, root: nil})
+    reroot_descendants(tid, id)
+    :ok
+  end
+
+  # Point every descendant of `id`'s `.root` at `id` (its new tree root). `id` itself
+  # keeps `root: nil` (a tree root; ns_root resolves it to itself).
+  defp reroot_descendants(tid, id) do
+    for descendant <- descendant_ids(tid, id) do
+      put(tid, descendant, %{fetch!(tid, descendant) | root: id})
+    end
+
     :ok
   end
 
@@ -1543,6 +1553,7 @@ defmodule DOM.NodeData.Table do
 
     if index do
       check_index!(rows, index)
+      check_roots!(rows)
       check_spans!(rows, index)
       check_ranges!(rows, index)
       check_slots!(rows, index)
@@ -1551,6 +1562,34 @@ defmodule DOM.NodeData.Table do
     end
 
     :ok
+  end
+
+  # Root ↔ topology consistency: every node's stored tree-root (`ns_root`) must equal
+  # the root reached by walking `.parent` to the top. A parentless node is its own tree
+  # root, so its `.root` field must be nil (ns_root resolves to itself). This guards the
+  # extent/`.root` bookkeeping against drifting from the actual parent topology — e.g. a
+  # detached subtree must be re-rooted, not left pointing at its old tree.
+  defp check_roots!(rows) do
+    by_id = Map.new(rows)
+
+    for {id, data} <- rows do
+      walked = walked_root(by_id, id)
+      stored = ns_root(data, id)
+
+      unless walked == stored do
+        raise "root drift: #{inspect(id)} stores root #{inspect(stored)} " <>
+                "but its parent chain reaches #{inspect(walked)}"
+      end
+    end
+
+    :ok
+  end
+
+  defp walked_root(by_id, id) do
+    case Map.fetch!(by_id, id) do
+      %{parent: nil} -> id
+      %{parent: parent} -> walked_root(by_id, parent)
+    end
   end
 
   # All index rows of a given family, matched server-side by the key's head tag
