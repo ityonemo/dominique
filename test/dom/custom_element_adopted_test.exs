@@ -49,7 +49,9 @@ defmodule DOM.CustomElementAdoptedTest do
     parent = self()
     src = new_document("<div id='s'></div>")
     dst = new_document("<div id='d'></div>")
-    DOM.define_element(dst, "x-foo", reporting_def(parent))
+    # defined + upgraded in the SOURCE (so the element carries its definition), but
+    # never inserted — a detached upgraded element.
+    DOM.define_element(src, "x-foo", reporting_def(parent))
 
     foo = DOM.create_element(src, "x-foo")
     flush()
@@ -75,17 +77,46 @@ defmodule DOM.CustomElementAdoptedTest do
     refute_received {:adopted, _, _, _}
   end
 
-  test "no adoptedCallback when the destination has no definition" do
+  test "the definition travels with the element: adopted fires even when dst has no registration" do
+    parent = self()
+    src = new_document("<div id='s'></div>")
+    dst = new_document("<div id='d'></div>")
+    # only the SOURCE registers x-foo; the element is upgraded there and carries its
+    # definition, so adoption into dst (no registration) still fires adopted (browser
+    # semantics — an element retains its definition across adoption).
+    DOM.define_element(src, "x-foo", reporting_def(parent))
+
+    foo = DOM.create_element(src, "x-foo")
+    foo_id = foo.node_id
+    flush()
+
+    adopted = DOM.adopt_node(dst, foo)
+
+    assert_received {:adopted, ^foo_id, _old, _new}
+    # and it is still :defined in dst (carries a definition, though dst's registry lacks it)
+    assert DOM.matches(adopted, ":defined")
+    # re-inserting into dst fires connectedCallback (still upgraded)
+    d = DOM.query_selector(dst, "#d")
+    Node.append_child(d, adopted)
+    assert_received {:connected, ^foo_id}
+  end
+
+  test "a later define in dst does NOT re-upgrade an already-upgraded adopted element" do
     parent = self()
     src = new_document("<div id='s'></div>")
     dst = new_document("<div id='d'></div>")
     DOM.define_element(src, "x-foo", reporting_def(parent))
-
     foo = DOM.create_element(src, "x-foo")
+    DOM.adopt_node(dst, foo)
     flush()
 
-    DOM.adopt_node(dst, foo)
-    refute_received {:adopted, _, _, _}
+    # dst defines x-foo with a DIFFERENT (marker) definition; the already-upgraded
+    # adopted element must not be re-constructed.
+    DOM.define_element(dst, "x-foo", %Def{
+      constructed: fn el -> send(parent, {:reupgraded, el.node_id}) end
+    })
+
+    refute_received {:reupgraded, _}
   end
 
   defp flush do

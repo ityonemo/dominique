@@ -9,6 +9,12 @@ defmodule DOM.NodeData.Element do
     # tree), or nil. Parallel to `content` (template contents); the serializer
     # never reads it, so the shadow tree is invisible to the host's outerHTML.
     :shadow_root,
+    # The custom-element definition (a DOM.CustomElementDefinition) once this element
+    # is UPGRADED, else nil. Stored on the element — not just a registry lookup — so it
+    # RIDES the element across cross-document adoption (the browser: an upgraded element
+    # retains its definition). `nil` = undefined; a later `define` upgrades only nil
+    # elements. `:defined` = a built-in name OR definition != nil.
+    definition: nil,
     namespace: :html,
     parent: nil,
     attributes: [],
@@ -37,6 +43,7 @@ defmodule DOM.NodeData.Element do
           namespace: namespace(),
           content: reference() | nil,
           shadow_root: reference() | nil,
+          definition: DOM.CustomElementDefinition.t() | nil,
           parent: reference() | nil,
           attributes: [{attr_key(), String.t()}],
           root: reference() | nil,

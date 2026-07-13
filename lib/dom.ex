@@ -562,10 +562,12 @@ defmodule DOM do
     _atomic_ets_op(server, fn _nodes, index -> Table.custom_element_get(index, name) end)
   end
 
-  # Upgrade every element of `name` in document order: constructed → attributeChanged
-  # for each existing observed attribute → connected (if in a document tree).
+  # Upgrade every UNDEFINED element of `name` in document order (an already-upgraded
+  # element — one that carries a definition — is left alone): constructed →
+  # attributeChanged for each existing observed attribute → connected (if connected).
   defp upgrade_all(nodes, index, name, definition) do
-    for node_id <- elements_named(nodes, name) do
+    for node_id <- elements_named(nodes, name),
+        fetch_node!(nodes, node_id).definition == nil do
       upgrade(nodes, index, node_id, definition)
     end
   end
@@ -575,22 +577,32 @@ defmodule DOM do
     Table.elements_by_tag_name(nodes, Process.get(:document_id), name)
   end
 
-  # Run the constructed reaction once (guarded by {:upgraded, node_id}); on upgrade of
-  # an existing element also replay attributeChanged for its observed attrs and, if it
-  # is connected, connectedCallback.
+  # Attach `definition` to the element (the upgrade marker), then run constructed,
+  # attributeChanged for each existing observed attr, and connected (if in a tree).
   defp upgrade(nodes, index, node_id, definition) do
-    if Table.signal_slot(index, {:upgraded, node_id}) do
-      run_callback(definition.constructed, node_handle(nodes, node_id))
+    set_definition(nodes, index, node_id, definition)
+    run_callback(definition.constructed, node_handle(nodes, node_id))
 
-      for {name, value} <- observed_attributes_present(nodes, node_id, definition) do
-        run_callback4(definition.attribute_changed, node_handle(nodes, node_id), name, nil, value)
-      end
+    for {name, value} <- observed_attributes_present(nodes, node_id, definition) do
+      run_callback4(definition.attribute_changed, node_handle(nodes, node_id), name, nil, value)
+    end
 
-      if connected?(nodes, node_id) do
-        run_callback(definition.connected, node_handle(nodes, node_id))
-      end
+    if connected?(nodes, node_id) do
+      run_callback(definition.connected, node_handle(nodes, node_id))
     end
   end
+
+  # Store `definition` on the element record (the persistent upgrade marker).
+  defp set_definition(nodes, index, node_id, definition) do
+    record = fetch_node!(nodes, node_id)
+    updated = %{record | definition: definition}
+    :ets.insert(nodes, {node_id, updated})
+    Table.index_put(index, node_id, updated)
+    :ok
+  end
+
+  # An element's own definition (nil if undefined/not a custom element).
+  defp definition_of(nodes, node_id), do: fetch_node!(nodes, node_id).definition
 
   # The element's string-keyed attributes that the definition observes, in order.
   defp observed_attributes_present(nodes, node_id, definition) do
@@ -604,57 +616,46 @@ defmodule DOM do
 
   # The reaction hooks called from the mutation ops (all synchronous, no microtask).
 
-  # constructed: at create_element, if `local_name` is a defined custom element.
+  # constructed: at create_element, if `local_name` is a defined custom element. The
+  # definition is attached to the element (its upgrade marker) before the callback.
   defp custom_element_constructed(nodes, index, node_id, local_name) do
     if definition = Table.custom_element_get(index, local_name) do
-      if Table.signal_slot(index, {:upgraded, node_id}) do
-        run_callback(definition.constructed, node_handle(nodes, node_id))
-      end
+      set_definition(nodes, index, node_id, definition)
+      run_callback(definition.constructed, node_handle(nodes, node_id))
     end
 
     :ok
   end
 
-  # connected: for each custom element in the inserted subtree, in tree order.
-  defp custom_element_connected(nodes, index, root_id) do
-    for node_id <- custom_elements_in_subtree(nodes, index, root_id) do
-      definition = Table.custom_element_get(index, local_name(nodes, node_id))
+  # connected: for each upgraded custom element in the inserted subtree, tree order.
+  defp custom_element_connected(nodes, root_id) do
+    for {node_id, definition} <- upgraded_in_subtree(nodes, root_id) do
       run_callback(definition.connected, node_handle(nodes, node_id))
     end
 
     :ok
   end
 
-  # The {node_id, definition} of every defined custom element in the subtree being
+  # The {node_id, definition} of every upgraded custom element in the subtree being
   # removed — captured BEFORE detaching, and only when the parent is connected (a
   # remove from a detached subtree fires no disconnectedCallback). [] otherwise.
-  defp capture_disconnecting(nodes, index, parent_id, child_id) do
-    if connected?(nodes, parent_id) do
-      for id <- custom_elements_in_subtree(nodes, index, child_id),
-          do: {id, Table.custom_element_get(index, local_name(nodes, id))}
-    else
-      []
-    end
+  defp capture_disconnecting(nodes, parent_id, child_id) do
+    if connected?(nodes, parent_id), do: upgraded_in_subtree(nodes, child_id), else: []
   end
 
   # Like capture_disconnecting, but keyed on the ADOPTED root itself being connected
   # (adopt detaches the root, so the root's own connectedness decides disconnect).
-  defp capture_disconnecting_root(nodes, index, root_id) do
-    if connected?(nodes, root_id) do
-      for id <- custom_elements_in_subtree(nodes, index, root_id),
-          do: {id, Table.custom_element_get(index, local_name(nodes, id))}
-    else
-      []
-    end
+  defp capture_disconnecting_root(nodes, root_id) do
+    if connected?(nodes, root_id), do: upgraded_in_subtree(nodes, root_id), else: []
   end
 
-  # adopted: in the destination, for each defined custom element in the adopted
-  # subtree, fire adoptedCallback(element, old_document, new_document).
-  defp custom_element_adopted(nodes, index, root_id, old_doc) do
+  # adopted: in the destination, for each upgraded custom element in the adopted
+  # subtree (the definition rode in on the element), fire adoptedCallback(element,
+  # old_document, new_document).
+  defp custom_element_adopted(nodes, root_id, old_doc) do
     new_doc = document_handle(nodes, Process.get(:document_id))
 
-    for node_id <- custom_elements_in_subtree(nodes, index, root_id) do
-      definition = Table.custom_element_get(index, local_name(nodes, node_id))
+    for {node_id, definition} <- upgraded_in_subtree(nodes, root_id) do
       run_adopted(definition.adopted, node_handle(nodes, node_id), old_doc, new_doc)
     end
 
@@ -679,11 +680,12 @@ defmodule DOM do
   end
 
   @doc false
-  # attributeChanged: fires for a defined element on EVERY set of an observed attr
-  # (even to the same value — unlike MutationObserver). @doc false so DOM.Element's
-  # attribute path can reach it across the module boundary.
-  def _custom_element_attribute_changed(nodes, index, node_id, name, old, new) do
-    definition = Table.custom_element_get(index, local_name(nodes, node_id))
+  # attributeChanged: fires for an UPGRADED element on EVERY set of an observed attr
+  # (even to the same value — unlike MutationObserver). Reads the element's carried
+  # definition. @doc false so DOM.Element's attribute path can reach it across the
+  # module boundary. (`_index` kept for a uniform bridge signature.)
+  def _custom_element_attribute_changed(nodes, _index, node_id, name, old, new) do
+    definition = definition_of(nodes, node_id)
 
     if definition && name in definition.observed_attributes do
       run_callback4(definition.attribute_changed, node_handle(nodes, node_id), name, old, new)
@@ -692,11 +694,11 @@ defmodule DOM do
     :ok
   end
 
-  # The defined custom elements in `root_id`'s subtree (root inclusive), document order.
-  defp custom_elements_in_subtree(nodes, index, root_id) do
-    for {id, %NodeData.Element{local_name: ln}} <- subtree(nodes, root_id),
-        Table.custom_element_get(index, ln),
-        do: id
+  # The {id, definition} of every UPGRADED custom element in `root_id`'s subtree (root
+  # inclusive), document order — those carrying a definition on their record.
+  defp upgraded_in_subtree(nodes, root_id) do
+    for {id, %NodeData.Element{definition: def}} when def != nil <- subtree(nodes, root_id),
+        do: {id, def}
   end
 
   defp connected?(nodes, node_id), do: tree_root_id(nodes, node_id) == Process.get(:document_id)
@@ -707,8 +709,6 @@ defmodule DOM do
       parent -> tree_root_id(nodes, parent)
     end
   end
-
-  defp local_name(nodes, node_id), do: fetch_node!(nodes, node_id).local_name
 
   defp run_callback(nil, _el), do: :ok
   defp run_callback(fun, el) when is_function(fun, 1), do: fun.(el)
@@ -1287,7 +1287,7 @@ defmodule DOM do
         # childList: appended at the end — previousSibling is the old last child.
         queue_child_list_record(nodes, index, parent_id, [child_id], [], List.last(siblings), nil)
         # custom element: connectedCallback for the inserted subtree, if now connected.
-        if connected?(nodes, parent_id), do: custom_element_connected(nodes, index, child_id)
+        if connected?(nodes, parent_id), do: custom_element_connected(nodes, child_id)
         :ok
     end
   end
@@ -1640,7 +1640,7 @@ defmodule DOM do
         prev = if at > 0, do: Enum.at(siblings, at - 1)
         queue_child_list_record(nodes, index, parent_id, [child_id], [], prev, reference_child_id)
         # custom element: connectedCallback for the inserted subtree, if now connected.
-        if connected?(nodes, parent_id), do: custom_element_connected(nodes, index, child_id)
+        if connected?(nodes, parent_id), do: custom_element_connected(nodes, child_id)
         :ok
     end
   end
@@ -1741,7 +1741,7 @@ defmodule DOM do
           resync_spans(nodes, index)
           # custom element: adoptedCallback in the DESTINATION (its registry governs),
           # passing (element, old_document, new_document).
-          custom_element_adopted(nodes, index, node_id, src_doc)
+          custom_element_adopted(nodes, node_id, src_doc)
           node_handle(nodes, node_id)
         end,
         :mutates
@@ -1755,8 +1755,8 @@ defmodule DOM do
   # in `node_id`'s subtree (they are about to leave the document). Returns the source
   # document handle (the adoptedCallback's old_document).
   defp _adopt_disconnect(src_server, node_id) do
-    _atomic_ets_op(src_server, fn nodes, index ->
-      disconnecting = capture_disconnecting_root(nodes, index, node_id)
+    _atomic_ets_op(src_server, fn nodes, _index ->
+      disconnecting = capture_disconnecting_root(nodes, node_id)
       custom_element_disconnected(nodes, disconnecting)
       document_handle(nodes, Process.get(:document_id))
     end)
@@ -1840,7 +1840,7 @@ defmodule DOM do
       removed_keys = removed_subtree_keys(nodes, child_id)
       # custom element: capture the connected custom elements in the subtree BEFORE
       # detaching (with their defs), to fire disconnectedCallback after.
-      disconnecting = capture_disconnecting(nodes, index, parent_id, child_id)
+      disconnecting = capture_disconnecting(nodes, parent_id, child_id)
 
       Table.remove_child(nodes, parent_id, child_id)
       resync_spans(nodes, index)

@@ -157,12 +157,11 @@ defmodule DOM.CSS.PseudoClass do
     end)
   end
 
-  # :defined — a built-in element (non-hyphenated name) or a registered custom
-  # element (a hyphenated name whose definition is in the document registry).
-  def match(%{name: "defined"}, %{nodes: nodes, index: index}, candidates) do
+  # :defined — a built-in element (non-hyphenated name) or an UPGRADED custom element
+  # (one carrying a definition on its record — set at create/define/adopt).
+  def match(%{name: "defined"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, fn id ->
-      name = Query.local_name(nodes, id)
-      not String.contains?(name, "-") or Table.custom_element_get(index, name) != nil
+      not String.contains?(Query.local_name(nodes, id), "-") or upgraded?(nodes, id)
     end)
   end
 
@@ -269,6 +268,11 @@ defmodule DOM.CSS.PseudoClass do
 
   # :read-write — a mutable input (a type the `readonly` attribute applies to,
   # without `readonly`/`disabled`), a mutable textarea, or a contenteditable host.
+  # An upgraded custom element carries a definition on its record.
+  defp upgraded?(nodes, id) do
+    match?(%DOM.NodeData.Element{definition: def} when def != nil, Table.fetch!(nodes, id))
+  end
+
   defp read_write?(nodes, id) do
     case Query.local_name(nodes, id) do
       "input" ->

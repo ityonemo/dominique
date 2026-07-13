@@ -345,36 +345,34 @@ Browser-verified task-vs-microtask ordering + interval repeat/clear
 
 **Custom elements (implemented):** `DOM.define_element/3` (`customElements.define`) +
 `DOM.custom_element_get/2`; a definition is a `DOM.CustomElementDefinition` struct of
-callbacks (`constructed`/`connected`/`disconnected`/`attribute_changed`) +
-`observed_attributes`, stored per document under a `{:custom_element_def, name}` index
-row. **Reactions run SYNCHRONOUSLY** — unlike slotchange/MutationObserver, the browser
-runs `connectedCallback` DURING `appendChild`, so the callbacks are invoked INLINE at
-the end of each triggering op (`create` → `constructed`, `append`/`insert` →
-`connected` in tree order if the parent is connected, `remove` → `disconnected`,
-`set_attribute` → `attribute_changed` for observed attrs, fired on **every** set even
-to the same value — captured via the `changed_name` threaded into
-`Element.update_attributes`). `define_element` upgrades existing matching elements
-(`constructed` → `attribute_changed` per existing observed attr → `connected`), guarded
-once-per-element by a `{:upgraded, node_id}` row. Redefining raises
-`DOM.NotSupportedError` (returned as an error tuple and raised caller-side, per the
-in-server-raise convention). The `:defined` CSS pseudo matches built-ins + registered
-custom elements. **`adoptedCallback`** fires on cross-document `adopt_node/2`: the source
-server fires `disconnected` for the (formerly connected) subtree before removing it, then
-the DESTINATION server fires `adopted(element, old_document, new_document)` using the
-**destination's** registry (each document server has its own registry — a documented
-Dominique model choice; a same-document adopt fires nothing). Browser-verified lifecycle
-+ upgrade (`test/integration/custom_element_test.exs`); the adopted semantics are
-unit-tested (`test/dom/custom_element_adopted_test.exs`) rather than oracle-compared,
-because Dominique's model *deliberately differs* from the browser here (an oracle would
-fail, not merely be hard): in a browser an element **retains its definition** across
-adoption, so `adopted`/`connected` fire even when the destination document never
-registered the name (probe-verified: adopting into a fresh document with an empty
-registry still fires `adopted:true:true` and the element stays upgraded). Dominique
-attaches definitions to a **document server's registry**, not to the element, so an
-adopted element is governed by the *destination's* registry — the two agree when both
-documents define the name, and diverge exactly when the destination lacks it. That
-"undefined-in-destination" case is unit-tested as Dominique-correct (no callback),
-which is the point of divergence, so a browser oracle cannot be shared.
+callbacks (`constructed`/`connected`/`disconnected`/`attribute_changed`/`adopted`) +
+`observed_attributes`. The registry (`{:custom_element_def, name}` index row) is used
+only to *find* a definition at `create`/`define`; **an UPGRADED element carries its
+definition on its own record** (the `definition` field on `DOM.NodeData.Element`, nil =
+undefined). This is the browser's model — the definition rides the element, so it
+survives cross-document adoption. `:defined` = a built-in name OR `definition != nil`.
+
+**Reactions run SYNCHRONOUSLY** — unlike slotchange/MutationObserver, the browser runs
+`connectedCallback` DURING `appendChild`, so the callbacks are invoked INLINE at the end
+of each triggering op (`create` → `constructed`, `append`/`insert` → `connected` in tree
+order if the parent is connected, `remove` → `disconnected`, `set_attribute` →
+`attribute_changed` for observed attrs, fired on **every** set even to the same value —
+via the `changed_name` threaded into `Element.update_attributes`). Reactions read the
+element's carried `definition`, not a registry lookup. `define_element` upgrades existing
+matching elements whose `definition` is still nil (`constructed` → `attribute_changed`
+per existing observed attr → `connected`); a later `define` never re-upgrades an
+already-upgraded element. Redefining a name raises `DOM.NotSupportedError` (error tuple
+raised caller-side, per the in-server convention).
+
+**`adoptedCallback`** fires on cross-document `adopt_node/2`: the source server fires
+`disconnected` for the (formerly connected) subtree before removing it, then the
+destination fires `adopted(element, old_document, new_document)`. Because the definition
+rides the element record through `_export_subtree`/`materialize_subtree`, this is
+fully browser-faithful — an element adopted into a document that never registered its
+name still fires `adopted`/`connected` and stays `:defined` (a same-document adopt fires
+nothing). Browser-verified lifecycle + upgrade
+(`test/integration/custom_element_test.exs`) AND the adopt-into-undefined-destination
+case (`test/integration/custom_element_adopted_test.exs`).
 
 **Deferred (still need more than the queue):** imperative `slot.assign()` (manual
 slotting); and default actions / interaction & navigation state (`:hover`, `:focus`,
