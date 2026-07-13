@@ -443,13 +443,6 @@ defmodule DOM do
     {:noreply, %{state | fragment_root: root_id}}
   end
 
-  # Register an element's tag/id/class in the index (no-op for non-elements).
-  defp index_element(index, node_id, %NodeData.Element{} = element) do
-    Table.index_put(index, node_id, element)
-  end
-
-  defp index_element(_index, _node_id, _node_data), do: :ok
-
   # The content DocumentFragment handle of a template element (nil if unset).
   # Elements permitted to host a shadow root (§ "valid shadow host name"): a fixed
   # HTML set, plus any valid custom-element name (a hyphenated local name).
@@ -2236,8 +2229,9 @@ defmodule DOM do
       _atomic_ets_op(
         dst_server,
         fn nodes, index ->
+          # materialize writes the detached subtree into both tables (span + membership);
+          # adopt leaves it detached, so no further rehome is needed.
           materialize_subtree(nodes, index, node_id, subtree)
-          Table.rehome_subtree(nodes, index, node_id)
           # custom element: adoptedCallback in the DESTINATION (its registry governs),
           # passing (element, old_document, new_document).
           custom_element_adopted(nodes, node_id, src_doc)
@@ -2287,8 +2281,9 @@ defmodule DOM do
     _atomic_ets_op(
       dst_server,
       fn nodes, index ->
+        # materialize writes the detached subtree into both tables; import leaves it
+        # detached, so no further rehome is needed.
         materialize_subtree(nodes, index, new_root, rekeyed)
-        Table.rehome_subtree(nodes, index, new_root)
         node_handle(nodes, new_root)
       end,
       :mutates
@@ -2944,11 +2939,9 @@ defmodule DOM do
         root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
         old = Table.children(nodes, node_id)
-        Enum.each(old, &Table.remove_child(nodes, node_id, &1))
+        Enum.each(old, &NodeData.detach(nodes, index, &1))
         parsed = Table.children(nodes, root)
-        Table.append_children(nodes, node_id, parsed)
-        # mirror the detached old children and the newly-appended parsed subtrees.
-        Enum.each(old ++ parsed, &Table.rehome_subtree(nodes, index, &1))
+        NodeData.graft_into(nodes, index, node_id, parsed, :last)
         :ok
       end,
       :mutates
@@ -2969,8 +2962,6 @@ defmodule DOM do
         parsed = Table.children(nodes, root)
 
         insert_adjacent(nodes, index, node_id, position, parsed)
-        # each parsed subtree was spliced into place — mirror them.
-        Enum.each(parsed, &Table.rehome_subtree(nodes, index, &1))
         :ok
       end,
       :mutates
@@ -2985,28 +2976,33 @@ defmodule DOM do
   defp adjacent_context_id(nodes, node_id, _sibling), do: Table.parent(nodes, node_id)
 
   # Splice `parsed` child ids at the adjacency position relative to `node_id`.
-  defp insert_adjacent(nodes, _index, node_id, "afterbegin", parsed) do
-    case List.first(Table.children(nodes, node_id)) do
-      nil -> Table.append_children(nodes, node_id, parsed)
-      reference -> Table.insert_children_before(nodes, node_id, parsed, reference)
-    end
+  # Resolve the (parent, position) for an insertAdjacent position and move `parsed` there in
+  # one cross-table graft (both tables).
+  defp insert_adjacent(nodes, index, node_id, "afterbegin", parsed) do
+    NodeData.graft_into(nodes, index, node_id, parsed, before_first(nodes, node_id))
   end
 
-  defp insert_adjacent(nodes, _index, node_id, "beforeend", parsed) do
-    Table.append_children(nodes, node_id, parsed)
+  defp insert_adjacent(nodes, index, node_id, "beforeend", parsed) do
+    NodeData.graft_into(nodes, index, node_id, parsed, :last)
   end
 
-  defp insert_adjacent(nodes, _index, node_id, "beforebegin", parsed) do
+  defp insert_adjacent(nodes, index, node_id, "beforebegin", parsed) do
     parent = Table.parent(nodes, node_id)
-    Table.insert_children_before(nodes, parent, parsed, node_id)
+    NodeData.graft_into(nodes, index, parent, parsed, {:before, node_id})
   end
 
-  defp insert_adjacent(nodes, _index, node_id, "afterend", parsed) do
+  defp insert_adjacent(nodes, index, node_id, "afterend", parsed) do
     parent = Table.parent(nodes, node_id)
+    next = Enum.at(Table.children(nodes, parent), child_index(nodes, parent, node_id) + 1)
+    position = if next, do: {:before, next}, else: :last
+    NodeData.graft_into(nodes, index, parent, parsed, position)
+  end
 
-    case Enum.at(Table.children(nodes, parent), child_index(nodes, parent, node_id) + 1) do
-      nil -> Table.append_children(nodes, parent, parsed)
-      reference -> Table.insert_children_before(nodes, parent, parsed, reference)
+  # `:last` when `parent_id` has no children, else `{:before, first_child}`.
+  defp before_first(nodes, parent_id) do
+    case List.first(Table.children(nodes, parent_id)) do
+      nil -> :last
+      first -> {:before, first}
     end
   end
 
@@ -3037,10 +3033,9 @@ defmodule DOM do
           )
 
         old = Table.children(nodes, node_id)
-        Enum.each(old, &Table.remove_child(nodes, node_id, &1))
+        Enum.each(old, &NodeData.detach(nodes, index, &1))
         parsed = Table.children(nodes, root)
-        Table.append_children(nodes, node_id, parsed)
-        Enum.each(old ++ parsed, &Table.rehome_subtree(nodes, index, &1))
+        NodeData.graft_into(nodes, index, node_id, parsed, :last)
         # The shadow tree's <slot>s changed — reassign the host's light children.
         _recompute_slots(nodes, index, node_id)
         :ok
@@ -3138,10 +3133,9 @@ defmodule DOM do
             root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
             parsed = Table.children(nodes, root)
-            Table.insert_children_before(nodes, parent_id, parsed, node_id)
-            Table.remove_child(nodes, parent_id, node_id)
-            # the parsed subtrees were spliced in and node_id was removed (re-rooted).
-            Enum.each([node_id | parsed], &Table.rehome_subtree(nodes, index, &1))
+            NodeData.graft_into(nodes, index, parent_id, parsed, {:before, node_id})
+            # node_id is replaced — detach it (cross-table re-root to self).
+            NodeData.detach(nodes, index, node_id)
             :ok
           end
         end,
