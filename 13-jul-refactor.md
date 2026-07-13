@@ -1,5 +1,9 @@
 # 13-Jul Refactor — decisions & status
 
+**STATUS: COMPLETE.** All items done; every subtree relocation in the library flows through
+the unified `DOM.NodeData.rehome` (`detach` / `graft_into`). Full suite green (6826 tests + 6
+properties, unit + Chromium/Firefox); credo at baseline. Final commit `9a6d05f`.
+
 A cascade of architectural decisions taken while building the unified subtree-relocation
 primitive. Each item: the decision, why, and its status. Ordered roughly as taken.
 
@@ -63,9 +67,21 @@ _contents.ex is restructured create-in-place.
   `place_child(ren)`, `graft_subtree`, `rehome_subtree` (3 remaining call sites). Removable once
   _contents.ex produces fully-labeled nodes.
 
-## Item 7 — `_contents.ex` create-in-place rewrite — FUTURE
-Remove the temporary `create_text_record`/`create_comment_record` seam; build the extracted/
-cloned tree rooted-in-place on the unified API.
+## Item 7 — `_contents.ex` create-in-place — DONE (9a6d05f)
+DOM.Range.Contents threads `index` and builds fully-labeled nodes (create_text/comment/clone
++ graft_into/detach). Seam (`create_text_record`/`create_comment_record`) + dead legacy
+mutators (`append_children`/`insert_children_before`/`place_children`/`rehome_subtree`) removed.
+Kept `append_child` + `clone_record` (record-only) for the tree builder's tid-only <template>
+clone path only.
+
+## End state
+- ONE relocation primitive: `NodeData.rehome(nodes, index, {root,start,stop}, transform)`, with
+  `NodeData.detach` (to self-root) and `NodeData.graft_into` (into a parent slot; `Table.graft_plan`
+  supplies the key math). `NodeData.insert` is the one both-tables node writer (index-first).
+- `root == self` everywhere; enforce_keys makes every node labeled at construction.
+- Every `create_*` takes `(nodes, index)`; index-first at every both-tables site.
+- Still record-only (tree-builder parse path, by design): `Table.append_child`, `clone_record`,
+  `place_child`/`graft_subtree` (via append_child), `span_index_all` (bulk parse mirror).
 
 ## Related memory
 `[[unified-rehome-design]]`, `[[index-before-nodes-convention]]`,
