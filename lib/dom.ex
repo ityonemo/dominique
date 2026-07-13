@@ -1795,12 +1795,6 @@ defmodule DOM do
     end
   end
 
-  # Mirror the record extents (written live by the extent-authoritative mutators)
-  # into the index's span rows after an incremental mutation. Idempotent; the
-  # extents are the order source, so this only copies them — no carve from the
-  # `children` field.
-  defp resync_spans(nodes, index), do: Table.span_index_all(nodes, index)
-
   # Recompute slot assignment for the shadow host affected by a mutation, if any,
   # and signal slotchange on the slots that changed. `node_id` is a node touched by
   # the op (a light child of a host, or a slot in a shadow tree); Slots.affected_host
@@ -2282,7 +2276,8 @@ defmodule DOM do
       fn nodes, index ->
         clone_id = Table.clone(nodes, node_id, deep?)
         Table.reindex(nodes, index)
-        Table.span_index_all(nodes, index)
+        # clone builds a fresh labeled subtree rooted at clone_id — mirror just it.
+        Table.span_rehome(nodes, index, clone_id)
         node_handle(nodes, clone_id)
       end,
       :mutates
@@ -2505,14 +2500,21 @@ defmodule DOM do
         # Splice the replacement in immediately before old_child (each moved node
         # via the extent-authoritative insert_before, so extents land in old's
         # neighborhood), then remove old_child — leaving its gap.
-        if match?(%NodeData.DocumentFragment{}, new_child_data) do
-          insert_fragment(nodes, parent_id, new_child_id, new_child_data, old_child_id)
-        else
-          Table.insert_before(nodes, parent_id, new_child_id, old_child_id)
-        end
+        inserted =
+          if match?(%NodeData.DocumentFragment{}, new_child_data) do
+            # fragment (possibly materialized) → its emptied node + moved children.
+            [
+              new_child_id
+              | insert_fragment(nodes, parent_id, new_child_id, new_child_data, old_child_id)
+            ]
+          else
+            Table.insert_before(nodes, parent_id, new_child_id, old_child_id)
+            [new_child_id]
+          end
 
         Table.remove_child(nodes, parent_id, old_child_id)
-        resync_spans(nodes, index)
+        # mirror the inserted subtree(s) and the removed (re-rooted) old child's subtree.
+        Enum.each([old_child_id | inserted], &Table.span_rehome(nodes, index, &1))
         {:ok, node_handle(nodes, new_child_id)}
     end
   end
@@ -2527,8 +2529,8 @@ defmodule DOM do
       fn nodes, index ->
         node_data = fetch_node!(nodes, node_id)
         detach_from_parent(nodes, node_id, node_data)
+        # delete_subtree retracts each removed node's span rows; nothing remaining moved.
         delete_subtree(nodes, index, node_id)
-        resync_spans(nodes, index)
         :ok
       end,
       :mutates
@@ -2670,7 +2672,8 @@ defmodule DOM do
     _atomic_ets_op(server, fn nodes, index ->
       clone_id = Table.clone(nodes, node_id, deep?)
       Table.reindex(nodes, index)
-      Table.span_index_all(nodes, index)
+      # clone builds a fresh labeled subtree rooted at clone_id — mirror just it.
+      Table.span_rehome(nodes, index, clone_id)
       node_handle(nodes, clone_id)
     end)
   end
@@ -2957,9 +2960,12 @@ defmodule DOM do
         context = %{name: element.local_name, namespace: element.namespace}
         root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-        Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
-        Table.append_children(nodes, node_id, Table.children(nodes, root))
-        resync_spans(nodes, index)
+        old = Table.children(nodes, node_id)
+        Enum.each(old, &Table.remove_child(nodes, node_id, &1))
+        parsed = Table.children(nodes, root)
+        Table.append_children(nodes, node_id, parsed)
+        # mirror the detached old children and the newly-appended parsed subtrees.
+        Enum.each(old ++ parsed, &Table.span_rehome(nodes, index, &1))
         :ok
       end,
       :mutates
@@ -2980,7 +2986,8 @@ defmodule DOM do
         parsed = Table.children(nodes, root)
 
         insert_adjacent(nodes, index, node_id, position, parsed)
-        resync_spans(nodes, index)
+        # each parsed subtree was spliced into place — mirror them.
+        Enum.each(parsed, &Table.span_rehome(nodes, index, &1))
         :ok
       end,
       :mutates
@@ -3046,9 +3053,11 @@ defmodule DOM do
             Process.get(:document_id)
           )
 
-        Enum.each(Table.children(nodes, node_id), &Table.remove_child(nodes, node_id, &1))
-        Table.append_children(nodes, node_id, Table.children(nodes, root))
-        resync_spans(nodes, index)
+        old = Table.children(nodes, node_id)
+        Enum.each(old, &Table.remove_child(nodes, node_id, &1))
+        parsed = Table.children(nodes, root)
+        Table.append_children(nodes, node_id, parsed)
+        Enum.each(old ++ parsed, &Table.span_rehome(nodes, index, &1))
         # The shadow tree's <slot>s changed — reassign the host's light children.
         _recompute_slots(nodes, index, node_id)
         :ok
@@ -3145,9 +3154,11 @@ defmodule DOM do
             context = %{name: parent.local_name, namespace: parent.namespace}
             root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-            Table.insert_children_before(nodes, parent_id, Table.children(nodes, root), node_id)
+            parsed = Table.children(nodes, root)
+            Table.insert_children_before(nodes, parent_id, parsed, node_id)
             Table.remove_child(nodes, parent_id, node_id)
-            resync_spans(nodes, index)
+            # the parsed subtrees were spliced in and node_id was removed (re-rooted).
+            Enum.each([node_id | parsed], &Table.span_rehome(nodes, index, &1))
             :ok
           end
         end,
@@ -3318,12 +3329,12 @@ defmodule DOM do
 
         if value != "" do
           # append via the extent-authoritative mutator so the new text node is placed
-          # (extent written), then mirrored into the span rows by resync.
+          # (extent written), then mirror just that node's span rows.
           text_id = Table.create_text(nodes, value)
           Table.append_child(nodes, node_id, text_id)
+          Table.span_rehome(nodes, index, text_id)
         end
 
-        resync_spans(nodes, index)
         :ok
       end,
       :mutates
