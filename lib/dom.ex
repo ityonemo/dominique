@@ -2359,10 +2359,9 @@ defmodule DOM do
       # removed subtree, BEFORE detaching (needs the pre-remove tree positions).
       adjust_node_iterators(nodes, index, parent_id, child_id, at)
 
-      Table.remove_child(nodes, parent_id, child_id)
-      # detach re-roots the removed subtree (root → child_id, its parent → nil); mirror
-      # just that subtree's span rows to the re-rooted records.
-      Table.rehome_subtree(nodes, index, child_id)
+      # detach the removed subtree in one cross-table rehome: root → child_id (self),
+      # child_id's parent → nil, keeping every node's byte-keys.
+      NodeData.detach(nodes, index, child_id)
       adjust_ranges(nodes, index, snapshot, {:remove, parent_id, at, removed_keys})
       # The removed node's parent may be a shadow host (or the removed subtree may
       # contain slots) — recompute assignment from the parent directly.

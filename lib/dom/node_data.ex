@@ -103,6 +103,25 @@ after
     :ok
   end
 
+  @doc """
+  Detach the subtree rooted at `child_id` from its parent — the `rehome` whose destination
+  is the subtree's OWN self-root. Keeps every node's `start`/`stop` byte-keys (the nested-set
+  coordinates survive detach); rewrites `root` → `child_id` for the whole subtree, and the
+  subtree root's own `parent` → nil. Records + index rows both follow.
+  """
+  @spec detach(:ets.tid(), :ets.tid(), reference()) :: :ok
+  def detach(nodes, index, child_id) do
+    child = DOM.NodeData.Table.fetch!(nodes, child_id)
+
+    rehome(nodes, index, {child.root, child.start, child.stop}, fn
+      {{:span, _root, key, kind, _parent}, {^child_id, type}} ->
+        {{:span, child_id, key, kind, nil}, {child_id, type}}
+
+      {{:span, _root, key, kind, parent}, val} ->
+        {{:span, child_id, key, kind, parent}, val}
+    end)
+  end
+
   # Merge one transformed span row's relocation fields onto the node's record in the
   # rollup map. A node contributes two rows (:start, :stop): both agree on root/parent;
   # the :start row supplies `start`, the :stop row supplies `stop`. `root == self` is the
