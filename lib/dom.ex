@@ -1443,10 +1443,16 @@ defmodule DOM do
 
       snapshot = range_snapshot(nodes, index)
       Table.set_value(nodes, node_id, before)
-      new_id = Table.create_text(nodes, rest)
-      # insert_after re-homes the new tail's span rows; the shortened original keeps its
-      # extent (only its text value changed), so no other span row needs updating.
-      insert_after(nodes, index, parent_id, new_id, node_id)
+      # create the tail directly in its final slot (immediately after node_id) — no
+      # detached-then-graft; the shortened original keeps its extent (value-only change).
+      new_id =
+        Table.create_child(
+          nodes,
+          index,
+          parent_id,
+          %NodeData.Text{value: rest},
+          {:after, node_id}
+        )
 
       new_key = Table.fetch!(nodes, new_id).start
       adjust_split_ranges(nodes, index, snapshot, parent_id, node_id, orig_key, new_key, offset)
@@ -1560,14 +1566,13 @@ defmodule DOM do
     insert_relative(nodes, index, parent_id, node_id, reference)
   end
 
-  # Split `text_id` at `offset`; return the tail node to insert before. `insert_after`
-  # re-homes the tail's span rows (the following insert-before does not re-key it).
+  # Split `text_id` at `offset`; return the tail node to insert before. The tail is
+  # created directly in its final slot (immediately after `text_id`).
   defp split_text_for_insert(nodes, index, text_id, offset) do
     {before, rest} = String.split_at(Table.value(nodes, text_id), offset)
     Table.set_value(nodes, text_id, before)
-    tail = Table.create_text(nodes, rest)
-    insert_after(nodes, index, Table.parent(nodes, text_id), tail, text_id)
-    tail
+    parent_id = Table.parent(nodes, text_id)
+    Table.create_child(nodes, index, parent_id, %NodeData.Text{value: rest}, {:after, text_id})
   end
 
   defp insert_at_child_index(nodes, index, container, offset, node_id) do
@@ -1688,20 +1693,6 @@ defmodule DOM do
   defp range_endpoints!(nodes, index, range_id) do
     {{start_key, so}, {stop_key, eo}} = Table.range_boundaries(index, range_id)
     {Table.node_at_start_key(nodes, start_key), so, Table.node_at_start_key(nodes, stop_key), eo}
-  end
-
-  # Insert `new_id` immediately after `ref_id` under `parent_id` (append if last),
-  # re-homing its span rows to match the placement.
-  defp insert_after(nodes, index, parent_id, new_id, ref_id) do
-    kids = Table.children(nodes, parent_id)
-    at = Enum.find_index(kids, &(&1 == ref_id))
-
-    case Enum.at(kids, at + 1) do
-      nil -> Table.append_child(nodes, parent_id, new_id)
-      next -> Table.insert_before(nodes, parent_id, new_id, next)
-    end
-
-    Table.rehome_subtree(nodes, index, new_id)
   end
 
   # split rule (boundaries past the split move into the new node) + the insert of
@@ -3327,11 +3318,8 @@ defmodule DOM do
         |> Enum.each(&delete_subtree(nodes, index, &1))
 
         if value != "" do
-          # append via the extent-authoritative mutator so the new text node is placed
-          # (extent written), then mirror just that node's span rows.
-          text_id = Table.create_text(nodes, value)
-          Table.append_child(nodes, node_id, text_id)
-          Table.rehome_subtree(nodes, index, text_id)
+          # create the sole text child directly in place under node_id (now empty).
+          Table.create_child(nodes, index, node_id, %NodeData.Text{value: value}, :last)
         end
 
         :ok

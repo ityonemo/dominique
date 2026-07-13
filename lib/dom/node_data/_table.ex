@@ -129,6 +129,43 @@ defmodule DOM.NodeData.Table do
     id
   end
 
+  @doc """
+  Create `data` as a child of `parent_id` **directly in its final slot** — the
+  create-in-place counterpart to `seed_root`, for internal ops whose new node's parent
+  is already known (text split, textContent, range extract/clone assembly). No detached
+  1-node tree is ever born: the record is carved straight into the parent's gap and its
+  span + membership index rows are written once, so there is no seed → detach → graft →
+  rehome churn.
+
+  `position` selects the slot: `:last` (append after the last child), `{:before, ref}`,
+  or `{:after, ref}` (both siblings of `ref` under `parent_id`). Returns the new id.
+  """
+  @spec create_child(tid, tid, id, struct(), :last | {:before, id} | {:after, id}) :: id
+  def create_child(nodes, index, parent_id, data, position) do
+    id = make_ref()
+    # mint with no extent so `place_child` takes the fresh-node branch (a single
+    # `interval` carve into the slot — no graft), writing the final root/parent/start/stop.
+    true = :ets.insert(nodes, {id, %{data | parent: nil, root: nil, start: nil, stop: nil}})
+    parent = ensure_extent(nodes, parent_id)
+    place_child(nodes, parent_id, id, child_slot(nodes, parent_id, parent, position))
+    put(nodes, id, %{fetch!(nodes, id) | parent: parent_id})
+    # mirror the new node's derived rows in place (it is a single node — no subtree walk).
+    data = fetch!(nodes, id)
+    span_mirror_one(index, id, data)
+    if match?(%NodeData.Element{}, data), do: index_put(index, id, data)
+    id
+  end
+
+  # The (gap_a, gap_b) slot for a create/insert `position` under `parent_id`.
+  defp child_slot(nodes, parent_id, parent, :last),
+    do: extent_after_last(nodes, parent_id, parent)
+
+  defp child_slot(nodes, parent_id, parent, {:before, ref}),
+    do: extent_before(nodes, parent_id, parent, ref)
+
+  defp child_slot(nodes, parent_id, parent, {:after, ref}),
+    do: extent_after(nodes, parent_id, parent, ref)
+
   # ==========================================================================
   # Mutation (same-document, hierarchy-valid moves)
   # ==========================================================================
@@ -288,6 +325,19 @@ defmodule DOM.NodeData.Table do
 
     a = if prev = List.last(before), do: fetch!(tid, prev).stop, else: parent_data.start
     {a, fetch!(tid, reference_id).start}
+  end
+
+  # The gap for a node inserted immediately AFTER `reference_id`: (reference.stop,
+  # next_sibling.start || parent.stop), by extent order.
+  defp extent_after(tid, parent_id, parent_data, reference_id) do
+    after_ref =
+      tid
+      |> children_by_extent(parent_id)
+      |> Enum.drop_while(&(&1 != reference_id))
+      |> Enum.drop(1)
+
+    b = if next = List.first(after_ref), do: fetch!(tid, next).start, else: parent_data.stop
+    {fetch!(tid, reference_id).stop, b}
   end
 
   @doc """
