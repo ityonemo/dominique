@@ -269,15 +269,6 @@ defmodule DOM.NodeData.Table do
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
-  @doc "Insert `child_id` immediately before `reference_id` under `parent_id`."
-  @spec insert_before(tid, id, id, id) :: :ok
-  def insert_before(tid, parent_id, child_id, reference_id) do
-    detach(tid, child_id)
-    parent = ensure_extent(tid, parent_id)
-    place_child(tid, parent_id, child_id, extent_before(tid, parent_id, parent, reference_id))
-    put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
-  end
-
   @doc """
   Append `child_ids` (in order) to `parent_id` in one shot: carve the whole
   append gap into N windows with a single `multispan/3` (one `interval/2` for a
@@ -336,10 +327,6 @@ defmodule DOM.NodeData.Table do
   defp carve_windows([], _a, _b), do: []
   defp carve_windows([only], a, b), do: [{only, interval(a, b)}]
   defp carve_windows(ids, a, b), do: Enum.zip(ids, multispan(a, b, length(ids)))
-
-  @doc "Remove `child_id` from `parent_id` (child keeps its own subtree, re-rooted at it)."
-  @spec remove_child(tid, id, id) :: :ok
-  def remove_child(tid, _parent_id, child_id), do: detach(tid, child_id)
 
   # Give `child_id` an extent in the `(gap_a, gap_b)` gap under `parent_id`'s tree,
   # writing its `root`/`start`/`stop`. A fresh child (no extent yet) gets a single

@@ -484,18 +484,8 @@ defmodule DOM.NodeData.TableTest do
       assert extent_inside?(tid, c, b)
     end
 
-    test "insert_before assigns an extent between neighbors", %{tid: tid, index: index} do
-      p = Table.create_element(tid, index, "p")
-      a = Table.create_element(tid, index, "a")
-      b = Table.create_element(tid, index, "b")
-      x = Table.create_element(tid, index, "x")
-      Table.append_child(tid, p, a)
-      Table.append_child(tid, p, b)
-      Table.insert_before(tid, p, x, b)
-
-      assert Table.children_by_extent(tid, p) == [a, x, b]
-      assert extent_inside?(tid, x, p)
-    end
+    # insert-before extent placement now lives in Table.graft_plan / NodeData.graft_into
+    # (the `insert_before` mutator was removed); covered by rehome_test.exs.
 
     test "append_child MOVES an already-labeled subtree via graft", %{tid: tid, index: index} do
       root = Table.create_document(tid, index)
@@ -719,26 +709,9 @@ defmodule DOM.NodeData.TableTest do
       assert Table.parent(tid, c) == new
     end
 
-    test "insert_before splices immediately before the reference", %{tid: tid, index: index} do
-      p = Table.create_element(tid, index, "p")
-      a = Table.create_element(tid, index, "a")
-      b = Table.create_element(tid, index, "b")
-      x = Table.create_element(tid, index, "x")
-      Table.append_child(tid, p, a)
-      Table.append_child(tid, p, b)
-      Table.insert_before(tid, p, x, b)
-      assert Table.children(tid, p) == [a, x, b]
-      assert Table.parent(tid, x) == p
-    end
-
-    test "remove_child unlinks both ways", %{tid: tid, index: index} do
-      p = Table.create_element(tid, index, "p")
-      c = Table.create_element(tid, index, "c")
-      Table.append_child(tid, p, c)
-      Table.remove_child(tid, p, c)
-      assert Table.children(tid, p) == []
-      assert Table.parent(tid, c) == nil
-    end
+    # insert-before and remove/detach are exercised through NodeData.graft_into /
+    # NodeData.detach (see rehome_test.exs); the Table-level insert_before/remove_child
+    # mutators were removed when all callers moved to the unified rehome.
   end
 
   describe "attributes" do
