@@ -1466,7 +1466,8 @@ defmodule DOM do
       fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
       Table.append_children(nodes, fragment_id, clones)
       Table.reindex(nodes, index)
-      resync_spans(nodes, index)
+      # everything built this op lives under the fragment now — mirror its whole subtree.
+      Table.span_rehome(nodes, index, fragment_id)
 
       node_handle(nodes, fragment_id)
     end)
@@ -1490,7 +1491,9 @@ defmodule DOM do
     fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
     Table.append_children(nodes, fragment_id, extracted)
     Table.reindex(nodes, index)
-    resync_spans(nodes, index)
+    # the extracted subtrees are now under the fragment; span_rehome retracts their old
+    # (source) span rows by id and re-mirrors the whole fragment subtree.
+    Table.span_rehome(nodes, index, fragment_id)
 
     collapse_range_to_start(index, range_id)
     reconcile_ranges(nodes, index, snapshot)
@@ -1507,8 +1510,9 @@ defmodule DOM do
         snapshot = range_snapshot(nodes, index)
         extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
 
+        # delete_subtree retracts each removed node's span rows; extract detaches
+        # cleanly (leaves the remaining nodes' extents intact), so no rehome is needed.
         Enum.each(extracted, &delete_subtree(nodes, index, &1))
-        resync_spans(nodes, index)
 
         collapse_range_to_start(index, range_id)
         reconcile_ranges(nodes, index, snapshot)
@@ -1608,13 +1612,12 @@ defmodule DOM do
       # extract -> append into element -> insert element at the range start
       fragment = range_extract_op(nodes, index, range_id)
 
-      Enum.each(
-        Table.children(nodes, fragment.node_id),
-        &Table.append_child(nodes, element_id, &1)
-      )
+      moved = Table.children(nodes, fragment.node_id)
+      Enum.each(moved, &Table.append_child(nodes, element_id, &1))
 
       Table.reindex(nodes, index)
-      resync_spans(nodes, index)
+      # the fragment's children are now under element_id — mirror each moved subtree.
+      Enum.each(moved, &Table.span_rehome(nodes, index, &1))
 
       {{start_key, so2}, _} = Table.range_boundaries(index, range_id)
       container = Table.node_at_start_key(nodes, start_key)
