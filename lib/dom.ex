@@ -2438,13 +2438,92 @@ defmodule DOM do
   # plain stack recursion, no checkpoint, inheriting the outer frame's drain.
   def _node_dispatch_event(server, node_id, event) do
     if server == self(),
-      do: Events.dispatch(Process.get(:nodes), Process.get(:index), server, node_id, event),
+      do: dispatch_with_default(Process.get(:nodes), Process.get(:index), node_id, event),
       else: GenServer.call(server, {:dispatch_event, node_id, event})
   end
 
   defp dispatch_event_impl(node_id, event, _from, state) do
-    result = Events.dispatch(state.nodes, state.index, self(), node_id, event)
+    result = dispatch_with_default(state.nodes, state.index, node_id, event)
     {:reply, result, state, {:continue, :drain_microtasks}}
+  end
+
+  # Dispatch, then run the event's default action UNLESS it was prevented. `dispatch`
+  # returns `not default_prevented`, which is both the dispatchEvent boolean and the
+  # "run the default action?" gate. Runs in-server (both dispatch paths funnel here).
+  defp dispatch_with_default(nodes, index, node_id, event) do
+    not_prevented = Events.dispatch(nodes, index, self(), node_id, event)
+    if not_prevented, do: run_default_action(nodes, index, node_id, event)
+    not_prevented
+  end
+
+  # The activation behavior for a dispatched event. Currently: a `click` on a
+  # checkbox/radio input toggles its checkedness (checkbox toggles; radio sets true and
+  # clears the rest of its name group). Other events have no default action yet.
+  defp run_default_action(nodes, index, node_id, %Event{type: "click"}) do
+    case fetch_node!(nodes, node_id) do
+      %NodeData.Element{local_name: "input"} = el ->
+        toggle_input_checkedness(nodes, index, node_id, el)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp run_default_action(_nodes, _index, _node_id, _event), do: :ok
+
+  defp toggle_input_checkedness(nodes, index, node_id, el) do
+    case input_type(el) do
+      "checkbox" ->
+        set_checkedness(nodes, index, node_id, not effective_checkedness(el))
+
+      "radio" ->
+        clear_radio_group(nodes, index, node_id, el)
+        set_checkedness(nodes, index, node_id, true)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # An input's current checkedness: the override field (dirty), else the `checked`
+  # attribute (clean default).
+  defp effective_checkedness(%NodeData.Element{checked: nil} = el),
+    do: has_string_attr?(el, "checked")
+
+  defp effective_checkedness(%NodeData.Element{checked: value}), do: value
+
+  defp input_type(%NodeData.Element{} = el), do: get_string_attr(el, "type") || "text"
+
+  # Set the checkedness override (dirty) on `node_id`.
+  defp set_checkedness(nodes, index, node_id, value) do
+    record = fetch_node!(nodes, node_id)
+    updated = %{record | checked: value}
+    :ets.insert(nodes, {node_id, updated})
+    Table.index_put(index, node_id, updated)
+    :ok
+  end
+
+  # Uncheck every OTHER radio in `el`'s name group (same `name`, same tree/form scope).
+  # Scope: the connected radios in the document with the same name (a coarse but correct
+  # grouping for a single-form document; form-scoped grouping can refine this later).
+  defp clear_radio_group(nodes, index, node_id, el) do
+    name = get_string_attr(el, "name")
+
+    if name do
+      for other <- radios_named(nodes, name), other != node_id do
+        set_checkedness(nodes, index, other, false)
+      end
+    end
+
+    :ok
+  end
+
+  defp radios_named(nodes, name) do
+    for id <- Table.elements_by_tag_name(nodes, Process.get(:document_id), "input"),
+        el = fetch_node!(nodes, id),
+        input_type(el) == "radio",
+        get_string_attr(el, "name") == name,
+        do: id
   end
 
   @doc false

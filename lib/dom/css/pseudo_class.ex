@@ -292,14 +292,22 @@ defmodule DOM.CSS.PseudoClass do
   defp checked?(nodes, id) do
     case Query.local_name(nodes, id) do
       "input" ->
-        input_type(nodes, id) in ~w(checkbox radio) and
-          Query.has_own_attribute?(nodes, id, "checked")
+        input_type(nodes, id) in ~w(checkbox radio) and input_checkedness(nodes, id)
 
       "option" ->
         Query.has_own_attribute?(nodes, id, "selected")
 
       _ ->
         false
+    end
+  end
+
+  # An input's checkedness: the `checked` OVERRIDE field if set (dirty / user-toggled),
+  # else the `checked` attribute (clean default). See NodeData.Element.
+  defp input_checkedness(nodes, id) do
+    case Table.fetch!(nodes, id).checked do
+      nil -> Query.has_own_attribute?(nodes, id, "checked")
+      value -> value
     end
   end
 

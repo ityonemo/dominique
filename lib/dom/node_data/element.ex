@@ -19,6 +19,11 @@ defmodule DOM.NodeData.Element do
     # root (the ordered arguments of slot.assign()); [] otherwise. Only meaningful on
     # a `<slot>` element. The effective assignment filters these to host children.
     manual_assigned: [],
+    # Checkedness OVERRIDE for an input (WHATWG checkedness + dirty flag, compressed):
+    # nil = "clean" — use the `checked` ATTRIBUTE as the default; true/false = "dirty" —
+    # user-toggled checkedness (a click activation), the attribute no longer drives it.
+    # :checked reads the override if set, else the attribute.
+    checked: nil,
     namespace: :html,
     parent: nil,
     attributes: [],
@@ -49,6 +54,7 @@ defmodule DOM.NodeData.Element do
           shadow_root: reference() | nil,
           definition: DOM.CustomElementDefinition.t() | nil,
           manual_assigned: [reference()],
+          checked: boolean() | nil,
           parent: reference() | nil,
           attributes: [{attr_key(), String.t()}],
           root: reference() | nil,

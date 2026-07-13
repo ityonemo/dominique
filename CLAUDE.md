@@ -416,10 +416,22 @@ oracle tests — the browser drives them from navigation / real pointer input (h
 does not even reflect `:hover` via synthetic mouse moves), and the semantics are
 spec-unambiguous; unit-tested instead.
 
-**Deferred (the remaining interaction cluster):** default actions / form submission /
-checkbox toggle (`preventDefault` actually suppressing anything — it currently only sets
-the flag `dispatchEvent` returns); user-toggled `:checked`/`:indeterminate`. These need
-default-action modeling on top of the event system.
+**Default actions (implemented — `preventDefault` now suppresses):** dispatching an
+event runs its **default action** after the phases, gated on `not default_prevented` —
+so `preventDefault` in a listener actually cancels the action (both dispatch paths funnel
+through `dispatch_with_default`). The first action: a **`click` on a checkbox/radio
+toggles its checkedness**. Checkedness is a **property distinct from the `checked`
+attribute** (WHATWG's checkedness + dirty-flag, compressed into the `checked` override
+field on `NodeData.Element`: `nil` = clean, use the attribute; `true`/`false` = dirty,
+user-toggled — the attribute is left untouched). `:checked` reads override-else-attribute
+(`input_checkedness`), so it is now user-toggleable. A checkbox toggles; a radio sets true
+and clears the rest of its `name` group. Non-cancelable clicks still toggle;
+`dispatch_event` returns `false` when prevented. Browser-verified
+(`test/integration/default_action_test.exs`). (Broader activation behavior — links
+navigate, forms submit, `<details>` toggles — is not modeled yet.)
+
+**Deferred:** other activation behaviors (link navigation, form submission, `<details>`);
+user-toggled `:indeterminate`; `:valid`/`:invalid` (form constraint validation).
 
 ## Before finishing any change
 
