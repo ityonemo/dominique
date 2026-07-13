@@ -1385,6 +1385,37 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # Pointer state (the :hover / :active singletons)
+  # ==========================================================================
+  #
+  # Pointer interaction state as `{:hover}` / `{:active}` rows → the target node_id.
+  # No pointer input in Dominique, so DOM.set_hover/set_active set them; :hover/:active
+  # read them (matching the target + its ancestors). `which` is :hover or :active.
+
+  @doc "Set the `:hover`/`:active` target to `node_id`."
+  @spec pointer_state_put(tid, :hover | :active, id) :: :ok
+  def pointer_state_put(index, which, node_id) do
+    :ets.insert(index, {which, node_id})
+    :ok
+  end
+
+  @doc "The `:hover`/`:active` target node_id, or nil."
+  @spec pointer_state_get(tid, :hover | :active) :: id | nil
+  def pointer_state_get(index, which) do
+    case :ets.lookup(index, which) do
+      [{_key, node_id}] -> node_id
+      [] -> nil
+    end
+  end
+
+  @doc "Clear the `:hover`/`:active` target."
+  @spec pointer_state_clear(tid, :hover | :active) :: :ok
+  def pointer_state_clear(index, which) do
+    :ets.delete(index, which)
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.

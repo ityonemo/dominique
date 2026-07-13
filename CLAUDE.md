@@ -403,11 +403,23 @@ non-cancelable. `relatedTarget` is the other element (`DOM.Event` gained a
 Re-focusing the active element fires nothing. Browser-verified
 (`test/integration/focus_test.exs`, `test/integration/focus_event_test.exs`).
 
-**Deferred (the remaining interaction/navigation cluster):** `:target` (a document
-URL/fragment model); `:hover`/`:active` (pointer state); default actions / form
-submission / checkbox toggle (`preventDefault` actually suppressing anything — it
-currently only sets the flag `dispatchEvent` returns); user-toggled
-`:checked`/`:indeterminate`. These need more document/interaction state.
+**`:target` / `:hover` / `:active` (implemented):** more matchable interaction state,
+each a document-level singleton index row read by its pseudo-class. `:target` = the
+"indicated part": `DOM.set_fragment(doc, "foo")` (nil/"" clears) sets a `{:fragment}`
+row; `:target` matches the element whose `id == fragment` (resolved document-wide, id
+index first) or an `<a name=…>` when no id matches (case-sensitive, id precedence).
+`:hover`/`:active` = pointer state: `DOM.set_hover(el)`/`set_active(el)` +
+`clear_hover/1`/`clear_active/1` set `{:hover}`/`{:active}` rows; both match the target
+**and all its ancestors** (the "hover chain"), sharing `ancestor_chain_match` with
+`:focus-within`. These are convenience setters (Dominique has no URL/pointer input). No
+oracle tests — the browser drives them from navigation / real pointer input (headless
+does not even reflect `:hover` via synthetic mouse moves), and the semantics are
+spec-unambiguous; unit-tested instead.
+
+**Deferred (the remaining interaction cluster):** default actions / form submission /
+checkbox toggle (`preventDefault` actually suppressing anything — it currently only sets
+the flag `dispatchEvent` returns); user-toggled `:checked`/`:indeterminate`. These need
+default-action modeling on top of the event system.
 
 ## Before finishing any change
 

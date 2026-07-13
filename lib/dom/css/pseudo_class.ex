@@ -177,14 +177,17 @@ defmodule DOM.CSS.PseudoClass do
 
   # :focus-within — the active element or any of its ancestors.
   def match(%{name: "focus-within"}, %{nodes: nodes, index: index}, candidates) do
-    case Table.active_element_get(index) do
-      nil ->
-        []
+    ancestor_chain_match(candidates, nodes, Table.active_element_get(index))
+  end
 
-      active ->
-        chain = MapSet.new([active | Query.ancestors(nodes, active)])
-        Enum.filter(candidates, &MapSet.member?(chain, &1))
-    end
+  # :hover / :active — the hovered / pressed element or any of its ancestors (the
+  # "hover chain"). Pointer state set by DOM.set_hover / set_active (no pointer input).
+  def match(%{name: "hover"}, %{nodes: nodes, index: index}, candidates) do
+    ancestor_chain_match(candidates, nodes, Table.pointer_state_get(index, :hover))
+  end
+
+  def match(%{name: "active"}, %{nodes: nodes, index: index}, candidates) do
+    ancestor_chain_match(candidates, nodes, Table.pointer_state_get(index, :active))
   end
 
   # :target — the "indicated part of the document": the element whose id equals the
@@ -302,6 +305,15 @@ defmodule DOM.CSS.PseudoClass do
 
   # :read-write — a mutable input (a type the `readonly` attribute applies to,
   # without `readonly`/`disabled`), a mutable textarea, or a contenteditable host.
+  # Filter `candidates` to those on the `target`-inclusive ancestor chain (target or an
+  # ancestor of it) — shared by :focus-within / :hover / :active. Empty when target nil.
+  defp ancestor_chain_match(_candidates, _nodes, nil), do: []
+
+  defp ancestor_chain_match(candidates, nodes, target) do
+    chain = MapSet.new([target | Query.ancestors(nodes, target)])
+    Enum.filter(candidates, &MapSet.member?(chain, &1))
+  end
+
   # An upgraded custom element carries a definition on its record.
   defp upgraded?(nodes, id) do
     match?(%DOM.NodeData.Element{definition: def} when def != nil, Table.fetch!(nodes, id))

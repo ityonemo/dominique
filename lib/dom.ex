@@ -292,6 +292,35 @@ defmodule DOM do
     _atomic_ets_op(server, fn _nodes, index -> Table.fragment_put(index, fragment) end)
   end
 
+  @doc """
+  Set the `:hover` target to `element` — a convenience for `:hover`, since Dominique
+  has no pointer input. `:hover` then matches `element` and all its ancestors (the
+  "hover chain"). Clear with `clear_hover/1`.
+  """
+  @spec set_hover(Node.t()) :: :ok
+  def set_hover(%Node{server: server, node_id: node_id}),
+    do:
+      _atomic_ets_op(server, fn _n, index -> Table.pointer_state_put(index, :hover, node_id) end)
+
+  @doc "Clear the `:hover` target."
+  @spec clear_hover(Node.t()) :: :ok
+  def clear_hover(%Node{server: server}),
+    do: _atomic_ets_op(server, fn _n, index -> Table.pointer_state_clear(index, :hover) end)
+
+  @doc """
+  Set the `:active` target to `element` (the pressed element) — a convenience for
+  `:active`. Matches `element` and its ancestors. Clear with `clear_active/1`.
+  """
+  @spec set_active(Node.t()) :: :ok
+  def set_active(%Node{server: server, node_id: node_id}),
+    do:
+      _atomic_ets_op(server, fn _n, index -> Table.pointer_state_put(index, :active, node_id) end)
+
+  @doc "Clear the `:active` target."
+  @spec clear_active(Node.t()) :: :ok
+  def clear_active(%Node{server: server}),
+    do: _atomic_ets_op(server, fn _n, index -> Table.pointer_state_clear(index, :active) end)
+
   @doc "The document's `<head>` element, or `nil`."
   @spec head(Node.t()) :: Node.t() | nil
   def head(%Node{type: :document} = document), do: query_selector(document, "head")
