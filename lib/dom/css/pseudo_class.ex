@@ -223,6 +223,26 @@ defmodule DOM.CSS.PseudoClass do
     Enum.filter(candidates, &indeterminate?(nodes, &1))
   end
 
+  # :valid / :invalid — constraint validation. Only a "candidate" control participates
+  # (form control, not barred/disabled); :invalid when any constraint fails, :valid otherwise.
+  def match(%{name: "valid"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, &(validation_candidate?(nodes, &1) and not invalid?(nodes, &1)))
+  end
+
+  def match(%{name: "invalid"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, &(validation_candidate?(nodes, &1) and invalid?(nodes, &1)))
+  end
+
+  # :in-range / :out-of-range — only range-limited inputs (with min and/or max). The
+  # value is in range unless below min or above max.
+  def match(%{name: "in-range"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, &(range_limited?(nodes, &1) and not out_of_range?(nodes, &1)))
+  end
+
+  def match(%{name: "out-of-range"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, &(range_limited?(nodes, &1) and out_of_range?(nodes, &1)))
+  end
+
   def match(%{name: "read-write"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &read_write?(nodes, &1))
   end
@@ -349,6 +369,113 @@ defmodule DOM.CSS.PseudoClass do
         %DOM.NodeData.Text{value: value} <- [Table.fetch!(nodes, child)],
         into: "",
         do: value
+  end
+
+  # A candidate for constraint validation: a form control (input/select/textarea) that
+  # is not barred (not disabled, and — for input — not a barred type).
+  @barred_input_types ~w(hidden button reset submit image)
+  defp validation_candidate?(nodes, id) do
+    case Query.local_name(nodes, id) do
+      "input" ->
+        not Query.actually_disabled?(nodes, id) and
+          input_type(nodes, id) not in @barred_input_types
+
+      name when name in ~w(select textarea) ->
+        not Query.actually_disabled?(nodes, id)
+
+      _ ->
+        false
+    end
+  end
+
+  # Any failing constraint makes a candidate :invalid.
+  defp invalid?(nodes, id) do
+    required_empty?(nodes, id) or type_mismatch?(nodes, id) or
+      pattern_mismatch?(nodes, id) or (range_limited?(nodes, id) and out_of_range?(nodes, id))
+  end
+
+  defp required_empty?(nodes, id) do
+    Query.has_own_attribute?(nodes, id, "required") and control_value(nodes, id) in [nil, ""]
+  end
+
+  # type=email / type=url with a non-empty value that doesn't match a pragmatic format.
+  defp type_mismatch?(nodes, id) do
+    value = control_value(nodes, id)
+
+    cond do
+      value in [nil, ""] -> false
+      input_type(nodes, id) == "email" -> not Regex.match?(~r/^[^@\s]+@[^@\s]+\.[^@\s]+$/, value)
+      input_type(nodes, id) == "url" -> not Regex.match?(~r/^[a-zA-Z][a-zA-Z0-9+.-]*:/, value)
+      :else -> false
+    end
+  end
+
+  # A `pattern` that the (non-empty) value does not FULLY match.
+  defp pattern_mismatch?(nodes, id) do
+    value = control_value(nodes, id)
+    pattern = Query.own_attribute(nodes, id, "pattern")
+
+    if pattern == nil or value in [nil, ""] do
+      false
+    else
+      case compile_anchored(pattern) do
+        :error -> false
+        regex -> not Regex.match?(regex, value)
+      end
+    end
+  end
+
+  defp compile_anchored(pattern) do
+    case Regex.compile("\\A(?:" <> pattern <> ")\\z", "u") do
+      {:ok, regex} -> regex
+      {:error, _} -> :error
+    end
+  end
+
+  # An input is range-limited if it carries min and/or max (a range-supporting type).
+  defp range_limited?(nodes, id) do
+    Query.local_name(nodes, id) == "input" and
+      input_type(nodes, id) in ~w(number range date month week time datetime-local) and
+      (Query.has_own_attribute?(nodes, id, "min") or Query.has_own_attribute?(nodes, id, "max"))
+  end
+
+  # The value is out of range: below min or above max (numeric compare).
+  defp out_of_range?(nodes, id) do
+    case parse_number(control_value(nodes, id)) do
+      value when is_float(value) -> below_min?(nodes, id, value) or above_max?(nodes, id, value)
+      nil -> false
+    end
+  end
+
+  defp below_min?(nodes, id, value) do
+    case parse_number(Query.own_attribute(nodes, id, "min")) do
+      min when is_float(min) -> value < min
+      _ -> false
+    end
+  end
+
+  defp above_max?(nodes, id, value) do
+    case parse_number(Query.own_attribute(nodes, id, "max")) do
+      max when is_float(max) -> value > max
+      _ -> false
+    end
+  end
+
+  defp parse_number(nil), do: nil
+
+  defp parse_number(string) do
+    case Float.parse(string) do
+      {number, ""} -> number
+      _ -> nil
+    end
+  end
+
+  # A control's value for validation: the `value` attribute for input; text for textarea.
+  defp control_value(nodes, id) do
+    case Query.local_name(nodes, id) do
+      "textarea" -> textarea_text(nodes, id)
+      _ -> Query.own_attribute(nodes, id, "value")
+    end
   end
 
   # :indeterminate sources: a checkbox with the indeterminate property; a radio whose
