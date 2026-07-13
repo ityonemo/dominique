@@ -18,4 +18,15 @@ defmodule DOM.Slot do
   def assigned_elements(%Node{type: :element} = slot) do
     slot |> assigned_nodes() |> Enum.filter(&(&1.type == :element))
   end
+
+  @doc """
+  Imperatively assign `nodes` to `slot` (the HTML `slot.assign(...)`). Only meaningful
+  when the slot's shadow root is in `:manual` slot-assignment mode; it replaces any
+  previous manual assignment (call with `[]` to clear). Only nodes that are light-DOM
+  children of the shadow host are effectively assigned. Fires `slotchange`.
+  """
+  @spec assign(Node.t(), [Node.t()]) :: :ok
+  def assign(%Node{type: :element} = slot, nodes) when is_list(nodes) do
+    DOM._slot_assign(slot.server, slot.node_id, Enum.map(nodes, & &1.node_id))
+  end
 end

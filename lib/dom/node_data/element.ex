@@ -15,6 +15,10 @@ defmodule DOM.NodeData.Element do
     # retains its definition). `nil` = undefined; a later `define` upgrades only nil
     # elements. `:defined` = a built-in name OR definition != nil.
     definition: nil,
+    # Manually-assigned node ids for a `<slot>` in a manual-slot-assignment shadow
+    # root (the ordered arguments of slot.assign()); [] otherwise. Only meaningful on
+    # a `<slot>` element. The effective assignment filters these to host children.
+    manual_assigned: [],
     namespace: :html,
     parent: nil,
     attributes: [],
@@ -44,6 +48,7 @@ defmodule DOM.NodeData.Element do
           content: reference() | nil,
           shadow_root: reference() | nil,
           definition: DOM.CustomElementDefinition.t() | nil,
+          manual_assigned: [reference()],
           parent: reference() | nil,
           attributes: [{attr_key(), String.t()}],
           root: reference() | nil,

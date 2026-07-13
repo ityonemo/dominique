@@ -7,16 +7,24 @@ defmodule DOM.NodeData.ShadowRoot do
   other detached roots in the nodes table.
   """
 
-  defstruct host: nil, mode: :open, parent: nil, root: nil, start: nil, stop: nil
+  defstruct host: nil,
+            mode: :open,
+            slot_assignment: :named,
+            parent: nil,
+            root: nil,
+            start: nil,
+            stop: nil
 
   use DOM.NodeData
   use DOM.HTML
 
   @type mode :: :open | :closed
+  @type slot_assignment :: :named | :manual
 
   @type t :: %__MODULE__{
           host: reference() | nil,
           mode: mode(),
+          slot_assignment: slot_assignment(),
           parent: reference() | nil,
           root: reference() | nil,
           start: binary() | nil,

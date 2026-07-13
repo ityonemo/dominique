@@ -374,10 +374,21 @@ nothing). Browser-verified lifecycle + upgrade
 (`test/integration/custom_element_test.exs`) AND the adopt-into-undefined-destination
 case (`test/integration/custom_element_adopted_test.exs`).
 
-**Deferred (still need more than the queue):** imperative `slot.assign()` (manual
-slotting); and default actions / interaction & navigation state (`:hover`, `:focus`,
-form submission, checkbox toggle, `preventDefault` actually suppressing anything — it
-currently only sets the flag `dispatchEvent` returns).
+**Imperative slotting (implemented):** `DOM.Slot.assign(slot, nodes)` (the HTML
+`slot.assign(...)`) for a shadow root in **manual** slot-assignment mode. Mode is set at
+`Element.attach_shadow(el, mode, slot_assignment: :manual)` (default `:named`), stored on
+the `ShadowRoot` record. A `<slot>`'s manual assignment is the `manual_assigned` field on
+its `NodeData.Element` (an ordered node-id list — the only thing ever queried is the id,
+so a field beats an index row). `Slots.recompute` branches on the host shadow's mode:
+`:named` = attribute matching (`assign_named`, unchanged); `:manual` = each slot's
+`manual_assigned` ∩ host children, in order (`assign_manual`). `Slot.assign` rewrites the
+field, recomputes, and signals `slotchange`. Browser-verified
+(`test/integration/slot_assign_test.exs`).
+
+**Deferred (the remaining cluster):** default actions / interaction & navigation state
+(`:hover`, `:focus`, `:target`, form submission, checkbox toggle, `preventDefault`
+actually suppressing anything — it currently only sets the flag `dispatchEvent` returns).
+These need a new state layer `NodeData` does not model.
 
 ## Before finishing any change
 

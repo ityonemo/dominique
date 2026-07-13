@@ -190,11 +190,11 @@ defmodule DOM do
   end
 
   @doc false
-  def _element_attach_shadow(server, node_id, mode) do
+  def _element_attach_shadow(server, node_id, mode, slot_assignment \\ :named) do
     result =
       _atomic_ets_op(
         server,
-        fn nodes, index -> attach_shadow(nodes, index, node_id, mode) end,
+        fn nodes, index -> attach_shadow(nodes, index, node_id, mode, slot_assignment) end,
         :mutates
       )
 
@@ -364,7 +364,7 @@ defmodule DOM do
   @shadow_host_names ~w(article aside blockquote body div footer h1 h2 h3 h4 h5 h6
                         header main nav p section span)
 
-  defp attach_shadow(nodes, index, id, mode) do
+  defp attach_shadow(nodes, index, id, mode, slot_assignment) do
     element = Table.fetch!(nodes, id)
 
     cond do
@@ -375,7 +375,7 @@ defmodule DOM do
         {:error, :not_supported}
 
       :else ->
-        shadow_id = Table.create_shadow_root(nodes, id, mode)
+        shadow_id = Table.create_shadow_root(nodes, id, mode, slot_assignment)
         Table.span_index_all(nodes, index)
         signal_slots(index, DOM.NodeData.Slots.recompute(nodes, index, id))
         {:ok, node_handle(nodes, shadow_id)}
@@ -2443,6 +2443,27 @@ defmodule DOM do
       |> DOM.NodeData.Slots.assigned_nodes(slot_id)
       |> Enum.map(&node_handle(nodes, &1))
     end)
+  end
+
+  @doc false
+  # slot.assign: store `node_ids` as the slot's manual assignment (replacing any
+  # prior), then recompute the host's slot assignment (manual mode uses these ids,
+  # filtered to host children) and signal slotchange on the slots that changed.
+  def _slot_assign(server, slot_id, node_ids) do
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        record = fetch_node!(nodes, slot_id)
+        :ets.insert(nodes, {slot_id, %{record | manual_assigned: node_ids}})
+
+        if host = Slots.host_of_slot(nodes, slot_id) do
+          signal_slots(index, Slots.recompute(nodes, index, host))
+        end
+
+        :ok
+      end,
+      :mutates
+    )
   end
 
   @doc false

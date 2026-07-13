@@ -49,9 +49,11 @@ defmodule DOM.Element do
   `:closed`. Raises `DOM.NotSupportedError` if the element already has a shadow
   root or is not a valid shadow host.
   """
-  @spec attach_shadow(Node.t(), :open | :closed) :: Node.t()
-  def attach_shadow(%Node{type: :element} = element, mode) when mode in [:open, :closed] do
-    DOM._element_attach_shadow(element.server, element.node_id, mode)
+  @spec attach_shadow(Node.t(), :open | :closed, keyword()) :: Node.t()
+  def attach_shadow(%Node{type: :element} = element, mode, opts \\ [])
+      when mode in [:open, :closed] do
+    slot_assignment = Keyword.get(opts, :slot_assignment, :named)
+    DOM._element_attach_shadow(element.server, element.node_id, mode, slot_assignment)
   end
 
   @doc """

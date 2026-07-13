@@ -56,15 +56,24 @@ defmodule DOM.NodeData.Slots do
     :ok
   end
 
-  # Compute + write the assignment for `host_id` into `shadow`.
+  # Compute + write the assignment for `host_id` into `shadow`. Branches on the shadow
+  # root's slot-assignment mode: :named (default) matches light children to slots by
+  # attribute; :manual uses each slot's explicitly-assigned nodes (slot.assign()).
   defp assign(nodes, index, host_id, shadow) do
+    case Table.fetch!(nodes, shadow).slot_assignment do
+      :manual -> assign_manual(nodes, index, host_id, shadow)
+      _named -> assign_named(nodes, index, host_id, shadow)
+    end
+  end
+
+  # Named mode: each light child projects into the first slot matching its slot name.
+  # The reduce threads a per-slot position counter (its final value is discarded).
+  defp assign_named(nodes, index, host_id, shadow) do
     slots = slots_in(nodes, shadow)
     slot_by_name = first_slot_per_name(nodes, slots)
 
-    _positions =
-      nodes
-      |> Table.children_by_extent(host_id)
-      |> Enum.reduce(%{}, fn child, acc ->
+    _final_positions =
+      Enum.reduce(Table.children_by_extent(nodes, host_id), %{}, fn child, acc ->
         name = effective_slot_name(nodes, child)
 
         case Map.get(slot_by_name, name) do
@@ -73,13 +82,33 @@ defmodule DOM.NodeData.Slots do
 
           slot_id ->
             pos = Map.get(acc, slot_id, 0)
-            :ets.insert(index, {{:slot, slot_id, pos}, child})
-            :ets.insert(index, {{:assigned, child}, slot_id})
-            :ets.insert(index, {{:assigned_host, host_id, child}, slot_id})
+            write_assignment(index, host_id, slot_id, child, pos)
             Map.put(acc, slot_id, pos + 1)
         end
       end)
 
+    :ok
+  end
+
+  # Manual mode: each slot receives its manually-assigned nodes (slot.assign()),
+  # filtered to actual host light-DOM children, in assign order.
+  defp assign_manual(nodes, index, host_id, shadow) do
+    host_children = MapSet.new(Table.children_by_extent(nodes, host_id))
+
+    for slot_id <- slots_in(nodes, shadow) do
+      Table.fetch!(nodes, slot_id).manual_assigned
+      |> Enum.filter(&MapSet.member?(host_children, &1))
+      |> Enum.with_index()
+      |> Enum.each(fn {child, pos} -> write_assignment(index, host_id, slot_id, child, pos) end)
+    end
+
+    :ok
+  end
+
+  defp write_assignment(index, host_id, slot_id, child, pos) do
+    :ets.insert(index, {{:slot, slot_id, pos}, child})
+    :ets.insert(index, {{:assigned, child}, slot_id})
+    :ets.insert(index, {{:assigned_host, host_id, child}, slot_id})
     :ok
   end
 

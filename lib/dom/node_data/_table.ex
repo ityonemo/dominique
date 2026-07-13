@@ -373,9 +373,15 @@ defmodule DOM.NodeData.Table do
   own root; `ensure_extent` seeds its window on first append, like template
   content) and back-link it on the host element. Returns the shadow root id.
   """
-  @spec create_shadow_root(tid, id, :open | :closed) :: id
-  def create_shadow_root(tid, host_id, mode) do
-    shadow_id = insert_new(tid, %NodeData.ShadowRoot{host: host_id, mode: mode})
+  @spec create_shadow_root(tid, id, :open | :closed, :named | :manual) :: id
+  def create_shadow_root(tid, host_id, mode, slot_assignment \\ :named) do
+    shadow_id =
+      insert_new(tid, %NodeData.ShadowRoot{
+        host: host_id,
+        mode: mode,
+        slot_assignment: slot_assignment
+      })
+
     host = fetch!(tid, host_id)
     put(tid, host_id, %{host | shadow_root: shadow_id})
     shadow_id
