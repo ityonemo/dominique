@@ -2464,12 +2464,33 @@ defmodule DOM do
       %NodeData.Element{local_name: "input"} = el ->
         toggle_input_checkedness(nodes, index, node_id, el)
 
+      %NodeData.Element{local_name: "summary"} ->
+        toggle_details(nodes, index, node_id)
+
       _ ->
         :ok
     end
   end
 
   defp run_default_action(_nodes, _index, _node_id, _event), do: :ok
+
+  # A click on a <summary> toggles its parent <details>'s `open` attribute.
+  defp toggle_details(nodes, index, summary_id) do
+    parent_id = Table.parent(nodes, summary_id)
+
+    if parent_id &&
+         match?(%NodeData.Element{local_name: "details"}, fetch_node!(nodes, parent_id)) do
+      if Table.has_attribute(nodes, parent_id, "open") do
+        Table.remove_attribute(nodes, parent_id, "open")
+      else
+        Table.set_attribute(nodes, parent_id, "open", "")
+      end
+
+      Table.index_put(index, parent_id, fetch_node!(nodes, parent_id))
+    end
+
+    :ok
+  end
 
   defp toggle_input_checkedness(nodes, index, node_id, el) do
     case input_type(el) do

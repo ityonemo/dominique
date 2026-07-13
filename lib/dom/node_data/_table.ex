@@ -351,6 +351,17 @@ defmodule DOM.NodeData.Table do
     if has_attribute(tid, id, name), do: :ok, else: set_attribute(tid, id, name, value)
   end
 
+  @doc "Remove the attribute matching qualified `name` (a no-op when absent)."
+  @spec remove_attribute(tid, id, String.t()) :: :ok
+  def remove_attribute(tid, id, name) do
+    element = fetch!(tid, id)
+
+    kept =
+      Enum.reject(element.attributes, fn {key, _v} -> NodeData.Element.matches_key?(key, name) end)
+
+    put(tid, id, %{element | attributes: kept})
+  end
+
   @spec namespace(tid, id) :: NodeData.Element.namespace() | nil
   def namespace(tid, id) do
     case fetch!(tid, id) do

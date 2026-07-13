@@ -202,6 +202,14 @@ defmodule DOM.CSS.PseudoClass do
     end
   end
 
+  # :open — a <details> or <dialog> with the `open` attribute present.
+  def match(%{name: "open"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, fn id ->
+      Query.local_name(nodes, id) in ~w(details dialog) and
+        Query.has_own_attribute?(nodes, id, "open")
+    end)
+  end
+
   def match(%{name: "read-write"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &read_write?(nodes, &1))
   end
