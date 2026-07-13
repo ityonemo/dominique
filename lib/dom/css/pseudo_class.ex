@@ -187,6 +187,18 @@ defmodule DOM.CSS.PseudoClass do
     end
   end
 
+  # :target — the "indicated part of the document": the element whose id equals the
+  # document fragment, or (when no id matches document-wide) an <a name=…> that equals
+  # it. Case-sensitive; id takes precedence over name. We resolve the target across the
+  # WHOLE document (not just `candidates`) so id-precedence holds even when the query
+  # scope is a single name-anchor, then keep the candidates that are that target.
+  def match(%{name: "target"}, %{nodes: nodes, index: index}, candidates) do
+    case Table.fragment_get(index) do
+      nil -> []
+      fragment -> Enum.filter(candidates, &(&1 == target_id(nodes, index, fragment)))
+    end
+  end
+
   def match(%{name: "read-write"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &read_write?(nodes, &1))
   end
@@ -293,6 +305,21 @@ defmodule DOM.CSS.PseudoClass do
   # An upgraded custom element carries a definition on its record.
   defp upgraded?(nodes, id) do
     match?(%DOM.NodeData.Element{definition: def} when def != nil, Table.fetch!(nodes, id))
+  end
+
+  # The document's :target element for `fragment`: the first element with id==fragment
+  # (via the id index), else the first <a name==fragment> in document order, else nil.
+  defp target_id(nodes, index, fragment) do
+    case Table.index_lookup(index, :id, fragment) do
+      [id | _] -> id
+      [] -> named_anchor(nodes, fragment)
+    end
+  end
+
+  defp named_anchor(nodes, fragment) do
+    nodes
+    |> Table.elements_by_tag_name(Process.get(:document_id), "a")
+    |> Enum.find(&(Query.own_attribute(nodes, &1, "name") == fragment))
   end
 
   defp read_write?(nodes, id) do

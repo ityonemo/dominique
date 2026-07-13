@@ -280,6 +280,18 @@ defmodule DOM do
     focused || body(document) || document_element(document)
   end
 
+  @doc """
+  Set the document's URL fragment (the `#foo` part) — a convenience for `:target`,
+  since Dominique models no navigation. `nil` (or the empty string) clears it. The
+  `:target` pseudo-class then matches the element whose `id` equals `fragment` (or an
+  `<a name=…>` when no id matches). Case-sensitive.
+  """
+  @spec set_fragment(Node.t(), String.t() | nil) :: :ok
+  def set_fragment(%Node{type: :document, server: server}, fragment) do
+    fragment = if fragment in [nil, ""], do: nil, else: fragment
+    _atomic_ets_op(server, fn _nodes, index -> Table.fragment_put(index, fragment) end)
+  end
+
   @doc "The document's `<head>` element, or `nil`."
   @spec head(Node.t()) :: Node.t() | nil
   def head(%Node{type: :document} = document), do: query_selector(document, "head")

@@ -1354,6 +1354,37 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # Document fragment (the :target singleton)
+  # ==========================================================================
+  #
+  # The document's current URL fragment (the #foo part) as a `{:fragment}` row → string.
+  # Dominique has no navigation, so DOM.set_fragment sets it; :target reads it. Absent =
+  # no fragment (nothing is :target).
+
+  @doc "Set the document fragment string (`nil` clears it)."
+  @spec fragment_put(tid, String.t() | nil) :: :ok
+  def fragment_put(index, nil), do: fragment_clear(index)
+
+  def fragment_put(index, fragment) when is_binary(fragment) do
+    :ets.insert(index, {:fragment, fragment})
+    :ok
+  end
+
+  @doc "The document's current fragment string, or nil."
+  @spec fragment_get(tid) :: String.t() | nil
+  def fragment_get(index) do
+    case :ets.lookup(index, :fragment) do
+      [{_key, fragment}] -> fragment
+      [] -> nil
+    end
+  end
+
+  defp fragment_clear(index) do
+    :ets.delete(index, :fragment)
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.
