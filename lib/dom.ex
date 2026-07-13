@@ -507,6 +507,84 @@ defmodule DOM do
   end
 
   # ==========================================================================
+  # Timers + queueMicrotask (HTML WindowOrWorkerGlobalScope)
+  # ==========================================================================
+  #
+  # NOTE: setTimeout/clearTimeout/queueMicrotask are HTML-spec methods on
+  # WindowOrWorkerGlobalScope (mixed into Window), NOT part of the DOM proper.
+  # Dominique has no Window; they are provided here on the DOM context module as a
+  # convenience, because the document server already owns the event loop they drive.
+
+  @doc """
+  Run `callback` (a 0-arity function) as a TASK after `delay` ms — the HTML
+  `setTimeout`. Returns an opaque id for `clear_timeout/2`. The callback runs inside
+  the document server (like an event listener), followed by a microtask checkpoint,
+  so microtasks it enqueues drain before the next task. A convenience method (see the
+  section note); `delay` defaults to 0.
+  """
+  @spec set_timeout(Node.t(), (-> any()), non_neg_integer()) :: reference()
+  def set_timeout(%Node{server: server}, callback, delay \\ 0) when is_function(callback, 0) do
+    if server == self() do
+      schedule_timeout(server, callback, delay)
+    else
+      GenServer.call(server, {:set_timeout, callback, delay})
+    end
+  end
+
+  # Schedule the send_after (targeting the server) and record the {:timer, ref} row.
+  # Runs in the server (self() == server), whether from the handle_call or re-entrantly.
+  defp schedule_timeout(server, callback, delay) do
+    ref = make_ref()
+    tref = Process.send_after(server, {:run_timer, ref}, delay)
+    Table.timer_put(Process.get(:index), ref, callback, tref)
+    ref
+  end
+
+  defp set_timeout_impl(callback, delay, _from, state) do
+    {:reply, schedule_timeout(self(), callback, delay), state}
+  end
+
+  @doc "Cancel a pending `set_timeout/3` timer by its id (a no-op if already fired)."
+  @spec clear_timeout(Node.t(), reference()) :: :ok
+  def clear_timeout(%Node{server: server}, id) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      if timer = Table.timer_get(index, id) do
+        {_callback, tref} = timer
+        Process.cancel_timer(tref)
+        Table.timer_delete(index, id)
+      end
+
+      :ok
+    end)
+  end
+
+  # Fire a timer: if its row is still present (not cleared), run the callback and
+  # delete the row, then run a microtask checkpoint (the timer's trailing checkpoint —
+  # a microtask it enqueued drains before the next task, since handle_continue runs
+  # before the mailbox is read).
+  defp run_timer_impl(ref, state) do
+    case Table.timer_get(state.index, ref) do
+      nil ->
+        {:noreply, state}
+
+      {callback, _tref} ->
+        Table.timer_delete(state.index, ref)
+        callback.()
+        {:noreply, state, {:continue, :drain_microtasks}}
+    end
+  end
+
+  @doc """
+  Enqueue `callback` (0-arity) as a microtask — the HTML `queueMicrotask`. Runs at
+  the next microtask checkpoint (before the next task), inside the document server.
+  A convenience method (see the section note).
+  """
+  @spec queue_microtask(Node.t(), (-> any())) :: :ok
+  def queue_microtask(%Node{server: server}, callback) when is_function(callback, 0) do
+    _enqueue_microtask(server, callback)
+  end
+
+  # ==========================================================================
   # MutationObserver
   # ==========================================================================
 
@@ -2566,6 +2644,11 @@ defmodule DOM do
     range_cleanup_impl(range_id, state)
   end
 
+  # A setTimeout timer fired — run it (a task) then run its microtask checkpoint.
+  def handle_info({:run_timer, ref}, state) do
+    run_timer_impl(ref, state)
+  end
+
   @impl true
   def handle_call(:fragment_root, from, state) do
     fragment_root_impl(from, state)
@@ -2609,6 +2692,11 @@ defmodule DOM do
   @impl true
   def handle_call({:lambda, fun}, from, state) do
     lambda_impl(fun, from, state)
+  end
+
+  @impl true
+  def handle_call({:set_timeout, callback, delay}, from, state) do
+    set_timeout_impl(callback, delay, from, state)
   end
 
   def handle_call(:check_index_consistency, from, state) do

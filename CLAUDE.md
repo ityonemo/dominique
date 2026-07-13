@@ -326,13 +326,28 @@ design (see `README.md`). Two customers are built on it:
   `take_records`; `subtree`/`attributeFilter`/`*OldValue` options. Browser-verified
   (`test/integration/mutation_observer_test.exs`).
 
-**Deferred (still need more than the queue):** **timer tasks** (`Process.send_after` →
-a `handle_info` returning `{:continue, :drain_microtasks}` — the design already fits,
-just not built) and their microtask checkpoints; **custom-element reactions** (would
-live on this same queue); imperative `slot.assign()` (manual slotting); and default
-actions / interaction & navigation state (`:hover`, `:focus`, form submission, checkbox
-toggle, `preventDefault` actually suppressing anything — it currently only sets the
-flag `dispatchEvent` returns).
+**Timer tasks (implemented — the task half of the event loop):** `DOM.set_timeout/3`,
+`clear_timeout/2`, `queue_microtask/2` (the public HTML `queueMicrotask`). These are
+HTML `WindowOrWorkerGlobalScope` methods, NOT DOM proper — Dominique has no `Window`,
+so they live on `DOM` as a documented convenience (the document server already owns the
+event loop). A timer is a `{:timer, ref}` index row `{callback, tref}`; `set_timeout`
+does `Process.send_after(server, {:run_timer, ref}, delay)`; `handle_info({:run_timer,
+ref})` runs the callback (if the row is still present — the row is the source of truth,
+so a cleared/outraced timer is a no-op) then returns `{:continue, :drain_microtasks}`
+(the timer's trailing checkpoint). `clear_timeout` deletes the row + `cancel_timer`. A
+`:timer` row legitimately persists across `check_consistency!` (a scheduled timer lives
+in the BEAM timer wheel — unlike a `:microtask` row, whose presence means a skipped
+checkpoint). Browser-verified task-vs-microtask ordering
+(`test/integration/timer_test.exs`). **`setInterval` should use `:timer.send_interval`**
+(re-arming self-perpetuating task) — not yet built.
+
+**Deferred (still need more than the queue):** **`setInterval`** (via
+`:timer.send_interval`, cancelled by `:timer.cancel` on the stored tref — trivial on
+the timer machinery, not yet built); **custom-element reactions** (would live on this
+same queue); imperative `slot.assign()` (manual slotting); and default actions /
+interaction & navigation state (`:hover`, `:focus`, form submission, checkbox toggle,
+`preventDefault` actually suppressing anything — it currently only sets the flag
+`dispatchEvent` returns).
 
 ## Before finishing any change
 
