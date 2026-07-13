@@ -112,26 +112,6 @@ defmodule DOM.NodeData.Table do
     )
   end
 
-  # Record-only (nodes tid, no index) char-node creators. TEMPORARY seam for
-  # DOM.Range.Contents, which builds a detached fragment and lets the caller's
-  # `rehome_subtree(fragment)` write the index rows. To be removed when _contents.ex
-  # is restructured to create-in-place (index-threaded). See create-in-place arc.
-  @spec create_text_record(tid, String.t()) :: id
-  def create_text_record(nodes, value) do
-    id = make_ref()
-    put(nodes, id, %NodeData.Text{value: value, root: id, start: @root_start, stop: @root_stop})
-    id
-  end
-
-  @spec create_comment_record(tid, String.t()) :: id
-  def create_comment_record(nodes, value) do
-    id = make_ref()
-
-    put(nodes, id, %NodeData.Comment{value: value, root: id, start: @root_start, stop: @root_stop})
-
-    id
-  end
-
   @spec create_doctype(tid, tid, String.t(), String.t() | nil, String.t() | nil) :: id
   def create_doctype(nodes, index, name, public_id, system_id) do
     id = make_ref()
@@ -269,61 +249,8 @@ defmodule DOM.NodeData.Table do
     put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
   end
 
-  @doc """
-  Append `child_ids` (in order) to `parent_id` in one shot: carve the whole
-  append gap into N windows with a single `multispan/3` (one `interval/2` for a
-  lone child) and place each child into its window. Equivalent to N
-  `append_child/3` calls but with one extent partition instead of N successive
-  ones. Each child is detached from any current parent first.
-  """
-  @spec append_children(tid, id, [id]) :: :ok
-  def append_children(_tid, _parent_id, []), do: :ok
-
-  def append_children(tid, parent_id, child_ids) do
-    Enum.each(child_ids, &detach(tid, &1))
-    parent = ensure_extent(tid, parent_id)
-    {gap_a, gap_b} = extent_after_last(tid, parent_id, parent)
-    place_children(tid, parent_id, child_ids, gap_a, gap_b)
-  end
-
-  @doc """
-  Insert `child_ids` (in order) immediately before `reference_id` under
-  `parent_id`, carving the single gap `(prev_sibling.stop || parent.start,
-  reference.start)` into N windows with one `multispan/3`.
-  """
-  @spec insert_children_before(tid, id, [id], id) :: :ok
-  def insert_children_before(_tid, _parent_id, [], _reference_id), do: :ok
-
-  def insert_children_before(tid, parent_id, child_ids, reference_id) do
-    Enum.each(child_ids, &detach(tid, &1))
-    parent = ensure_extent(tid, parent_id)
-    {gap_a, gap_b} = extent_before(tid, parent_id, parent, reference_id)
-    place_children(tid, parent_id, child_ids, gap_a, gap_b)
-  end
-
-  # Partition `(gap_a, gap_b)` into one window per child (multispan; interval for a
-  # lone child) and place each child at its window: a fresh node takes the window as
-  # its extent directly; an already-labeled subtree is grafted into it (window as
-  # the destination gap). Then link the child's parent pointer.
-  defp place_children(tid, parent_id, child_ids, gap_a, gap_b) do
-    root = fetch!(tid, parent_id).root
-
-    child_ids
-    |> carve_windows(gap_a, gap_b)
-    |> Enum.each(fn {child_id, {wstart, wstop}} ->
-      child = fetch!(tid, child_id)
-
-      if child.start == nil do
-        put(tid, child_id, %{child | root: root, start: wstart, stop: wstop, parent: parent_id})
-      else
-        graft_subtree(tid, child_id, child, root, wstart, wstop)
-        put(tid, child_id, %{fetch!(tid, child_id) | parent: parent_id})
-      end
-    end)
-  end
-
-  # Pair each child id with its extent window: none for [], a single interval for
-  # one child, a multispan partition for many.
+  # Pair each child id with its extent window: none for [], a single interval for one
+  # child, a multispan partition for many. Used by `graft_plan` (the move-into-slot plan).
   defp carve_windows([], _a, _b), do: []
   defp carve_windows([only], a, b), do: [{only, interval(a, b)}]
   defp carve_windows(ids, a, b), do: Enum.zip(ids, multispan(a, b, length(ids)))
@@ -635,7 +562,7 @@ defmodule DOM.NodeData.Table do
   @spec clone(tid, tid, id, boolean()) :: id
   def clone(nodes, index, id, deep?) do
     clone_id = make_ref()
-    clone_subtree(nodes, index, id, deep?, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
+    clone_subtree(nodes, index, id, deep?, clone_id, clone_id, nil, {<<0x00>>, <<0x80>>})
     clone_id
   end
 
@@ -673,7 +600,7 @@ defmodule DOM.NodeData.Table do
   # write it into BOTH tables (span + membership, index-first via NodeData.insert), then
   # (deep) clone its source children in extent order, carving each into a fresh sub-interval.
   # Single pass: order from the source's extents, adjacency from parent pointers.
-  defp clone_subtree(nodes, index, src_id, deep?, clone_id, root, parent, start, stop) do
+  defp clone_subtree(nodes, index, src_id, deep?, clone_id, root, parent, {start, stop}) do
     record = %{fetch!(nodes, src_id) | parent: parent, root: root, start: start, stop: stop}
     NodeData.insert(clone_id, record, nodes, index)
 
@@ -682,7 +609,7 @@ defmodule DOM.NodeData.Table do
       |> children_by_extent(src_id)
       |> Enum.reduce(start, fn src_child, prev ->
         {cstart, cstop} = interval(prev, stop)
-        clone_subtree(nodes, index, src_child, true, make_ref(), root, clone_id, cstart, cstop)
+        clone_subtree(nodes, index, src_child, true, make_ref(), root, clone_id, {cstart, cstop})
         cstop
       end)
     end
@@ -1225,29 +1152,6 @@ defmodule DOM.NodeData.Table do
   def span_index_all(nodes, index) do
     for {id, %{start: start} = data} when start != nil <- :ets.tab2list(nodes) do
       span_mirror_one(index, id, data)
-    end
-
-    :ok
-  end
-
-  @doc """
-  Mirror all derived index rows for exactly the subtree rooted at `root_id` from its
-  records — the incremental replacement for the whole-table `span_index_all` +
-  `reindex` after a graft/move. An extent mutator
-  (`append_child`/`insert_before`/`remove_child`/…) has already written the moved
-  subtree's new extents onto the records (`graft` computed them); this copies that
-  result per node, retract-then-put: the span rows (from the extent) and, for
-  elements, the tag/id/class/attr membership rows. Bounded to the moved subtree
-  (`subtree_ids/2`), not the whole table.
-  """
-  @spec rehome_subtree(tid, tid, id) :: :ok
-  def rehome_subtree(nodes, index, root_id) do
-    for id <- subtree_ids(nodes, root_id) do
-      data = fetch!(nodes, id)
-      span_mirror_one(index, id, data)
-      # element membership (tag/id/class/attr) rows follow the moved subtree too, so a
-      # built/relocated subtree needs no separate whole-table `reindex`.
-      if match?(%NodeData.Element{}, data), do: index_put(index, id, data)
     end
 
     :ok

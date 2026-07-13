@@ -1465,15 +1465,10 @@ defmodule DOM do
   def _range_clone_contents(server, range_id) do
     _atomic_ets_op(server, fn nodes, index ->
       {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
-      clones = DOM.Range.Contents.clone(nodes, sc, so, ec, eo)
-
-      # labeled 1-node tree from birth (so an empty/collapsed-range fragment is still
-      # labeled); appending children carves inside its window.
+      # clones are fully-labeled detached subtrees; move them under the fragment.
+      clones = DOM.Range.Contents.clone(nodes, index, sc, so, ec, eo)
       fragment_id = Table.create_document_fragment(nodes, index)
-      Table.append_children(nodes, fragment_id, clones)
-      # everything built this op lives under the fragment now — mirror its whole subtree
-      # (span + id/class/tag/attr index rows).
-      Table.rehome_subtree(nodes, index, fragment_id)
+      NodeData.graft_into(nodes, index, fragment_id, clones, :last)
 
       node_handle(nodes, fragment_id)
     end)
@@ -1491,14 +1486,10 @@ defmodule DOM do
   defp range_extract_op(nodes, index, range_id) do
     {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
     snapshot = range_snapshot(nodes, index)
-    extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
-
-    # labeled 1-node tree from birth (empty/collapsed range → still labeled).
+    # extracted are fully-labeled detached subtrees; move them under the fragment.
+    extracted = DOM.Range.Contents.extract(nodes, index, sc, so, ec, eo)
     fragment_id = Table.create_document_fragment(nodes, index)
-    Table.append_children(nodes, fragment_id, extracted)
-    # the extracted subtrees are now under the fragment; rehome_subtree retracts their
-    # old (source) rows by id and re-mirrors the whole fragment subtree (span + index).
-    Table.rehome_subtree(nodes, index, fragment_id)
+    NodeData.graft_into(nodes, index, fragment_id, extracted, :last)
 
     collapse_range_to_start(index, range_id)
     reconcile_ranges(nodes, index, snapshot)
@@ -1513,10 +1504,9 @@ defmodule DOM do
       fn nodes, index ->
         {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
         snapshot = range_snapshot(nodes, index)
-        extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
+        extracted = DOM.Range.Contents.extract(nodes, index, sc, so, ec, eo)
 
-        # delete_subtree retracts each removed node's span rows; extract detaches
-        # cleanly (leaves the remaining nodes' extents intact), so no rehome is needed.
+        # delete_subtree retracts each removed node's index rows + deletes the records.
         Enum.each(extracted, &delete_subtree(nodes, index, &1))
 
         collapse_range_to_start(index, range_id)
@@ -1626,12 +1616,9 @@ defmodule DOM do
       # extract -> append into element -> insert element at the range start
       fragment = range_extract_op(nodes, index, range_id)
 
+      # move the extracted fragment's (labeled) children under the wrapper element.
       moved = Table.children(nodes, fragment.node_id)
-      Enum.each(moved, &Table.append_child(nodes, element_id, &1))
-
-      # the fragment's children are now under element_id — mirror each moved subtree
-      # (span + index rows); element_id itself is mirrored when it is inserted below.
-      Enum.each(moved, &Table.rehome_subtree(nodes, index, &1))
+      NodeData.graft_into(nodes, index, element_id, moved, :last)
 
       {{start_key, so2}, _} = Table.range_boundaries(index, range_id)
       container = Table.node_at_start_key(nodes, start_key)

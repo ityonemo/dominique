@@ -92,7 +92,7 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
       # mirror span + id/class index rows for the built tree in one subtree walk.
-      Table.rehome_subtree(tid, index, doc)
+      Table.span_index_all(tid, index)
       %{doc: doc, ul: ul, a: a, b: b}
     end
 
@@ -106,7 +106,7 @@ defmodule DOM.NodeData.TableTest do
       frag = Table.create_element(tid, index, "section")
       child = Table.create_element(tid, index, "p")
       Table.append_child(tid, frag, child)
-      Table.rehome_subtree(tid, index, frag)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
     end
@@ -432,7 +432,7 @@ defmodule DOM.NodeData.TableTest do
          %{tid: tid, index: index} do
       ids = field_tree(tid, index)
       # mirror span + membership index rows for the built tree in one subtree walk.
-      Table.rehome_subtree(tid, index, ids.root)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, ids.root) == [ids.ul]
@@ -448,8 +448,8 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, frag, x)
 
       # mirror each root's subtree (span + membership rows).
-      Table.rehome_subtree(tid, index, ids.root)
-      Table.rehome_subtree(tid, index, frag)
+      Table.span_index_all(tid, index)
+      Table.span_index_all(tid, index)
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, frag) == [x]
     end
@@ -508,68 +508,9 @@ defmodule DOM.NodeData.TableTest do
       assert extent_inside?(tid, gc, c)
     end
 
-    test "append_children places N siblings in one multispan-carved gap", %{
-      tid: tid,
-      index: index
-    } do
-      p = Table.create_element(tid, index, "p")
-      a = Table.create_element(tid, index, "a")
-      kids = for i <- 1..6, do: Table.create_element(tid, index, "k#{i}")
-      Table.append_child(tid, p, a)
-
-      # bulk-append all six after the existing child `a`
-      Table.append_children(tid, p, kids)
-
-      assert Table.children_by_extent(tid, p) == [a | kids]
-      Enum.each(kids, &assert(extent_inside?(tid, &1, p)))
-    end
-
-    test "append_children moves already-labeled subtrees (graft per window)", %{
-      tid: tid,
-      index: index
-    } do
-      root = Table.create_document(tid, index)
-      frag = Table.create_element(tid, index, "frag")
-      dest = Table.create_element(tid, index, "dest")
-      Table.append_child(tid, root, frag)
-      Table.append_child(tid, root, dest)
-
-      # frag has three labeled subtrees, each with a child
-      subs =
-        for i <- 1..3 do
-          s = Table.create_element(tid, index, "s#{i}")
-          gc = Table.create_element(tid, index, "g#{i}")
-          Table.append_child(tid, frag, s)
-          Table.append_child(tid, s, gc)
-          {s, gc}
-        end
-
-      ids = Enum.map(subs, &elem(&1, 0))
-      Table.append_children(tid, dest, ids)
-
-      assert Table.children_by_extent(tid, frag) == []
-      assert Table.children_by_extent(tid, dest) == ids
-
-      Enum.each(subs, fn {s, gc} ->
-        assert extent_inside?(tid, s, dest)
-        assert Table.children_by_extent(tid, s) == [gc]
-        assert extent_inside?(tid, gc, s)
-      end)
-    end
-
-    test "insert_children_before splices N siblings before a reference", %{tid: tid, index: index} do
-      p = Table.create_element(tid, index, "p")
-      a = Table.create_element(tid, index, "a")
-      z = Table.create_element(tid, index, "z")
-      Table.append_child(tid, p, a)
-      Table.append_child(tid, p, z)
-
-      kids = for i <- 1..4, do: Table.create_element(tid, index, "k#{i}")
-      Table.insert_children_before(tid, p, kids, z)
-
-      assert Table.children_by_extent(tid, p) == [a | kids] ++ [z]
-      Enum.each(kids, &assert(extent_inside?(tid, &1, p)))
-    end
+    # Batch multi-child placement (append_children / insert_children_before) and
+    # already-labeled graft-per-window are now delivered by NodeData.graft_into (multispan);
+    # the Table-level batch mutators were removed. Covered by rehome_test.exs.
   end
 
   # Whether child's extent is strictly contained in parent's, from the records.
@@ -596,7 +537,7 @@ defmodule DOM.NodeData.TableTest do
       Table.append_child(tid, ul, a)
       Table.append_child(tid, ul, b)
 
-      Table.rehome_subtree(tid, index, root)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, root) == [ul]
@@ -623,7 +564,7 @@ defmodule DOM.NodeData.TableTest do
     test "returns children in start-key order, reading only the nodes tid",
          %{tid: tid, index: index} do
       ids = field_tree(tid, index)
-      Table.rehome_subtree(tid, index, ids.root)
+      Table.span_index_all(tid, index)
 
       # Same document order as the span-index read, but derived from the record
       # `start` keys on the nodes tid — no index consulted.
@@ -636,7 +577,7 @@ defmodule DOM.NodeData.TableTest do
     test "agrees with span_children_of and the children field for every node",
          %{tid: tid, index: index} do
       ids = field_tree(tid, index)
-      Table.rehome_subtree(tid, index, ids.root)
+      Table.span_index_all(tid, index)
 
       for id <- Map.values(ids) do
         assert Table.children_by_extent(tid, id) == Table.span_children_of(tid, index, id)
@@ -668,7 +609,7 @@ defmodule DOM.NodeData.TableTest do
       # append_child(target, b) grafts b's whole ([b, c]) subtree into target,
       # writing the new extents live — no separate graft/carve step.
       Table.append_child(tid, target, b)
-      Table.rehome_subtree(tid, index, root)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.span_children_of(tid, index, target) == [b]

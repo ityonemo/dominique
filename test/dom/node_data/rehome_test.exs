@@ -27,7 +27,7 @@ defmodule DOM.NodeData.RehomeTest do
     Table.append_child(nodes, ul, b)
     Table.append_child(nodes, b, c)
     Table.append_child(nodes, doc, target)
-    Table.rehome_subtree(nodes, index, doc)
+    Table.span_index_all(nodes, index)
     %{doc: doc, ul: ul, a: a, b: b, c: c, target: target}
   end
 
