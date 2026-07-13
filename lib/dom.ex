@@ -734,15 +734,19 @@ defmodule DOM do
   #
   # A document-level active-element singleton (HTML focus management, not DOM proper).
   # focus() sets it when the target is focusable AND connected; blur() clears it (focus
-  # falls back to <body> in active_element/1). No focus/blur EVENTS yet.
+  # falls back to <body> in active_element/1). A focus MOVE fires the focus-event
+  # sequence (blur/focusout on the old, focus/focusin on the new).
 
   @doc false
   def _node_focus(server, node_id) do
     _atomic_ets_op(
       server,
       fn nodes, index ->
-        if focusable?(nodes, node_id) and connected?(nodes, node_id) do
+        previous = Table.active_element_get(index)
+
+        if focusable?(nodes, node_id) and connected?(nodes, node_id) and previous != node_id do
           Table.active_element_put(index, node_id)
+          fire_focus_change(nodes, index, previous, node_id)
         end
 
         :ok
@@ -755,14 +759,40 @@ defmodule DOM do
   def _node_blur(server, node_id) do
     _atomic_ets_op(
       server,
-      fn _nodes, index ->
+      fn nodes, index ->
         # blur only clears focus if THIS element is the active one (matches the browser:
         # blurring a non-focused element is a no-op).
-        if Table.active_element_get(index) == node_id, do: Table.active_element_clear(index)
+        if Table.active_element_get(index) == node_id do
+          Table.active_element_clear(index)
+          fire_focus_change(nodes, index, node_id, nil)
+        end
+
         :ok
       end,
       :mutates
     )
+  end
+
+  # Dispatch the focus-move event sequence: the blur pair on `old` (relatedTarget =
+  # `new`) BEFORE the focus pair on `new` (relatedTarget = `old`). focus/blur are
+  # non-bubbling, focusin/focusout bubble; all composed, none cancelable. `old`/`new`
+  # may be nil (initial focus / blur to nothing). Runs in-server (server == self()).
+  defp fire_focus_change(nodes, index, old, new) do
+    if old, do: fire_focus_pair(nodes, index, old, "blur", "focusout", new)
+    if new, do: fire_focus_pair(nodes, index, new, "focus", "focusin", old)
+    :ok
+  end
+
+  defp fire_focus_pair(nodes, index, target_id, direct, bubbling, related_id) do
+    related = related_id && node_handle(nodes, related_id)
+    dispatch_focus(nodes, index, target_id, direct, related, false)
+    dispatch_focus(nodes, index, target_id, bubbling, related, true)
+  end
+
+  defp dispatch_focus(nodes, index, target_id, type, related, bubbles?) do
+    event = Event.new(type, bubbles: bubbles?, composed: true, related_target: related)
+    Events.dispatch(nodes, index, self(), target_id, event)
+    :ok
   end
 
   # Whether `node_id` is a focusable element: a[href]/button/select/textarea, input

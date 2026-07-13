@@ -394,11 +394,16 @@ sets it only when the target is **focusable** (`a[href]`/`area[href]`/`button`/`
 AND **connected** (`.root == document_id`); otherwise it is a no-op. `blur` clears it
 only if the element is the active one. The `:focus` / `:focus-visible` (aliased — no
 keyboard/mouse distinction modeled) and `:focus-within` (active element or any ancestor)
-pseudo-classes read the row. **No focus/blur EVENTS yet.** Browser-verified
-(`test/integration/focus_test.exs`).
+pseudo-classes read the row. **Focus events fire** on a focus move: `focus`/`focusin` on
+the new element and `blur`/`focusout` on the old, in the order blur-pair-then-focus-pair
+(`blur@old`, `focusout@old`, `focus@new`, `focusin@new`); `focus`/`blur` are
+`bubbles:false composed:true`, `focusin`/`focusout` `bubbles:true composed:true`, all
+non-cancelable. `relatedTarget` is the other element (`DOM.Event` gained a
+`related_target` field). Dispatched synchronously via the existing `Events.dispatch`.
+Re-focusing the active element fires nothing. Browser-verified
+(`test/integration/focus_test.exs`, `test/integration/focus_event_test.exs`).
 
-**Deferred (the remaining interaction/navigation cluster):** focus/blur/focusin/focusout
-**events** (focus state is in; the event sequence is not); `:target` (a document
+**Deferred (the remaining interaction/navigation cluster):** `:target` (a document
 URL/fragment model); `:hover`/`:active` (pointer state); default actions / form
 submission / checkbox toggle (`preventDefault` actually suppressing anything — it
 currently only sets the flag `dispatchEvent` returns); user-toggled
