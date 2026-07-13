@@ -321,6 +321,26 @@ defmodule DOM do
   def clear_active(%Node{server: server}),
     do: _atomic_ets_op(server, fn _n, index -> Table.pointer_state_clear(index, :active) end)
 
+  @doc """
+  Set the input's `indeterminate` property (the `:indeterminate` checkbox tri-state) —
+  a convenience, since a browser sets it via the IDL property. Not an attribute; a click
+  clears it.
+  """
+  @spec set_indeterminate(Node.t(), boolean()) :: :ok
+  def set_indeterminate(%Node{server: server, node_id: node_id}, value) when is_boolean(value) do
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        record = fetch_node!(nodes, node_id)
+        updated = %{record | indeterminate: value}
+        :ets.insert(nodes, {node_id, updated})
+        Table.index_put(index, node_id, updated)
+        :ok
+      end,
+      :mutates
+    )
+  end
+
   @doc "The document's `<head>` element, or `nil`."
   @spec head(Node.t()) :: Node.t() | nil
   def head(%Node{type: :document} = document), do: query_selector(document, "head")
@@ -2495,6 +2515,7 @@ defmodule DOM do
   defp toggle_input_checkedness(nodes, index, node_id, el) do
     case input_type(el) do
       "checkbox" ->
+        clear_indeterminate(nodes, index, node_id)
         set_checkedness(nodes, index, node_id, not effective_checkedness(el))
 
       "radio" ->
@@ -2504,6 +2525,19 @@ defmodule DOM do
       _ ->
         :ok
     end
+  end
+
+  # A click on a checkbox clears its indeterminate property (browser-verified).
+  defp clear_indeterminate(nodes, index, node_id) do
+    record = fetch_node!(nodes, node_id)
+
+    if record.indeterminate do
+      updated = %{record | indeterminate: false}
+      :ets.insert(nodes, {node_id, updated})
+      Table.index_put(index, node_id, updated)
+    end
+
+    :ok
   end
 
   # An input's current checkedness: the override field (dirty), else the `checked`

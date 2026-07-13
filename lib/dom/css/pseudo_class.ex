@@ -210,6 +210,12 @@ defmodule DOM.CSS.PseudoClass do
     end)
   end
 
+  # :indeterminate — a checkbox with its indeterminate property set; a radio whose whole
+  # name group is unchecked; or a <progress> with no value attribute.
+  def match(%{name: "indeterminate"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, &indeterminate?(nodes, &1))
+  end
+
   def match(%{name: "read-write"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &read_write?(nodes, &1))
   end
@@ -317,6 +323,41 @@ defmodule DOM.CSS.PseudoClass do
       nil -> Query.has_own_attribute?(nodes, id, "checked")
       value -> value
     end
+  end
+
+  # :indeterminate sources: a checkbox with the indeterminate property; a radio whose
+  # whole name group is unchecked; a <progress> with no value.
+  defp indeterminate?(nodes, id) do
+    case Table.fetch!(nodes, id) do
+      %DOM.NodeData.Element{local_name: "input"} = el ->
+        indeterminate_input?(nodes, id, el)
+
+      %DOM.NodeData.Element{local_name: "progress"} ->
+        not Query.has_own_attribute?(nodes, id, "value")
+
+      _ ->
+        false
+    end
+  end
+
+  defp indeterminate_input?(nodes, id, el) do
+    case input_type(nodes, id) do
+      "checkbox" -> el.indeterminate
+      "radio" -> radio_group_unchecked?(nodes, id)
+      _ -> false
+    end
+  end
+
+  # True when no radio in `id`'s name group (document scope) is checked.
+  defp radio_group_unchecked?(nodes, id) do
+    name = Query.own_attribute(nodes, id, "name")
+
+    nodes
+    |> Table.elements_by_tag_name(Process.get(:document_id), "input")
+    |> Enum.filter(
+      &(input_type(nodes, &1) == "radio" and Query.own_attribute(nodes, &1, "name") == name)
+    )
+    |> Enum.all?(&(not input_checkedness(nodes, &1)))
   end
 
   # :read-write — a mutable input (a type the `readonly` attribute applies to,

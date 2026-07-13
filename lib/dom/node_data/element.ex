@@ -24,6 +24,9 @@ defmodule DOM.NodeData.Element do
     # user-toggled checkedness (a click activation), the attribute no longer drives it.
     # :checked reads the override if set, else the attribute.
     checked: nil,
+    # The input `indeterminate` PROPERTY (a checkbox tri-state marker, not an attribute).
+    # false by default; set via DOM.set_indeterminate; cleared by a click. :indeterminate.
+    indeterminate: false,
     namespace: :html,
     parent: nil,
     attributes: [],
@@ -55,6 +58,7 @@ defmodule DOM.NodeData.Element do
           definition: DOM.CustomElementDefinition.t() | nil,
           manual_assigned: [reference()],
           checked: boolean() | nil,
+          indeterminate: boolean(),
           parent: reference() | nil,
           attributes: [{attr_key(), String.t()}],
           root: reference() | nil,
