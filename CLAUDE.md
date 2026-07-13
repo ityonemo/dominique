@@ -385,10 +385,24 @@ so a field beats an index row). `Slots.recompute` branches on the host shadow's 
 field, recomputes, and signals `slotchange`. Browser-verified
 (`test/integration/slot_assign_test.exs`).
 
-**Deferred (the remaining cluster):** default actions / interaction & navigation state
-(`:hover`, `:focus`, `:target`, form submission, checkbox toggle, `preventDefault`
-actually suppressing anything — it currently only sets the flag `dispatchEvent` returns).
-These need a new state layer `NodeData` does not model.
+**Focus (implemented — the first interaction-state piece):** a document-level active
+element. `DOM.Node.focus/1` / `blur/1` (HTML `element.focus()`/`blur()`) and
+`DOM.active_element/1` (`document.activeElement`, defaulting to `<body>` /
+documentElement). Stored as a single `{:active_element} → node_id` index row. `focus`
+sets it only when the target is **focusable** (`a[href]`/`area[href]`/`button`/`select`/
+`textarea`/`input`-except-`type=hidden`, or any element with `tabindex`; none disabled)
+AND **connected** (`.root == document_id`); otherwise it is a no-op. `blur` clears it
+only if the element is the active one. The `:focus` / `:focus-visible` (aliased — no
+keyboard/mouse distinction modeled) and `:focus-within` (active element or any ancestor)
+pseudo-classes read the row. **No focus/blur EVENTS yet.** Browser-verified
+(`test/integration/focus_test.exs`).
+
+**Deferred (the remaining interaction/navigation cluster):** focus/blur/focusin/focusout
+**events** (focus state is in; the event sequence is not); `:target` (a document
+URL/fragment model); `:hover`/`:active` (pointer state); default actions / form
+submission / checkbox toggle (`preventDefault` actually suppressing anything — it
+currently only sets the flag `dispatchEvent` returns); user-toggled
+`:checked`/`:indeterminate`. These need more document/interaction state.
 
 ## Before finishing any change
 

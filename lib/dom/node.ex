@@ -541,6 +541,21 @@ defmodule DOM.Node do
   end
 
   @doc """
+  Focus this element (HTML `element.focus()`) — make it the document's active element.
+  A no-op if the element is not focusable or not connected to the document. (No focus
+  event is fired yet.)
+  """
+  @spec focus(t()) :: :ok
+  def focus(%__MODULE__{} = node), do: DOM._node_focus(node.server, node.node_id)
+
+  @doc """
+  Blur this element (HTML `element.blur()`) — if it is the active element, return focus
+  to the document body. A no-op otherwise.
+  """
+  @spec blur(t()) :: :ok
+  def blur(%__MODULE__{} = node), do: DOM._node_blur(node.server, node.node_id)
+
+  @doc """
   The composed path an `event` would traverse if dispatched at `node` — the nodes
   from `node` outward to the root, crossing shadow boundaries only when the event
   is `composed`. Mirrors `Event.composedPath()` (computed for a given target).

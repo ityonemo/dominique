@@ -266,6 +266,20 @@ defmodule DOM do
   @spec body(Node.t()) :: Node.t() | nil
   def body(%Node{type: :document} = document), do: query_selector(document, "body")
 
+  @doc """
+  The document's active (focused) element (HTML `document.activeElement`). Defaults to
+  the `<body>` (or the document element) when nothing is explicitly focused.
+  """
+  @spec active_element(Node.t()) :: Node.t() | nil
+  def active_element(%Node{type: :document, server: server} = document) do
+    focused =
+      _atomic_ets_op(server, fn nodes, index ->
+        if id = Table.active_element_get(index), do: node_handle(nodes, id)
+      end)
+
+    focused || body(document) || document_element(document)
+  end
+
   @doc "The document's `<head>` element, or `nil`."
   @spec head(Node.t()) :: Node.t() | nil
   def head(%Node{type: :document} = document), do: query_selector(document, "head")
@@ -703,7 +717,8 @@ defmodule DOM do
 
   # Connected = the node's tree root is the document. `root` is the nested-set anchor
   # maintained on every append/insert/graft, so this is an O(1) field read (no walk).
-  defp connected?(nodes, node_id), do: fetch_node!(nodes, node_id).root == Process.get(:document_id)
+  defp connected?(nodes, node_id),
+    do: fetch_node!(nodes, node_id).root == Process.get(:document_id)
 
   defp run_callback(nil, _el), do: :ok
   defp run_callback(fun, el) when is_function(fun, 1), do: fun.(el)
@@ -712,6 +727,80 @@ defmodule DOM do
 
   defp run_callback4(fun, el, name, old, new) when is_function(fun, 4),
     do: fun.(el, name, old, new)
+
+  # ==========================================================================
+  # Focus (the document's active element)
+  # ==========================================================================
+  #
+  # A document-level active-element singleton (HTML focus management, not DOM proper).
+  # focus() sets it when the target is focusable AND connected; blur() clears it (focus
+  # falls back to <body> in active_element/1). No focus/blur EVENTS yet.
+
+  @doc false
+  def _node_focus(server, node_id) do
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        if focusable?(nodes, node_id) and connected?(nodes, node_id) do
+          Table.active_element_put(index, node_id)
+        end
+
+        :ok
+      end,
+      :mutates
+    )
+  end
+
+  @doc false
+  def _node_blur(server, node_id) do
+    _atomic_ets_op(
+      server,
+      fn _nodes, index ->
+        # blur only clears focus if THIS element is the active one (matches the browser:
+        # blurring a non-focused element is a no-op).
+        if Table.active_element_get(index) == node_id, do: Table.active_element_clear(index)
+        :ok
+      end,
+      :mutates
+    )
+  end
+
+  # Whether `node_id` is a focusable element: a[href]/button/select/textarea, input
+  # (except type=hidden), or any element carrying a `tabindex` — none of them disabled.
+  # Pure predicate over name + attributes (reusable for sequential focus later).
+  defp focusable?(nodes, node_id) do
+    case fetch_node!(nodes, node_id) do
+      %NodeData.Element{} = el -> focusable_element?(el)
+      _ -> false
+    end
+  end
+
+  defp focusable_element?(%NodeData.Element{} = el) do
+    not disabled?(el) and (has_tabindex?(el) or focusable_by_kind?(el))
+  end
+
+  defp focusable_by_kind?(%NodeData.Element{local_name: name} = el) do
+    case name do
+      "a" -> has_string_attr?(el, "href")
+      "area" -> has_string_attr?(el, "href")
+      "input" -> get_string_attr(el, "type") != "hidden"
+      n when n in ~w(button select textarea) -> true
+      _ -> false
+    end
+  end
+
+  defp disabled?(el), do: has_string_attr?(el, "disabled")
+  defp has_tabindex?(el), do: has_string_attr?(el, "tabindex")
+
+  defp has_string_attr?(%NodeData.Element{attributes: attrs}, name),
+    do: Enum.any?(attrs, fn {k, _v} -> k == name end)
+
+  defp get_string_attr(%NodeData.Element{attributes: attrs}, name) do
+    case Enum.find(attrs, fn {k, _v} -> k == name end) do
+      {_k, v} -> v
+      nil -> nil
+    end
+  end
 
   # ==========================================================================
   # Timers + queueMicrotask (HTML WindowOrWorkerGlobalScope)

@@ -165,6 +165,28 @@ defmodule DOM.CSS.PseudoClass do
     end)
   end
 
+  # :focus / :focus-visible — the document's active (focused) element. We do not model
+  # a keyboard/mouse distinction, so :focus-visible aliases :focus for programmatic focus.
+  def match(%{name: name}, %{index: index}, candidates)
+      when name in ["focus", "focus-visible"] do
+    case Table.active_element_get(index) do
+      nil -> []
+      active -> Enum.filter(candidates, &(&1 == active))
+    end
+  end
+
+  # :focus-within — the active element or any of its ancestors.
+  def match(%{name: "focus-within"}, %{nodes: nodes, index: index}, candidates) do
+    case Table.active_element_get(index) do
+      nil ->
+        []
+
+      active ->
+        chain = MapSet.new([active | Query.ancestors(nodes, active)])
+        Enum.filter(candidates, &MapSet.member?(chain, &1))
+    end
+  end
+
   def match(%{name: "read-write"}, %{nodes: nodes}, candidates) do
     Enum.filter(candidates, &read_write?(nodes, &1))
   end

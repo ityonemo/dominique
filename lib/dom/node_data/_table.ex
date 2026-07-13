@@ -1323,6 +1323,37 @@ defmodule DOM.NodeData.Table do
     end
   end
 
+  # ==========================================================================
+  # Focus (the :active_element singleton)
+  # ==========================================================================
+  #
+  # The document's active (focused) element: a single `{:active_element}` row → the
+  # focused node_id. Absent = nothing explicitly focused (reads fall back to <body> in
+  # DOM). focus() sets it, blur() clears it.
+
+  @doc "Set the active (focused) element to `node_id`."
+  @spec active_element_put(tid, id) :: :ok
+  def active_element_put(index, node_id) do
+    :ets.insert(index, {:active_element, node_id})
+    :ok
+  end
+
+  @doc "The active element's node_id, or nil if none is explicitly focused."
+  @spec active_element_get(tid) :: id | nil
+  def active_element_get(index) do
+    case :ets.lookup(index, :active_element) do
+      [{_key, node_id}] -> node_id
+      [] -> nil
+    end
+  end
+
+  @doc "Clear the active element (focus returns to the document body)."
+  @spec active_element_clear(tid) :: :ok
+  def active_element_clear(index) do
+    :ets.delete(index, :active_element)
+    :ok
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.
