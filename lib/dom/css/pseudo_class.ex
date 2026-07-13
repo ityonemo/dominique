@@ -151,10 +151,17 @@ defmodule DOM.CSS.PseudoClass do
 
   # :link — an unvisited hyperlink: an `a`/`area` with an `href` (visitedness is
   # navigation state, so :visited stays match-nothing and :link is all such links).
-  def match(%{name: "link"}, %{nodes: nodes}, candidates) do
+  # :any-link is identical here (it would be :link OR :visited, and :visited is empty).
+  def match(%{name: name}, %{nodes: nodes}, candidates) when name in ["link", "any-link"] do
     Enum.filter(candidates, fn id ->
       Query.local_name(nodes, id) in ~w(a area) and Query.has_own_attribute?(nodes, id, "href")
     end)
+  end
+
+  # :placeholder-shown — an input/textarea with a `placeholder` attribute and no value
+  # (input: no `value` attribute; textarea: no text content).
+  def match(%{name: "placeholder-shown"}, %{nodes: nodes}, candidates) do
+    Enum.filter(candidates, &placeholder_shown?(nodes, &1))
   end
 
   # :defined — a built-in element (non-hyphenated name) or an UPGRADED custom element
@@ -323,6 +330,25 @@ defmodule DOM.CSS.PseudoClass do
       nil -> Query.has_own_attribute?(nodes, id, "checked")
       value -> value
     end
+  end
+
+  # :placeholder-shown — has a `placeholder` and is empty. input: no `value` attribute;
+  # textarea: no text content.
+  defp placeholder_shown?(nodes, id) do
+    Query.has_own_attribute?(nodes, id, "placeholder") and
+      case Query.local_name(nodes, id) do
+        "input" -> Query.own_attribute(nodes, id, "value") in [nil, ""]
+        "textarea" -> textarea_text(nodes, id) == ""
+        _ -> false
+      end
+  end
+
+  # The concatenated text of a textarea's direct text-node children.
+  defp textarea_text(nodes, id) do
+    for child <- Table.children(nodes, id),
+        %DOM.NodeData.Text{value: value} <- [Table.fetch!(nodes, child)],
+        into: "",
+        do: value
   end
 
   # :indeterminate sources: a checkbox with the indeterminate property; a radio whose
