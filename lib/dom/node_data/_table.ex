@@ -1742,12 +1742,15 @@ defmodule DOM.NodeData.Table do
     node_ids = MapSet.new(rows, fn {id, _data} -> id end)
     spans = span_rows(index)
 
-    if spans != [] do
-      check_spans_backward!(spans, node_ids)
-      check_spans_mirror!(rows, spans)
-      by_id = Map.new(rows)
-      Enum.each(rows, fn {id, data} -> check_node_containment!(id, data, by_id) end)
-    end
+    # Always run the mirror check — the span rows must EXACTLY mirror the extent-bearing
+    # records, empty set included. An earlier `if spans != []` guard silently disabled
+    # ALL span validation whenever the read came back empty (e.g. if a spec/value-shape
+    # mismatch made the read match nothing) — a hole in the net. Consistency runs only
+    # between operations, so extents and spans are always in sync at check time.
+    check_spans_backward!(spans, node_ids)
+    check_spans_mirror!(rows, spans)
+    by_id = Map.new(rows)
+    Enum.each(rows, fn {id, data} -> check_node_containment!(id, data, by_id) end)
   end
 
   # backward: no span row points at a node that isn't in the table.

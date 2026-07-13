@@ -111,6 +111,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
       # doc's id is the pre-inserted document record; bulk_load writes every node.
       :ets.insert(tid, {doc, %NodeData.Document{}})
       Tree.bulk_load(tree, tid, index, doc)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.children_by_extent(tid, doc) == [ul]
@@ -135,6 +136,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       :ets.insert(tid, {doc, %NodeData.Document{}})
       Tree.bulk_load(tree, tid, index, doc)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       assert Table.children_by_extent(tid, root) == kids
@@ -149,6 +151,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       :ets.insert(tid, {doc, %NodeData.Document{}})
       Tree.bulk_load(tree, tid, index, doc)
+      Table.span_index_all(tid, index)
 
       assert Table.get_attribute(tid, svg, "width") == "10"
       assert Table.namespace(tid, svg) == :svg
@@ -170,6 +173,7 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       :ets.insert(tid, {doc, %NodeData.Document{}})
       Tree.bulk_load(tree, tid, index, doc)
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
       # the template is in the document; the fragment is a detached root carrying
