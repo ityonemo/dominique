@@ -525,32 +525,64 @@ defmodule DOM do
   @spec set_timeout(Node.t(), (-> any()), non_neg_integer()) :: reference()
   def set_timeout(%Node{server: server}, callback, delay \\ 0) when is_function(callback, 0) do
     if server == self() do
-      schedule_timeout(server, callback, delay)
+      schedule_timer(server, :timeout, callback, delay)
     else
-      GenServer.call(server, {:set_timeout, callback, delay})
+      GenServer.call(server, {:set_timer, :timeout, callback, delay})
     end
   end
 
-  # Schedule the send_after (targeting the server) and record the {:timer, ref} row.
-  # Runs in the server (self() == server), whether from the handle_call or re-entrantly.
-  defp schedule_timeout(server, callback, delay) do
+  @doc """
+  Run `callback` every `delay` ms as a repeating TASK — the HTML `setInterval`. Like
+  `set_timeout/3` but the timer re-fires until `clear_interval/2`. Returns an id for
+  `clear_interval/2`. A convenience method (see the section note).
+  """
+  @spec set_interval(Node.t(), (-> any()), non_neg_integer()) :: reference()
+  def set_interval(%Node{server: server}, callback, delay) when is_function(callback, 0) do
+    if server == self() do
+      schedule_timer(server, :interval, callback, delay)
+    else
+      GenServer.call(server, {:set_timer, :interval, callback, delay})
+    end
+  end
+
+  # Schedule a timer (targeting the server) and record the {:timer, ref} row. A
+  # :timeout uses Process.send_after (one message); an :interval uses
+  # :timer.send_interval (a repeating message) whose tref :timer.cancel stops. Runs in
+  # the server (self() == server), from the handle_call or re-entrantly.
+  defp schedule_timer(server, kind, callback, delay) do
     ref = make_ref()
-    tref = Process.send_after(server, {:run_timer, ref}, delay)
-    Table.timer_put(Process.get(:index), ref, callback, tref)
+
+    tref =
+      case kind do
+        :timeout ->
+          Process.send_after(server, {:run_timer, ref}, delay)
+
+        :interval ->
+          {:ok, tref} = :timer.send_interval(delay, server, {:run_timer, ref})
+          tref
+      end
+
+    Table.timer_put(Process.get(:index), ref, kind, callback, tref)
     ref
   end
 
-  defp set_timeout_impl(callback, delay, _from, state) do
-    {:reply, schedule_timeout(self(), callback, delay), state}
+  defp set_timer_impl(kind, callback, delay, _from, state) do
+    {:reply, schedule_timer(self(), kind, callback, delay), state}
   end
 
   @doc "Cancel a pending `set_timeout/3` timer by its id (a no-op if already fired)."
   @spec clear_timeout(Node.t(), reference()) :: :ok
-  def clear_timeout(%Node{server: server}, id) do
+  def clear_timeout(%Node{} = document, id), do: cancel_timer(document, id)
+
+  @doc "Cancel a repeating `set_interval/3` timer by its id (a no-op if already cleared)."
+  @spec clear_interval(Node.t(), reference()) :: :ok
+  def clear_interval(%Node{} = document, id), do: cancel_timer(document, id)
+
+  defp cancel_timer(%Node{server: server}, id) do
     _atomic_ets_op(server, fn _nodes, index ->
       if timer = Table.timer_get(index, id) do
-        {_callback, tref} = timer
-        Process.cancel_timer(tref)
+        {kind, _callback, tref} = timer
+        cancel_tref(kind, tref)
         Table.timer_delete(index, id)
       end
 
@@ -558,17 +590,24 @@ defmodule DOM do
     end)
   end
 
-  # Fire a timer: if its row is still present (not cleared), run the callback and
-  # delete the row, then run a microtask checkpoint (the timer's trailing checkpoint —
-  # a microtask it enqueued drains before the next task, since handle_continue runs
-  # before the mailbox is read).
+  defp cancel_tref(:timeout, tref), do: Process.cancel_timer(tref)
+  defp cancel_tref(:interval, tref), do: :timer.cancel(tref)
+
+  # Fire a timer: if its row is still present (not cleared), run the callback. A
+  # one-shot (:timeout) deletes its row; an :interval keeps it (it re-fires). Then run
+  # a microtask checkpoint (the timer's trailing checkpoint — a microtask it enqueued
+  # drains before the next task, since handle_continue runs before the mailbox is read).
   defp run_timer_impl(ref, state) do
     case Table.timer_get(state.index, ref) do
       nil ->
         {:noreply, state}
 
-      {callback, _tref} ->
+      {:timeout, callback, _tref} ->
         Table.timer_delete(state.index, ref)
+        callback.()
+        {:noreply, state, {:continue, :drain_microtasks}}
+
+      {:interval, callback, _tref} ->
         callback.()
         {:noreply, state, {:continue, :drain_microtasks}}
     end
@@ -2695,8 +2734,8 @@ defmodule DOM do
   end
 
   @impl true
-  def handle_call({:set_timeout, callback, delay}, from, state) do
-    set_timeout_impl(callback, delay, from, state)
+  def handle_call({:set_timer, kind, callback, delay}, from, state) do
+    set_timer_impl(kind, callback, delay, from, state)
   end
 
   def handle_call(:check_index_consistency, from, state) do

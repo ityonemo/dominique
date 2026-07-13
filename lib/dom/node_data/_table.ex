@@ -1260,22 +1260,24 @@ defmodule DOM.NodeData.Table do
   # Timers (:timer rows)
   # ==========================================================================
   #
-  # A pending setTimeout: `{{:timer, ref}, {callback, tref}}`. `ref` is the id handed
-  # to the caller (clearTimeout key); `tref` is the Process.send_after reference (for
-  # cancellation). The ROW is the source of truth for "should this timer run": firing
-  # or clearing deletes it, so a fired-then-cleared or a message that outraces its
-  # cancel is a no-op. Unlike :microtask, a :timer row legitimately persists across a
-  # consistency check (a scheduled-but-not-fired timer lives in the BEAM timer wheel).
+  # A pending timer: `{{:timer, ref}, {kind, callback, tref}}` where `kind` is
+  # `:timeout` (one-shot) or `:interval` (repeating). `ref` is the id handed to the
+  # caller (clear key); `tref` is the send_after/send_interval reference (cancellation).
+  # The ROW is the source of truth for "should this timer run": a one-shot deletes its
+  # row on fire, an interval keeps it; clearing deletes it. So a fired-then-cleared or a
+  # message that outraces its cancel is a no-op. Unlike :microtask, a :timer row
+  # legitimately persists across a consistency check (a scheduled timer lives in the
+  # BEAM timer wheel; an interval persists by design).
 
-  @doc "Store a pending timer: `ref` -> {callback, send_after tref}."
-  @spec timer_put(tid, reference(), (-> any()), reference()) :: :ok
-  def timer_put(index, ref, callback, tref) do
-    :ets.insert(index, {{:timer, ref}, {callback, tref}})
+  @doc "Store a pending timer: `ref` -> {kind, callback, send_after/interval tref}."
+  @spec timer_put(tid, reference(), :timeout | :interval, (-> any()), reference()) :: :ok
+  def timer_put(index, ref, kind, callback, tref) do
+    :ets.insert(index, {{:timer, ref}, {kind, callback, tref}})
     :ok
   end
 
-  @doc "The `{callback, tref}` for `ref`, or nil if fired/cleared."
-  @spec timer_get(tid, reference()) :: {(-> any()), reference()} | nil
+  @doc "The `{kind, callback, tref}` for `ref`, or nil if fired/cleared."
+  @spec timer_get(tid, reference()) :: {:timeout | :interval, (-> any()), reference()} | nil
   def timer_get(index, ref) do
     case :ets.lookup(index, {:timer, ref}) do
       [{_key, value}] -> value

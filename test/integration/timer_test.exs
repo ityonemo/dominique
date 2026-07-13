@@ -54,11 +54,61 @@ defmodule Integration.TimerTest do
       assert log == expected
     end
 
+    @link "https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html"
+
+    # setInterval repeats until cleared; clearing inside the callback on the Nth tick
+    # yields exactly N ticks. Same shape in both.
+    @js """
+    return await page.evaluate(async () => {
+      const log = [];
+      let count = 0;
+      const id = setInterval(() => {
+        count++;
+        log.push(count);
+        if (count === 3) clearInterval(id);
+      }, 10);
+      await new Promise(r => setTimeout(r, 120));
+      return log;
+    });
+    """
+
+    test "setInterval repeats then self-clears, matching the browser", %{js: expected} do
+      doc = DOM.new("<div></div>")
+      parent = self()
+      counter = :counters.new(1, [])
+      {:ok, holder} = Agent.start_link(fn -> nil end)
+
+      id =
+        DOM.set_interval(
+          doc,
+          fn ->
+            n = :counters.get(counter, 1) + 1
+            :counters.add(counter, 1, 1)
+            send(parent, {:tick, n})
+            if n == 3, do: DOM.clear_interval(doc, Agent.get(holder, & &1))
+          end,
+          10
+        )
+
+      Agent.update(holder, fn _ -> id end)
+
+      log = collect_ticks(100)
+      assert log == expected
+    end
+
     defp collect(0, _timeout), do: []
 
     defp collect(n, timeout) do
       receive do
         tag -> [tag | collect(n - 1, timeout)]
+      after
+        timeout -> []
+      end
+    end
+
+    defp collect_ticks(timeout) do
+      receive do
+        {:tick, n} -> [n | collect_ticks(timeout)]
       after
         timeout -> []
       end

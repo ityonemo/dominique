@@ -109,4 +109,72 @@ defmodule DOM.TimerTest do
 
     assert_receive :micro, 200
   end
+
+  describe "set_interval" do
+    test "repeats until cleared from inside the callback" do
+      doc = new_document("<div></div>")
+      parent = self()
+      counter = :counters.new(1, [])
+
+      DOM.set_interval(
+        doc,
+        fn ->
+          n = :counters.get(counter, 1) + 1
+          :counters.add(counter, 1, 1)
+          send(parent, {:tick, n})
+        end,
+        10
+      )
+
+      assert_receive {:tick, 1}, 300
+      assert_receive {:tick, 2}, 300
+      assert_receive {:tick, 3}, 300
+    end
+
+    test "clear_interval stops further ticks" do
+      doc = new_document("<div></div>")
+      parent = self()
+
+      id = DOM.set_interval(doc, fn -> send(parent, :tick) end, 10)
+      assert_receive :tick, 300
+      DOM.clear_interval(doc, id)
+
+      # after clearing, no further ticks arrive within a comfortable window
+      flush()
+      refute_receive :tick, 60
+    end
+
+    test "an interval callback that clears its own id stops the interval" do
+      doc = new_document("<div></div>")
+      parent = self()
+      counter = :counters.new(1, [])
+      {:ok, id_holder} = Agent.start_link(fn -> nil end)
+
+      id =
+        DOM.set_interval(
+          doc,
+          fn ->
+            n = :counters.get(counter, 1) + 1
+            :counters.add(counter, 1, 1)
+            send(parent, {:tick, n})
+            if n == 3, do: DOM.clear_interval(doc, Agent.get(id_holder, & &1))
+          end,
+          10
+        )
+
+      Agent.update(id_holder, fn _ -> id end)
+
+      assert_receive {:tick, 3}, 400
+      flush()
+      refute_receive {:tick, _}, 60
+    end
+  end
+
+  defp flush do
+    receive do
+      _ -> flush()
+    after
+      0 -> :ok
+    end
+  end
 end
