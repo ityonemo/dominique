@@ -101,7 +101,31 @@ defmodule DOM.NodeData.Table do
 
   defp insert_new(tid, data) do
     id = make_ref()
-    true = :ets.insert(tid, {id, data})
+    # A node is a labeled 1-node tree from birth: seed the fixed root window
+    # (root nil = itself via ns_root, parent nil). So it is always in the extent
+    # order and mirrorable into the span index — no unlabeled regime.
+    true = :ets.insert(tid, {id, %{data | root: nil, start: <<0x00>>, stop: <<0x80>>}})
+    id
+  end
+
+  @doc """
+  Create a node as a labeled 1-node tree AND mirror its span rows in one shot — the
+  index-aware creator used when the caller already holds the index (e.g. the public
+  `create_*` path). `insert_new` seeds the record extent; this additionally writes the
+  node's two span rows, so the fresh node is fully present in the span order.
+  """
+  @spec seed_root(tid, tid, struct()) :: id
+  def seed_root(nodes, index, data) do
+    id = insert_new(nodes, data)
+
+    span_put(index, id, %{
+      root: id,
+      parent: nil,
+      start: <<0x00>>,
+      stop: <<0x80>>,
+      type: NodeData.type(data)
+    })
+
     id
   end
 
@@ -1747,10 +1771,24 @@ defmodule DOM.NodeData.Table do
     # ALL span validation whenever the read came back empty (e.g. if a spec/value-shape
     # mismatch made the read match nothing) — a hole in the net. Consistency runs only
     # between operations, so extents and spans are always in sync at check time.
+    check_extents_present!(rows)
     check_spans_backward!(spans, node_ids)
     check_spans_mirror!(rows, spans)
     by_id = Map.new(rows)
     Enum.each(rows, fn {id, data} -> check_node_containment!(id, data, by_id) end)
+  end
+
+  # labeling: EVERY node carries an extent (start/stop non-nil) — a node is a labeled
+  # 1-node tree from creation, so it is always in the span index. There is no unlabeled
+  # regime; a nil extent means a `create`/op forgot to seed or an op nulled it out.
+  defp check_extents_present!(rows) do
+    Enum.each(rows, fn {id, data} ->
+      if data.start == nil or data.stop == nil do
+        raise "unlabeled node: #{inspect(id)} has no extent " <>
+                "(#{inspect(data.start)}..#{inspect(data.stop)}) — " <>
+                "every node must be labeled from creation"
+      end
+    end)
   end
 
   # backward: no span row points at a node that isn't in the table.

@@ -19,10 +19,18 @@ defmodule DOM.NodeData.TableTest do
   end
 
   describe "creation" do
-    test "create_element inserts a detached element record", %{tid: tid} do
+    test "create_element inserts a detached, labeled 1-node tree record", %{tid: tid} do
       id = Table.create_element(tid, "div")
 
-      assert %NodeData.Element{local_name: "div", parent: nil, start: nil} =
+      # a node is labeled from birth: parentless (its own tree root) with the fixed
+      # root-window extent seeded, so it is always in the extent order.
+      assert %NodeData.Element{
+               local_name: "div",
+               parent: nil,
+               root: nil,
+               start: <<0x00>>,
+               stop: <<0x80>>
+             } =
                Table.fetch!(tid, id)
 
       assert Table.node_name(tid, id) == "div"
@@ -325,6 +333,8 @@ defmodule DOM.NodeData.TableTest do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "id", "one")
       Table.index_put(index, a, Table.fetch!(tid, a))
+      # the node is labeled from birth — mirror its span rows so the full net passes.
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
     end
@@ -358,6 +368,8 @@ defmodule DOM.NodeData.TableTest do
       a = Table.create_element(tid, "a")
       Table.set_attribute(tid, a, "class", "box highlight")
       Table.index_put(index, a, Table.fetch!(tid, a))
+      # the node is labeled from birth — mirror its span rows so the full net passes.
+      Table.span_index_all(tid, index)
 
       assert Table.check_consistency!(tid, index) == :ok
     end

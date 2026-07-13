@@ -67,7 +67,19 @@ defmodule DOM do
     document_id = Keyword.fetch!(opts, :document_id)
     nodes = :ets.new(__MODULE__, [:set, :private])
     index = :ets.new(:"#{__MODULE__}.Index", [:ordered_set, :private])
-    :ets.insert(nodes, {document_id, %NodeData.Document{}})
+    # The document node is a labeled tree root from birth (root nil = itself, the
+    # fixed root window), and mirrored into the span index — the same "labeled from
+    # creation" invariant every node obeys.
+    :ets.insert(nodes, {document_id, %NodeData.Document{start: <<0x00>>, stop: <<0x80>>}})
+
+    Table.span_put(index, document_id, %{
+      root: document_id,
+      parent: nil,
+      start: <<0x00>>,
+      stop: <<0x80>>,
+      type: :document
+    })
+
     # Stash the tids in the process dictionary so a re-entrant read from inside the
     # server (e.g. an event listener running during dispatch) can reach the tables
     # directly via NodeData._select_nodes/_select_index, without a deadlocking
@@ -228,8 +240,9 @@ defmodule DOM do
 
   defp create(%Node{type: :document, server: server}, node_data) do
     _atomic_ets_op(server, fn nodes, index ->
-      node_id = make_ref()
-      Table.put(nodes, node_id, node_data)
+      # a created node is a labeled 1-node tree from birth: seed its root extent and
+      # its span rows together.
+      node_id = Table.seed_root(nodes, index, node_data)
       index_element(index, node_id, node_data)
       # custom element: run `constructed` if the created element's name is defined.
       if match?(%NodeData.Element{}, node_data) do
@@ -1447,8 +1460,9 @@ defmodule DOM do
       {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
       clones = DOM.Range.Contents.clone(nodes, sc, so, ec, eo)
 
-      fragment_id = make_ref()
-      Table.put(nodes, fragment_id, %NodeData.DocumentFragment{})
+      # labeled 1-node tree from birth (so an empty/collapsed-range fragment is still
+      # labeled); appending children carves inside its window.
+      fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
       Table.append_children(nodes, fragment_id, clones)
       Table.reindex(nodes, index)
       resync_spans(nodes, index)
@@ -1471,8 +1485,8 @@ defmodule DOM do
     snapshot = range_snapshot(nodes, index)
     extracted = DOM.Range.Contents.extract(nodes, sc, so, ec, eo)
 
-    fragment_id = make_ref()
-    Table.put(nodes, fragment_id, %NodeData.DocumentFragment{})
+    # labeled 1-node tree from birth (empty/collapsed range → still labeled).
+    fragment_id = Table.seed_root(nodes, index, %NodeData.DocumentFragment{})
     Table.append_children(nodes, fragment_id, extracted)
     Table.reindex(nodes, index)
     resync_spans(nodes, index)
