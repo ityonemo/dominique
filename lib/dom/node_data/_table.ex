@@ -1427,6 +1427,38 @@ defmodule DOM.NodeData.Table do
     :ok
   end
 
+  # ==========================================================================
+  # Traversal objects (:traversal rows — TreeWalker / NodeIterator state)
+  # ==========================================================================
+  #
+  # A TreeWalker or NodeIterator's mutable state as `{{:traversal, ref}, state_map}`.
+  # Server-side (the handle is just server+ref), so the same handle stays valid as its
+  # state advances. TreeWalker holds a `current`; NodeIterator holds `reference` +
+  # `before?` (pointerBeforeReferenceNode), adjusted when a node is removed.
+
+  @doc "Store the traversal state map for `ref`."
+  @spec traversal_put(tid, reference(), map()) :: :ok
+  def traversal_put(index, ref, state) do
+    :ets.insert(index, {{:traversal, ref}, state})
+    :ok
+  end
+
+  @doc "The traversal state map for `ref`, or nil."
+  @spec traversal_get(tid, reference()) :: map() | nil
+  def traversal_get(index, ref) do
+    case :ets.lookup(index, {:traversal, ref}) do
+      [{_key, state}] -> state
+      [] -> nil
+    end
+  end
+
+  @doc "Every NodeIterator `{ref, state}` (for removal adjustment)."
+  @spec node_iterators(tid) :: [{reference(), map()}]
+  def node_iterators(index) do
+    for {{:traversal, ref}, %{kind: :node_iterator} = state} <- index_rows_of(index, :traversal),
+        do: {ref, state}
+  end
+
   @doc """
   The maximum valid Range boundary offset for `node_id`: the child count for an
   element/document/fragment container, the value length for text/comment.

@@ -28,6 +28,7 @@ defmodule DOM do
   alias DOM.NodeData
   alias DOM.NodeData.Slots
   alias DOM.NodeData.Table
+  alias DOM.Traversal
 
   # ==========================================================================
   # Types
@@ -788,6 +789,311 @@ defmodule DOM do
 
   defp run_callback4(fun, el, name, old, new) when is_function(fun, 4),
     do: fun.(el, name, old, new)
+
+  # ==========================================================================
+  # TreeWalker / NodeIterator (DOM traversal)
+  # ==========================================================================
+
+  @doc """
+  Create a `DOM.TreeWalker` rooted at `root`. `what_to_show` is `:all` (default), a
+  node-type atom (`:element`/`:text`/`:comment`/…), a list of them, or a raw bitmask.
+  `filter` is an optional `(DOM.Node.t() -> :accept | :skip | :reject)`.
+  """
+  @spec create_tree_walker(Node.t(), term(), (Node.t() -> atom()) | nil) :: DOM.TreeWalker.t()
+  def create_tree_walker(
+        %Node{server: server, node_id: root_id},
+        what_to_show \\ :all,
+        filter \\ nil
+      ) do
+    ref = make_ref()
+    mask = what_to_show_mask(what_to_show)
+
+    _atomic_ets_op(server, fn _nodes, index ->
+      Table.traversal_put(index, ref, %{
+        kind: :tree_walker,
+        root: root_id,
+        what_to_show: mask,
+        filter: filter,
+        current: root_id
+      })
+    end)
+
+    %DOM.TreeWalker{server: server, ref: ref}
+  end
+
+  @doc """
+  Create a `DOM.NodeIterator` rooted at `root` (see `create_tree_walker/3` for
+  `what_to_show`/`filter`). Its reference node is adjusted when nodes are removed.
+  """
+  @spec create_node_iterator(Node.t(), term(), (Node.t() -> atom()) | nil) :: DOM.NodeIterator.t()
+  def create_node_iterator(
+        %Node{server: server, node_id: root_id},
+        what_to_show \\ :all,
+        filter \\ nil
+      ) do
+    ref = make_ref()
+    mask = what_to_show_mask(what_to_show)
+
+    _atomic_ets_op(server, fn _nodes, index ->
+      Table.traversal_put(index, ref, %{
+        kind: :node_iterator,
+        root: root_id,
+        what_to_show: mask,
+        filter: filter,
+        reference: root_id,
+        before?: true
+      })
+    end)
+
+    %DOM.NodeIterator{server: server, ref: ref}
+  end
+
+  # Node-type atoms -> the DOM whatToShow bit. :all -> :all (every bit).
+  @node_type_bits %{
+    element: 1,
+    text: 3,
+    comment: 8,
+    document: 9,
+    document_type: 10,
+    document_fragment: 11,
+    cdata: 4,
+    processing_instruction: 7
+  }
+
+  defp what_to_show_mask(:all), do: :all
+  defp what_to_show_mask(mask) when is_integer(mask), do: mask
+
+  defp what_to_show_mask(list) when is_list(list),
+    do: Enum.reduce(list, 0, &Bitwise.bor(what_to_show_mask(&1), &2))
+
+  defp what_to_show_mask(atom) when is_atom(atom) do
+    Bitwise.bsl(1, Map.fetch!(@node_type_bits, atom) - 1)
+  end
+
+  @doc false
+  # Step a traversal: run `op.(nodes, index, state)` which returns {new_state, result_id}
+  # (or {state, nil}); persist new_state, return the result as a handle (or nil). The
+  # filter lambda in `state` is invoked in-server (re-entrant). `mutates: false` — a
+  # traversal step reads/advances a private state row, no DOM mutation.
+  def _traversal_step(server, ref, op) do
+    _atomic_ets_op(server, fn nodes, index ->
+      state = Table.traversal_get(index, ref)
+      {new_state, result} = op.(nodes, index, state)
+      Table.traversal_put(index, ref, new_state)
+      result && node_handle(nodes, result)
+    end)
+  end
+
+  @doc false
+  # Read a traversal's current/reference node as a handle.
+  def _traversal_node(server, ref, key) do
+    _atomic_ets_op(server, fn nodes, index ->
+      node_handle(nodes, Map.fetch!(Table.traversal_get(index, ref), key))
+    end)
+  end
+
+  @doc false
+  # Set a TreeWalker's current node.
+  def _traversal_set_current(server, ref, node_id) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      state = Table.traversal_get(index, ref)
+      Table.traversal_put(index, ref, %{state | current: node_id})
+    end)
+  end
+
+  # The combined filter for a traversal state: whatToShow first (a non-shown node maps to
+  # :skip), then the user callback (given a Node handle). Returns a (node_id -> atom) fun.
+  defp traversal_filter(nodes, state) do
+    fn node_id ->
+      cond do
+        not DOM.Traversal.shown?(nodes, node_id, state.what_to_show) -> :skip
+        state.filter == nil -> :accept
+        :else -> normalize_filter_result(state.filter.(node_handle(nodes, node_id)))
+      end
+    end
+  end
+
+  defp normalize_filter_result(:reject), do: :reject
+  defp normalize_filter_result(:skip), do: :skip
+  defp normalize_filter_result(_accept), do: :accept
+
+  # NodeIterator pre-removing steps (DOM §6.1): `removed_id` (child of `parent_id`, at
+  # index `at`) is about to be detached. For each NodeIterator whose reference is an
+  # inclusive descendant of `removed_id`, move the reference so iteration survives: to the
+  # deepest-last-descendant of the removed node's previous sibling, else the parent; and
+  # set the pointer to AFTER it (before? = false).
+  defp adjust_node_iterators(nodes, index, parent_id, removed_id, at) do
+    for {ref, state} <- Table.node_iterators(index),
+        inclusive_descendant?(nodes, state.reference, removed_id) do
+      new_reference = iterator_new_reference(nodes, parent_id, removed_id, at)
+      Table.traversal_put(index, ref, %{state | reference: new_reference, before?: false})
+    end
+
+    :ok
+  end
+
+  # The reference node after `removed_id` leaves: the deepest-last-descendant of its
+  # previous sibling if any, otherwise its parent. (Both exist pre-remove.)
+  defp iterator_new_reference(nodes, parent_id, _removed_id, at) do
+    if at > 0 do
+      prev_sibling = Enum.at(Table.children(nodes, parent_id), at - 1)
+      deepest_last_descendant(nodes, prev_sibling)
+    else
+      parent_id
+    end
+  end
+
+  defp deepest_last_descendant(nodes, id) do
+    case Table.children(nodes, id) do
+      [] -> id
+      children -> deepest_last_descendant(nodes, List.last(children))
+    end
+  end
+
+  # Is `id` `ancestor` itself or a descendant of it?
+  defp inclusive_descendant?(_nodes, ancestor, ancestor), do: true
+
+  defp inclusive_descendant?(nodes, id, ancestor) do
+    case Table.parent(nodes, id) do
+      nil -> false
+      parent -> inclusive_descendant?(nodes, parent, ancestor)
+    end
+  end
+
+  @doc false
+  # NodeIterator "traverse" (DOM §6.1): from the reference node + before? pointer, find
+  # the next/prev accepted node, updating reference/before?. Returns {new_state, id|nil}.
+  def _node_iterator_move(nodes, _index, state, direction) do
+    filter = traversal_filter(nodes, state)
+    %{root: root, reference: ref, before?: before?} = state
+
+    case ni_candidate(nodes, root, ref, before?, filter, direction) do
+      nil ->
+        {state, nil}
+
+      node ->
+        before? = direction == :prev
+        {%{state | reference: node, before?: before?}, node}
+    end
+  end
+
+  # The first accepted node stepping `direction` from (reference, before?). For :next,
+  # if the pointer is BEFORE the reference we may re-yield the reference itself; else we
+  # step past it. Mirrored for :prev.
+  defp ni_candidate(nodes, root, ref, before?, filter, :next) do
+    if before? and filter.(ref) == :accept do
+      ref
+    else
+      DOM.Traversal.ni_next(nodes, root, ref, filter)
+    end
+  end
+
+  defp ni_candidate(nodes, root, ref, before?, filter, :prev) do
+    if not before? and filter.(ref) == :accept do
+      ref
+    else
+      DOM.Traversal.ni_prev(nodes, root, ref, filter)
+    end
+  end
+
+  @doc false
+  # TreeWalker navigation (DOM §6.2): from `current`, find the target for `which`; on a
+  # non-nil result, move currentNode to it. Returns {new_state, id|nil}. (Per spec,
+  # parentNode/next*/previous* set currentNode only when they find a node.)
+  def _tree_walker_move(nodes, _index, state, which) do
+    filter = traversal_filter(nodes, state)
+    %{root: root, current: current} = state
+
+    result =
+      case which do
+        :next_node -> Traversal.tw_next(nodes, root, current, filter)
+        :previous_node -> Traversal.tw_previous(nodes, root, current, filter)
+        :parent_node -> tw_parent(nodes, root, current, filter)
+        :first_child -> tw_child(nodes, current, filter, :first)
+        :last_child -> tw_child(nodes, current, filter, :last)
+        :next_sibling -> tw_sibling(nodes, root, current, filter, :next)
+        :previous_sibling -> tw_sibling(nodes, root, current, filter, :prev)
+      end
+
+    if result, do: {%{state | current: result}, result}, else: {state, nil}
+  end
+
+  # parentNode: the nearest ancestor (within root) that the filter accepts.
+  defp tw_parent(nodes, root, current, filter) do
+    if current == root do
+      nil
+    else
+      parent = Table.parent(nodes, current)
+
+      cond do
+        parent == nil -> nil
+        filter.(parent) == :accept -> parent
+        parent == root -> nil
+        :else -> tw_parent(nodes, root, parent, filter)
+      end
+    end
+  end
+
+  # firstChild/lastChild: the first/last matching child, descending through SKIP nodes,
+  # skipping REJECT subtrees.
+  defp tw_child(nodes, current, filter, side) do
+    children = Table.children(nodes, current)
+    children = if side == :last, do: Enum.reverse(children), else: children
+    tw_child_scan(nodes, children, filter, side)
+  end
+
+  defp tw_child_scan(_nodes, [], _filter, _side), do: nil
+
+  defp tw_child_scan(nodes, [child | rest], filter, side) do
+    case filter.(child) do
+      :accept ->
+        child
+
+      :skip ->
+        grandkids = Table.children(nodes, child)
+        grandkids = if side == :last, do: Enum.reverse(grandkids), else: grandkids
+        tw_child_scan(nodes, grandkids, filter, side) || tw_child_scan(nodes, rest, filter, side)
+
+      :reject ->
+        tw_child_scan(nodes, rest, filter, side)
+    end
+  end
+
+  # nextSibling/previousSibling: the next/prev matching sibling of current (within root),
+  # descending into SKIP siblings' children.
+  defp tw_sibling(_nodes, root, root, _filter, _side), do: nil
+
+  defp tw_sibling(nodes, root, current, filter, side) do
+    sibling =
+      if side == :next,
+        do: Traversal.next_sibling(nodes, current),
+        else: Traversal.prev_sibling(nodes, current)
+
+    tw_sibling_scan(nodes, root, current, sibling, filter, side)
+  end
+
+  defp tw_sibling_scan(nodes, root, current, nil, filter, side) do
+    # no sibling: climb to parent and try its sibling (unless we hit root)
+    parent = Table.parent(nodes, current)
+
+    if parent == nil or parent == root,
+      do: nil,
+      else: tw_sibling(nodes, root, parent, filter, side)
+  end
+
+  defp tw_sibling_scan(nodes, root, _current, sibling, filter, side) do
+    case filter.(sibling) do
+      :accept ->
+        sibling
+
+      :skip ->
+        child = tw_child(nodes, sibling, filter, if(side == :next, do: :first, else: :last))
+        child || tw_sibling(nodes, root, sibling, filter, side)
+
+      :reject ->
+        tw_sibling(nodes, root, sibling, filter, side)
+    end
+  end
 
   # ==========================================================================
   # Focus (the document's active element)
@@ -2016,6 +2322,9 @@ defmodule DOM do
       # custom element: capture the connected custom elements in the subtree BEFORE
       # detaching (with their defs), to fire disconnectedCallback after.
       disconnecting = capture_disconnecting(nodes, parent_id, child_id)
+      # NodeIterator "removing steps": adjust each iterator whose reference is in the
+      # removed subtree, BEFORE detaching (needs the pre-remove tree positions).
+      adjust_node_iterators(nodes, index, parent_id, child_id, at)
 
       Table.remove_child(nodes, parent_id, child_id)
       resync_spans(nodes, index)

@@ -43,7 +43,22 @@ Partition by **scope** (Elixir "first argument owns the function"):
   and the GenServer. Node creation (`DOM.new`, `DOM.create_element(document,
   "div")`, `create_*`) and tree queries that take any node as scope
   (`get_element_by_id`, `get_elements_by_tag_name`, `query_selector`,
-  `query_selector_all`, `matches`) live here.
+  `query_selector_all`, `matches`) live here. Also **`DOM.create_tree_walker/3`** and
+  **`DOM.create_node_iterator/3`** (the DOM traversal objects) — see the TreeWalker /
+  NodeIterator note below.
+
+**TreeWalker / NodeIterator (implemented).** `DOM.create_tree_walker(root, what_to_show
+\\ :all, filter \\ nil)` / `create_node_iterator(...)` return `%DOM.TreeWalker{server,
+ref}` / `%DOM.NodeIterator{server, ref}` handles whose mutable state lives server-side in
+`{:traversal, ref}` index rows (so the handle stays valid as the cursor advances, like a
+Range). `what_to_show` is `:all` (default), a node-type atom (`:element`/`:text`/…), a
+list, or a raw bitmask; `filter` is a `(DOM.Node.t() -> :accept | :skip | :reject)` run
+in-server (re-entrant). The shared **`DOM.Traversal`** engine (`lib/dom/_traversal.ex`)
+does the document-order stepping: TreeWalker's `next_node` **excludes the root** and
+`:reject` **prunes the whole subtree**; NodeIterator **includes the root**, has no subtree
+pruning, and its reference node is **live-adjusted on node removal** (`adjust_node_iterators`
+hooked in `remove_child_op`, like `adjust_ranges`) so iteration survives removals.
+Browser-verified (`test/integration/traversal_test.exs`).
 
 **Three call layers (the `_` prefix).** A handle is opaque data; `DOM.Node` /
 `DOM.Element` forward through the `DOM` server. Every operation flows:
