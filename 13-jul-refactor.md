@@ -42,27 +42,26 @@ _contents.ex is restructured create-in-place.
 
 ## Item 6 — DONE (commit 197fac7). Every both-tables write is index-first.
 
-## Item 1 rollout — rehome caller wiring — IN PROGRESS
-- **Detach cases DONE** (commits d4a5e2a, a7386fe): `NodeData.detach(nodes, index, child_id)`
-  = the rehome to self-root (keep byte-keys, root→child_id, root's parent→nil). Wired into
-  `remove_child_op` and same-server `_adopt_node`. `_remove_subtree`/replace-prepare keep the
-  record-only `Table.detach` (they delete/re-insert right after, so no rehome). Removed
-  `detach_from_parent`.
-- **Move-into-slot cases — NEXT (decision: FULL UNIFY, user).** The ~13 append/insert/graft
-  sites (currently `Table.append_child`/`insert_before` + `rehome_subtree`) go onto
-  `NodeData.rehome` with an into-slot transform. **To avoid re-deriving graft's key math in
-  the lambda:** have `Table.graft` (or a wrapper) RETURN the per-node `%{id => {new_start,
-  new_stop}}` mapping; `NodeData.graft_into(nodes, index, parent_id, child_id, position)` then:
-  (1) compute dest slot (extent_after_last / extent_before), (2) get the graft mapping,
-  (3) `rehome` over the child's CURRENT window `{child.root, child.start, child.stop}` with a
-  transform that sets root→parent's tree root, start/stop from the mapping, and the subtree
-  ROOT's parent→parent_id (descendants keep their parent). Multi-child (fragment) = multispan
-  the gap, graft each. NOTE post-Phase-A the `child.start == nil` fresh-node branch in
-  place_child/place_children is DEAD (every node labeled) — only the graft path remains.
-  Build incrementally: add graft_into → wire ONE site (append_child_op :else) → green →
-  roll out to insert/fragment/subtree-attach/import/clone. Consistency net is the oracle.
-- Then `Table.append_child`/`insert_before`/`place_child`/`graft_subtree`/`rehome_subtree`
-  become removable (all relocation flows through `NodeData.rehome`).
+## Item 1 rollout — rehome caller wiring — DONE (except the item-7-gated cluster)
+- **Detach** (d4a5e2a, a7386fe): `NodeData.detach(nodes, index, child_id)` = rehome to
+  self-root. Wired into `remove_child_op`, same-server `_adopt_node`, replace-child (old node),
+  inner/outerHTML removals. `_remove_subtree`/replace-prepare keep record-only `Table.detach`
+  (delete/re-insert follows).
+- **Move-into-slot** (796ff01, 1df440d, 1838a57): `NodeData.graft_into(nodes, index, parent_id,
+  child_ids, position)` — `Table.graft_plan` computes the destination (dest root/parent +
+  `%{id => {new_start, new_stop}}` extent map, single source of the key math); graft_into
+  `rehome`s each child subtree applying the plan. Wired into append/insert (single + fragment
+  multispan), subtree-attach, replace, insert/outer/inner-adjacentHTML, shadow innerHTML.
+- **materialize_subtree** now writes both tables (NodeData.insert per node) so a following
+  graft_into has span rows to move; adopt/import drop their now-redundant rehome_subtree.
+- **clone** (e5a32a4): `Table.clone(nodes, index, …)` writes both tables; `clone_record`
+  (record-only) kept as the temporary seam for _contents.ex / tree-builder <template>.
+- **Removed** (b05a400): dead `Table.insert_before`, `Table.remove_child` + their obsolete
+  Table-level tests.
+- **STILL ALIVE, gated on item 7** (used only by _contents.ex / range clone-extract-fragment
+  builders / surround / tree-builder): `Table.append_child`, `append_children`,
+  `place_child(ren)`, `graft_subtree`, `rehome_subtree` (3 remaining call sites). Removable once
+  _contents.ex produces fully-labeled nodes.
 
 ## Item 7 — `_contents.ex` create-in-place rewrite — FUTURE
 Remove the temporary `create_text_record`/`create_comment_record` seam; build the extracted/
