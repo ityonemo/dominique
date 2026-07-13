@@ -995,18 +995,40 @@ defmodule DOM.NodeData.Table do
   @spec span_index_all(tid, tid) :: :ok
   def span_index_all(nodes, index) do
     for {id, %{start: start} = data} when start != nil <- :ets.tab2list(nodes) do
-      span_retract(index, id)
-
-      span_put(index, id, %{
-        root: ns_root(data, id),
-        parent: data.parent,
-        start: start,
-        stop: data.stop,
-        type: NodeData.type(data)
-      })
+      span_mirror_one(index, id, data)
     end
 
     :ok
+  end
+
+  @doc """
+  Mirror the span rows for exactly the subtree rooted at `root_id` from its records —
+  the incremental replacement for a whole-table `span_index_all` after a graft/move.
+  An extent mutator (`append_child`/`insert_before`/`remove_child`/…) has already
+  written the moved subtree's new extents onto the records (`graft` computed them);
+  this copies that result into the span rows, retract-then-put per node. Bounded to
+  the moved subtree (`subtree_ids/2`), not the whole table.
+  """
+  @spec span_rehome(tid, tid, id) :: :ok
+  def span_rehome(nodes, index, root_id) do
+    for id <- subtree_ids(nodes, root_id) do
+      span_mirror_one(index, id, fetch!(nodes, id))
+    end
+
+    :ok
+  end
+
+  # Retract `id`'s old span rows and put fresh ones straight from its record extent.
+  defp span_mirror_one(index, id, data) do
+    span_retract(index, id)
+
+    span_put(index, id, %{
+      root: ns_root(data, id),
+      parent: data.parent,
+      start: data.start,
+      stop: data.stop,
+      type: NodeData.type(data)
+    })
   end
 
   # ==========================================================================

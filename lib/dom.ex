@@ -1444,8 +1444,9 @@ defmodule DOM do
       snapshot = range_snapshot(nodes, index)
       Table.set_value(nodes, node_id, before)
       new_id = Table.create_text(nodes, rest)
-      insert_after(nodes, parent_id, new_id, node_id)
-      resync_spans(nodes, index)
+      # insert_after re-homes the new tail's span rows; the shortened original keeps its
+      # extent (only its text value changed), so no other span row needs updating.
+      insert_after(nodes, index, parent_id, new_id, node_id)
 
       new_key = Table.fetch!(nodes, new_id).start
       adjust_split_ranges(nodes, index, snapshot, parent_id, node_id, orig_key, new_key, offset)
@@ -1550,18 +1551,19 @@ defmodule DOM do
       cond do
         offset == 0 -> text_id
         offset >= String.length(Table.value(nodes, text_id)) -> nil
-        :else -> split_text_for_insert(nodes, text_id, offset)
+        :else -> split_text_for_insert(nodes, index, text_id, offset)
       end
 
     insert_relative(nodes, index, parent_id, node_id, reference)
   end
 
-  # Split `text_id` at `offset`; return the tail node to insert before.
-  defp split_text_for_insert(nodes, text_id, offset) do
+  # Split `text_id` at `offset`; return the tail node to insert before. `insert_after`
+  # re-homes the tail's span rows (the following insert-before does not re-key it).
+  defp split_text_for_insert(nodes, index, text_id, offset) do
     {before, rest} = String.split_at(Table.value(nodes, text_id), offset)
     Table.set_value(nodes, text_id, before)
     tail = Table.create_text(nodes, rest)
-    insert_after(nodes, Table.parent(nodes, text_id), tail, text_id)
+    insert_after(nodes, index, Table.parent(nodes, text_id), tail, text_id)
     tail
   end
 
@@ -1686,8 +1688,9 @@ defmodule DOM do
     {Table.node_at_start_key(nodes, start_key), so, Table.node_at_start_key(nodes, stop_key), eo}
   end
 
-  # Insert `new_id` immediately after `ref_id` under `parent_id` (append if last).
-  defp insert_after(nodes, parent_id, new_id, ref_id) do
+  # Insert `new_id` immediately after `ref_id` under `parent_id` (append if last),
+  # re-homing its span rows to match the placement.
+  defp insert_after(nodes, index, parent_id, new_id, ref_id) do
     kids = Table.children(nodes, parent_id)
     at = Enum.find_index(kids, &(&1 == ref_id))
 
@@ -1695,6 +1698,8 @@ defmodule DOM do
       nil -> Table.append_child(nodes, parent_id, new_id)
       next -> Table.insert_before(nodes, parent_id, new_id, next)
     end
+
+    Table.span_rehome(nodes, index, new_id)
   end
 
   # split rule (boundaries past the split move into the new node) + the insert of
@@ -1767,8 +1772,8 @@ defmodule DOM do
         {:error, :hierarchy_request}
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
-        append_fragment(nodes, parent_id, child_id, child_data)
-        resync_spans(nodes, index)
+        moved = append_fragment(nodes, parent_id, child_id, child_data)
+        Enum.each(moved, &Table.span_rehome(nodes, index, &1))
         :ok
 
       :else ->
@@ -1776,7 +1781,7 @@ defmodule DOM do
         siblings = Table.children(nodes, parent_id)
         at = length(siblings)
         Table.append_child(nodes, parent_id, child_id)
-        resync_spans(nodes, index)
+        Table.span_rehome(nodes, index, child_id)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
         # childList: appended at the end — previousSibling is the old last child.
@@ -2030,20 +2035,20 @@ defmodule DOM do
 
   # Flatten a fragment's children onto `parent_id` (append), placing all of them in
   # one multispan-carved gap (snapshot the ordered children first — the bulk move
-  # re-parents them, emptying the fragment).
+  # re-parents them, emptying the fragment). Returns the moved child ids so the caller
+  # can re-home their span rows.
   defp append_fragment(nodes, parent_id, fragment_id, _fragment) do
-    Table.append_children(nodes, parent_id, Table.children(nodes, fragment_id))
+    moved = Table.children(nodes, fragment_id)
+    Table.append_children(nodes, parent_id, moved)
+    moved
   end
 
   # Flatten a fragment's children into `parent_id` before `reference_child_id`, in
-  # order, in one multispan-carved gap.
+  # order, in one multispan-carved gap. Returns the moved child ids.
   defp insert_fragment(nodes, parent_id, fragment_id, _fragment, reference_child_id) do
-    Table.insert_children_before(
-      nodes,
-      parent_id,
-      Table.children(nodes, fragment_id),
-      reference_child_id
-    )
+    moved = Table.children(nodes, fragment_id)
+    Table.insert_children_before(nodes, parent_id, moved, reference_child_id)
+    moved
   end
 
   def _node_insert_before(server, parent_id, child, nil) do
@@ -2118,8 +2123,8 @@ defmodule DOM do
         :ok
 
       match?(%NodeData.DocumentFragment{}, child_data) ->
-        insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
-        resync_spans(nodes, index)
+        moved = insert_fragment(nodes, parent_id, child_id, child_data, reference_child_id)
+        Enum.each(moved, &Table.span_rehome(nodes, index, &1))
         :ok
 
       :else ->
@@ -2127,7 +2132,7 @@ defmodule DOM do
         siblings = Table.children(nodes, parent_id)
         at = child_index(nodes, parent_id, reference_child_id)
         Table.insert_before(nodes, parent_id, child_id, reference_child_id)
-        resync_spans(nodes, index)
+        Table.span_rehome(nodes, index, child_id)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
         # childList: inserted before the reference — previousSibling is the child
