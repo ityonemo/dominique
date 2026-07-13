@@ -327,24 +327,24 @@ design (see `README.md`). Two customers are built on it:
   (`test/integration/mutation_observer_test.exs`).
 
 **Timer tasks (implemented — the task half of the event loop):** `DOM.set_timeout/3`,
-`clear_timeout/2`, `queue_microtask/2` (the public HTML `queueMicrotask`). These are
-HTML `WindowOrWorkerGlobalScope` methods, NOT DOM proper — Dominique has no `Window`,
-so they live on `DOM` as a documented convenience (the document server already owns the
-event loop). A timer is a `{:timer, ref}` index row `{callback, tref}`; `set_timeout`
-does `Process.send_after(server, {:run_timer, ref}, delay)`; `handle_info({:run_timer,
-ref})` runs the callback (if the row is still present — the row is the source of truth,
-so a cleared/outraced timer is a no-op) then returns `{:continue, :drain_microtasks}`
-(the timer's trailing checkpoint). `clear_timeout` deletes the row + `cancel_timer`. A
-`:timer` row legitimately persists across `check_consistency!` (a scheduled timer lives
-in the BEAM timer wheel — unlike a `:microtask` row, whose presence means a skipped
-checkpoint). Browser-verified task-vs-microtask ordering
-(`test/integration/timer_test.exs`). **`setInterval` should use `:timer.send_interval`**
-(re-arming self-perpetuating task) — not yet built.
+`clear_timeout/2`, `set_interval/3`, `clear_interval/2`, `queue_microtask/2` (the public
+HTML `queueMicrotask`). These are HTML `WindowOrWorkerGlobalScope` methods, NOT DOM
+proper — Dominique has no `Window`, so they live on `DOM` as a documented convenience
+(the document server already owns the event loop). A timer is a `{:timer, ref}` index
+row `{kind, callback, tref}` (`kind` = `:timeout | :interval`). `set_timeout` uses
+`Process.send_after(server, {:run_timer, ref}, delay)`; `set_interval` uses
+`:timer.send_interval` (self-repeating). `handle_info({:run_timer, ref})` runs the
+callback if the row is still present (the row is the source of truth — a cleared/outraced
+timer is a no-op); a `:timeout` deletes its row, an `:interval` keeps it; both then
+return `{:continue, :drain_microtasks}` (the timer's trailing checkpoint). `clear_*`
+deletes the row + cancels (`Process.cancel_timer` / `:timer.cancel`). A `:timer` row
+legitimately persists across `check_consistency!` (a scheduled timer lives in the BEAM
+timer wheel — unlike a `:microtask` row, whose presence means a skipped checkpoint).
+Browser-verified task-vs-microtask ordering + interval repeat/clear
+(`test/integration/timer_test.exs`).
 
-**Deferred (still need more than the queue):** **`setInterval`** (via
-`:timer.send_interval`, cancelled by `:timer.cancel` on the stored tref — trivial on
-the timer machinery, not yet built); **custom-element reactions** (would live on this
-same queue); imperative `slot.assign()` (manual slotting); and default actions /
+**Deferred (still need more than the queue):** **custom-element reactions** (would live
+on this same queue); imperative `slot.assign()` (manual slotting); and default actions /
 interaction & navigation state (`:hover`, `:focus`, form submission, checkbox toggle,
 `preventDefault` actually suppressing anything — it currently only sets the flag
 `dispatchEvent` returns).
