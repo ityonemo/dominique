@@ -1790,8 +1790,7 @@ defmodule DOM do
         snapshot = range_snapshot(nodes, index)
         siblings = Table.children(nodes, parent_id)
         at = length(siblings)
-        Table.append_child(nodes, parent_id, child_id)
-        Table.rehome_subtree(nodes, index, child_id)
+        NodeData.graft_into(nodes, index, parent_id, [child_id], :last)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
         _recompute_slots(nodes, index, child_id)
         # childList: appended at the end — previousSibling is the old last child.

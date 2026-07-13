@@ -423,6 +423,41 @@ defmodule DOM.NodeData.Table do
   end
 
   @doc """
+  Compute (without mutating anything) the plan for moving `child_ids` (in order) under
+  `parent_id` at `position` — for the unified `NodeData.rehome` move path, which applies the
+  plan to BOTH tables. Returns `{dest_root, dest_parent, extents}` where `dest_root` is the
+  parent's tree root, `dest_parent` is `parent_id`, and `extents` is
+  `%{node_id => {new_start, new_stop}}` for EVERY node in every moved subtree (the graft
+  prefix-swap into each child's carved window). `position`: `:last` | `{:before, ref}`.
+  """
+  @spec graft_plan(tid, id, [id], :last | {:before, id}) ::
+          {id, id, %{optional(id) => {binary(), binary()}}}
+  def graft_plan(tid, parent_id, child_ids, position) do
+    parent = fetch!(tid, parent_id)
+    {gap_a, gap_b} = plan_gap(tid, parent_id, parent, position)
+
+    extents =
+      child_ids
+      |> carve_windows(gap_a, gap_b)
+      |> Enum.reduce(%{}, fn {child_id, {wstart, wstop}}, acc ->
+        child = fetch!(tid, child_id)
+        ids = subtree_ids(tid, child_id)
+        recs = Enum.map(ids, &fetch!(tid, &1))
+        grafted = graft(recs, child.start, child.stop, wstart, wstop)
+
+        Enum.zip(ids, grafted)
+        |> Enum.reduce(acc, fn {id, rec}, a -> Map.put(a, id, {rec.start, rec.stop}) end)
+      end)
+
+    {parent.root, parent_id, extents}
+  end
+
+  defp plan_gap(tid, parent_id, parent, :last), do: extent_after_last(tid, parent_id, parent)
+
+  defp plan_gap(tid, parent_id, parent, {:before, ref}),
+    do: extent_before(tid, parent_id, parent, ref)
+
+  @doc """
   Detach `id` from its current parent (no-op when already detached). `id`'s `parent`
   is nilled and its subtree is RE-ROOTED at `id` (its own `.root` -> `id` = itself, its
   descendants' `.root` -> `id`) so the `.root`/extent bookkeeping stays truthful to the

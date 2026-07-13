@@ -122,6 +122,44 @@ after
     end)
   end
 
+  @doc """
+  Move `child_ids` (in order) under `parent_id` at `position` (`:last` | `{:before, ref}`) —
+  the `rehome` into a parent slot. `Table.graft_plan` computes the destination (all the
+  prefix-swap key math, single source of truth); this applies it to BOTH tables via `rehome`,
+  one call per moved child subtree. Each node gets its new `start`/`stop` from the plan, its
+  `root` → the dest tree root, and each moved child's OWN root → `parent_id` (descendants keep
+  their parent).
+  """
+  @spec graft_into(
+          :ets.tid(),
+          :ets.tid(),
+          reference(),
+          [reference()],
+          :last | {:before, reference()}
+        ) ::
+          :ok
+  def graft_into(nodes, index, parent_id, child_ids, position) do
+    {dest_root, dest_parent, extents} =
+      DOM.NodeData.Table.graft_plan(nodes, parent_id, child_ids, position)
+
+    Enum.each(child_ids, fn child_id ->
+      child = DOM.NodeData.Table.fetch!(nodes, child_id)
+
+      rehome(nodes, index, {child.root, child.start, child.stop}, fn
+        {{:span, _root, _key, kind, _parent}, {^child_id, type}} ->
+          {start, stop} = Map.fetch!(extents, child_id)
+          {{:span, dest_root, key_for(kind, start, stop), kind, dest_parent}, {child_id, type}}
+
+        {{:span, _root, _key, kind, parent}, {id, type}} ->
+          {start, stop} = Map.fetch!(extents, id)
+          {{:span, dest_root, key_for(kind, start, stop), kind, parent}, {id, type}}
+      end)
+    end)
+  end
+
+  defp key_for(:start, start, _stop), do: start
+  defp key_for(:stop, _start, stop), do: stop
+
   # Merge one transformed span row's relocation fields onto the node's record in the
   # rollup map. A node contributes two rows (:start, :stop): both agree on root/parent;
   # the :start row supplies `start`, the :stop row supplies `stop`. `root == self` is the
