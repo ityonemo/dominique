@@ -701,14 +701,9 @@ defmodule DOM do
         do: {id, def}
   end
 
-  defp connected?(nodes, node_id), do: tree_root_id(nodes, node_id) == Process.get(:document_id)
-
-  defp tree_root_id(nodes, node_id) do
-    case Table.parent(nodes, node_id) do
-      nil -> node_id
-      parent -> tree_root_id(nodes, parent)
-    end
-  end
+  # Connected = the node's tree root is the document. `root` is the nested-set anchor
+  # maintained on every append/insert/graft, so this is an O(1) field read (no walk).
+  defp connected?(nodes, node_id), do: fetch_node!(nodes, node_id).root == Process.get(:document_id)
 
   defp run_callback(nil, _el), do: :ok
   defp run_callback(fun, el) when is_function(fun, 1), do: fun.(el)
