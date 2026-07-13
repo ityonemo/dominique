@@ -858,18 +858,29 @@ defmodule DOM.NodeData.Table do
   # Dual-maintained with the `children` field during the adjacency migration; the
   # consistency checker asserts the two agree.
 
-  @doc "Write the two span rows (`:start`/`:stop`) for `node_id`'s extent."
-  @spec span_put(tid, id, %{root: id, parent: id | nil, start: binary(), stop: binary()}) :: :ok
-  def span_put(index, node_id, %{root: root, parent: parent, start: start, stop: stop}) do
-    :ets.insert(index, {{:span, root, start, :start, parent}, node_id})
-    :ets.insert(index, {{:span, root, stop, :stop, parent}, node_id})
+  @doc """
+  Write the two span rows (`:start`/`:stop`) for `node_id`'s extent. The row VALUE is
+  `{node_id, type}` — the node kind is carried in the span so element-only / type-filtered
+  ordered reads (e.g. `children`) are a single range scan, no per-node record fetch.
+  """
+  @spec span_put(tid, id, %{
+          root: id,
+          parent: id | nil,
+          start: binary(),
+          stop: binary(),
+          type: atom()
+        }) ::
+          :ok
+  def span_put(index, node_id, %{root: root, parent: parent, start: start, stop: stop, type: type}) do
+    :ets.insert(index, {{:span, root, start, :start, parent}, {node_id, type}})
+    :ets.insert(index, {{:span, root, stop, :stop, parent}, {node_id, type}})
     :ok
   end
 
   @doc "Delete `node_id`'s span rows (matched by node id, so extent need not be known)."
   @spec span_retract(tid, id) :: :ok
   def span_retract(index, node_id) do
-    :ets.match_delete(index, {{:span, :_, :_, :_, :_}, node_id})
+    :ets.match_delete(index, {{:span, :_, :_, :_, :_}, {node_id, :_}})
     :ok
   end
 
@@ -884,17 +895,34 @@ defmodule DOM.NodeData.Table do
   end
 
   defmatchspecp span_children_spec(root, parent_id, pstart, pstop) do
-    {{:span, ^root, s, :start, ^parent_id}, node_id} when s > pstart and s < pstop -> node_id
+    {{:span, ^root, s, :start, ^parent_id}, {node_id, _type}} when s > pstart and s < pstop ->
+      node_id
   end
 
-  # Every span row as `{root, key, kind, parent, node_id}` — used by the checker.
-  @spec span_rows(tid) :: [{id, binary(), :start | :stop, id | nil, id}]
+  @doc """
+  The ELEMENT child ids of `parent_id` (extent `(pstart, pstop)`) within tree `root`, in
+  document order — `span_children` plus a `type == :element` value guard, so it's the
+  single ordered range scan that backs `ParentNode.children` (no per-node record fetch).
+  """
+  @spec span_element_children(tid, id, id, binary(), binary()) :: [id]
+  def span_element_children(index, root, parent_id, pstart, pstop) do
+    :ets.select(index, span_element_children_spec(root, parent_id, pstart, pstop))
+  end
+
+  defmatchspecp span_element_children_spec(root, parent_id, pstart, pstop) do
+    {{:span, ^root, s, :start, ^parent_id}, {node_id, :element}} when s > pstart and s < pstop ->
+      node_id
+  end
+
+  # Every span row as `{root, key, kind, parent, node_id, type}` — used by the checker.
+  @spec span_rows(tid) :: [{id, binary(), :start | :stop, id | nil, id, atom()}]
   defp span_rows(index) do
     :ets.select(index, span_rows_spec())
   end
 
   defmatchspecp span_rows_spec() do
-    {{:span, root, key, kind, parent}, node_id} -> {root, key, kind, parent, node_id}
+    {{:span, root, key, kind, parent}, {node_id, type}} ->
+      {root, key, kind, parent, node_id, type}
   end
 
   @doc "Ordered child ids of `node_id`, read from its record's extent + span rows."
@@ -902,6 +930,13 @@ defmodule DOM.NodeData.Table do
   def span_children_of(nodes, index, node_id) do
     node = fetch!(nodes, node_id)
     span_children(index, ns_root(node, node_id), node_id, node.start, node.stop)
+  end
+
+  @doc "Ordered ELEMENT child ids of `node_id` (backs `ParentNode.children`)."
+  @spec span_element_children_of(tid, tid, id) :: [id]
+  def span_element_children_of(nodes, index, node_id) do
+    node = fetch!(nodes, node_id)
+    span_element_children(index, ns_root(node, node_id), node_id, node.start, node.stop)
   end
 
   @doc """
@@ -942,7 +977,8 @@ defmodule DOM.NodeData.Table do
         root: ns_root(data, id),
         parent: data.parent,
         start: start,
-        stop: data.stop
+        stop: data.stop,
+        type: NodeData.type(data)
       })
     end
 
@@ -1716,7 +1752,7 @@ defmodule DOM.NodeData.Table do
 
   # backward: no span row points at a node that isn't in the table.
   defp check_spans_backward!(spans, node_ids) do
-    Enum.each(spans, fn {_root, _key, _kind, parent, node_id} ->
+    Enum.each(spans, fn {_root, _key, _kind, parent, node_id, _type} ->
       unless MapSet.member?(node_ids, node_id) do
         raise "dangling span: node #{inspect(node_id)} not in the nodes table"
       end
@@ -1727,15 +1763,16 @@ defmodule DOM.NodeData.Table do
     end)
   end
 
-  # mirror: the span rows are exactly the two rows per labeled record extent — no
-  # missing, stale, or extra span row. This is the invariant span_index_all keeps.
+  # mirror: the span rows are exactly the two rows per labeled record extent (value =
+  # {node_id, type}) — no missing, stale, or extra span row. This is the invariant
+  # span_index_all keeps.
   defp check_spans_mirror!(rows, spans) do
     expected =
       for {id, %{start: start} = data} <- rows,
           start != nil,
           kind_key <- [{start, :start}, {ns_stop(data), :stop}] do
         {key, kind} = kind_key
-        {ns_root(data, id), key, kind, data.parent, id}
+        {ns_root(data, id), key, kind, data.parent, id, NodeData.type(data)}
       end
 
     if Enum.sort(expected) != Enum.sort(spans) do

@@ -221,8 +221,18 @@ defmodule DOM.Node do
 
   @doc "The node's ELEMENT children, in document order (ParentNode.children)."
   @spec children(t()) :: [t()]
+  def children(%__MODULE__{type: type}) when type in @leaf, do: []
+
   def children(%__MODULE__{} = node) do
-    node |> child_nodes() |> Enum.filter(&(&1.type == :element))
+    # The span row carries node type, so element children are one filtered range scan —
+    # no per-node record fetch (unlike child_nodes |> filter). Only element handles built.
+    server = node.server
+
+    DOM._atomic_ets_op(server, fn nodes, index ->
+      nodes
+      |> NodeData.Table.span_element_children_of(index, node.node_id)
+      |> Enum.map(&%DOM.Node{server: server, node_id: &1, type: :element})
+    end)
   end
 
   @doc "The first element child, or `nil`."

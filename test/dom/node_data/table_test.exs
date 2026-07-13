@@ -124,7 +124,8 @@ defmodule DOM.NodeData.TableTest do
         root: ids.doc,
         parent: ids.ul,
         start: <<0x50>>,
-        stop: <<0x60>>
+        stop: <<0x60>>,
+        type: :element
       })
 
       assert_raise RuntimeError, ~r/dangling span/i, fn ->
