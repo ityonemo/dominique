@@ -121,6 +121,48 @@ defmodule DOM.Element do
     )
   end
 
+  @doc false
+  # Set the value of an attribute by its VERBATIM key (a plain string or a
+  # {prefix, local, url} triple), updating in place if present, else appending. Backs
+  # the Attr-node value write-through (`DOM.Node.set_attr_value/2`), which already
+  # holds the exact key — so no qualified-name reparse.
+  @spec set_attribute_by_key(Node.t(), Element.attr_key(), String.t()) :: :ok
+  def set_attribute_by_key(%Node{type: :element} = element, key, value) do
+    changed = if is_binary(key), do: key, else: Element.qualified_name(key)
+    update_attributes(element, &put_by_key(&1, key, value), changed)
+  end
+
+  # Update the value under the exact `key`, or append `{key, value}` when absent.
+  defp put_by_key(attrs, key, value) do
+    if List.keymember?(attrs, key, 0) do
+      List.keyreplace(attrs, key, 0, {key, value})
+    else
+      attrs ++ [{key, value}]
+    end
+  end
+
+  @doc """
+  Attach an `Attr` node (`DOM.Node.attr`) to this element (HTML `setAttributeNode`) — its
+  key/value are written onto the element (replacing any attribute with the same key).
+  """
+  @spec set_attribute_node(Node.t(), Node.attr()) :: :ok
+  def set_attribute_node(%Node{type: :element} = element, %Node{type: :attr} = attr) do
+    set_attribute_by_key(element, Node.attr_key(attr), Node.attr_value(attr))
+  end
+
+  @doc """
+  Detach an `Attr` node from this element (HTML `removeAttributeNode`) — returns the
+  attr as an UNOWNED handle carrying its (last) value, so it stays readable after removal.
+  """
+  @spec remove_attribute_node(Node.t(), Node.attr()) :: Node.attr()
+  def remove_attribute_node(%Node{type: :element} = element, %Node{type: :attr} = attr) do
+    key = Node.attr_key(attr)
+    value = Node.attr_value(attr)
+    changed = if is_binary(key), do: key, else: Element.qualified_name(key)
+    update_attributes(element, fn attrs -> List.keydelete(attrs, key, 0) end, changed)
+    %Node{server: element.server, node_id: {nil, key, value}, type: :attr}
+  end
+
   # The plain-string-keyed value for `name` in an attribute list, or nil.
   defp attr_value(attrs, name) do
     case Enum.find(attrs, fn {key, _v} -> key == name end) do
@@ -151,6 +193,18 @@ defmodule DOM.Element do
   def get_attribute_ns(%Node{type: :element} = element, url, local) do
     case Enum.find(attributes(element), &ns_key_matches?(&1, url, local)) do
       {_key, value} -> value
+      nil -> nil
+    end
+  end
+
+  @doc """
+  The attribute with namespace `url` and local name `local` as an `Attr` node handle
+  (`%DOM.Node{type: :attr}`), or `nil`. The namespaced counterpart of `get_attribute_node/2`.
+  """
+  @spec get_attribute_node_ns(Node.t(), String.t() | nil, String.t()) :: Node.t() | nil
+  def get_attribute_node_ns(%Node{type: :element} = element, url, local) do
+    case Enum.find(attributes(element), &ns_key_matches?(&1, url, local)) do
+      {key, _value} -> %Node{server: element.server, node_id: {element.node_id, key}, type: :attr}
       nil -> nil
     end
   end

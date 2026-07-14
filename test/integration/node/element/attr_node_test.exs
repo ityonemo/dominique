@@ -94,5 +94,180 @@ defmodule Integration.Node.Element.AttrNodeTest do
 
       assert result == expected
     end
+
+    @js """
+    return await page.evaluate(() => {
+      const el = document.createElement("div");
+      el.setAttribute("data-x", "one");
+      const attr = el.getAttributeNode("data-x");
+
+      attr.value = "written";                  // write via the attr node...
+      return { onElement: el.getAttribute("data-x") };  // ...shows up on the element
+    });
+    """
+
+    test "writing an Attr's value writes through to the owner element", %{js: expected} do
+      document = DOM.new()
+      el = DOM.create_element(document, "div")
+      Element.set_attribute(el, "data-x", "one")
+      attr = Element.get_attribute_node(el, "data-x")
+
+      Node.set_attr_value(attr, "written")
+      result = %{"onElement" => Element.get_attribute(el, "data-x")}
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const el = document.createElement("div");
+      const attr = document.createAttribute("title");   // unowned
+      const initialValue = attr.value;                  // ""
+      const initialOwner = attr.ownerElement;           // null
+      attr.value = "hello";
+
+      el.setAttributeNode(attr);                         // attach to element
+      const onElement = el.getAttribute("title");
+      const ownerNow = attr.ownerElement === el;
+
+      return { initialValue, initialOwner, onElement, ownerNow };
+    });
+    """
+
+    test "createAttribute makes an unowned Attr; setAttributeNode attaches it", %{js: expected} do
+      document = DOM.new()
+      el = DOM.create_element(document, "div")
+      attr = DOM.create_attribute(document, "title")
+
+      initial_value = Node.attr_value(attr)
+      initial_owner = Node.owner_element(attr)
+      attr = Node.set_attr_value(attr, "hello")
+
+      Element.set_attribute_node(el, attr)
+      on_element = Element.get_attribute(el, "title")
+
+      owner_now =
+        Node.is_same_node(Node.owner_element(Element.get_attribute_node(el, "title")), el)
+
+      result = %{
+        "initialValue" => initial_value,
+        "initialOwner" => initial_owner,
+        "onElement" => on_element,
+        "ownerNow" => owner_now
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const el = document.createElement("div");
+      el.setAttribute("data-x", "gone");
+      const attr = el.getAttributeNode("data-x");
+
+      const removed = el.removeAttributeNode(attr);
+      return {
+        stillOnElement: el.hasAttribute("data-x"),
+        removedName: removed.name,
+        removedValue: removed.value
+      };
+    });
+    """
+
+    test "removeAttributeNode detaches the attribute, returning the Attr", %{js: expected} do
+      document = DOM.new()
+      el = DOM.create_element(document, "div")
+      Element.set_attribute(el, "data-x", "gone")
+      attr = Element.get_attribute_node(el, "data-x")
+
+      removed = Element.remove_attribute_node(el, attr)
+
+      result = %{
+        "stillOnElement" => Element.has_attribute(el, "data-x"),
+        "removedName" => Node.attr_name(removed),
+        "removedValue" => Node.attr_value(removed)
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const el = document.createElement("div");
+      el.setAttribute("data-x", "v");
+      el.setAttribute("data-y", "v");
+      const a = el.getAttributeNode("data-x");
+      const b = el.getAttributeNode("data-x");
+      const c = el.getAttributeNode("data-y");
+      const clone = a.cloneNode();
+
+      return {
+        equalSame: a.isEqualNode(b),
+        equalDiff: a.isEqualNode(c),
+        cloneEqual: a.isEqualNode(clone),
+        cloneName: clone.name,
+        cloneValue: clone.value,
+        cloneOwnerNull: clone.ownerElement === null
+      };
+    });
+    """
+
+    test "Attr isEqualNode compares name+value; cloneNode yields a detached copy", %{js: expected} do
+      document = DOM.new()
+      el = DOM.create_element(document, "div")
+      Element.set_attribute(el, "data-x", "v")
+      Element.set_attribute(el, "data-y", "v")
+      a = Element.get_attribute_node(el, "data-x")
+      b = Element.get_attribute_node(el, "data-x")
+      c = Element.get_attribute_node(el, "data-y")
+      clone = Node.clone_node(a)
+
+      result = %{
+        "equalSame" => Node.is_equal_node(a, b),
+        "equalDiff" => Node.is_equal_node(a, c),
+        "cloneEqual" => Node.is_equal_node(a, clone),
+        "cloneName" => Node.attr_name(clone),
+        "cloneValue" => Node.attr_value(clone),
+        "cloneOwnerNull" => Node.owner_element(clone) == nil
+      }
+
+      assert result == expected
+    end
+
+    @js """
+    return await page.evaluate(() => {
+      const XLINK = "http://www.w3.org/1999/xlink";
+      const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      el.setAttributeNS(XLINK, "xlink:href", "#frag");
+
+      const attr = el.getAttributeNodeNS(XLINK, "href");
+      return {
+        name: attr.name,
+        localName: attr.localName,
+        prefix: attr.prefix,
+        namespaceURI: attr.namespaceURI,
+        value: attr.value
+      };
+    });
+    """
+
+    test "getAttributeNodeNS returns a namespaced Attr with the triple-key parts", %{js: expected} do
+      xlink = "http://www.w3.org/1999/xlink"
+      document = DOM.new()
+      el = DOM.create_element_ns(document, "http://www.w3.org/2000/svg", "svg")
+      Element.set_attribute_ns(el, xlink, "xlink:href", "#frag")
+
+      attr = Element.get_attribute_node_ns(el, xlink, "href")
+
+      result = %{
+        "name" => Node.attr_name(attr),
+        "localName" => Node.attr_local_name(attr),
+        "prefix" => Node.attr_prefix(attr),
+        "namespaceURI" => Node.attr_namespace_uri(attr),
+        "value" => Node.attr_value(attr)
+      }
+
+      assert result == expected
+    end
   end
 end

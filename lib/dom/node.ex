@@ -33,9 +33,11 @@ defmodule DOM.Node do
 
   @type t :: basic() | attr()
   @type basic :: %__MODULE__{server: GenServer.server(), node_id: reference(), type: node_type()}
+  @type attr_key :: NodeData.Element.attr_key()
   @type attr :: %__MODULE__{
           server: GenServer.server(),
-          node_id: {reference(), NodeData.Element.attr_key()},
+          # OWNED {element_id, key} | UNOWNED {nil, key, value} (createAttribute).
+          node_id: {reference(), attr_key()} | {nil, attr_key(), String.t()},
           type: :attr
         }
 
@@ -418,6 +420,20 @@ defmodule DOM.Node do
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_equal_node(%__MODULE__{}, nil), do: false
 
+  # Two Attrs are equal iff same namespace, local name, and value (WHATWG). Resolved
+  # locally — attr handles have no ETS row for _node_is_equal to read.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{type: :attr} = attr, %__MODULE__{type: :attr} = other) do
+    attr_namespace_uri(attr) == attr_namespace_uri(other) and
+      attr_local_name(attr) == attr_local_name(other) and
+      attr_value(attr) == attr_value(other)
+  end
+
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{type: :attr}, %__MODULE__{}), do: false
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{}, %__MODULE__{type: :attr}), do: false
+
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_equal_node(%__MODULE__{} = node, %__MODULE__{} = other) do
     DOM._node_is_equal(node.server, node.node_id, other.server, other.node_id)
@@ -522,7 +538,19 @@ defmodule DOM.Node do
 
   @doc "Clones `node` (deep when `deep?`), returning a fresh detached handle."
   @spec clone_node(t(), boolean()) :: t()
-  def clone_node(%__MODULE__{} = node, deep? \\ false) do
+  def clone_node(node, deep? \\ false)
+
+  # An Attr clones to a fresh UNOWNED attr with the same key and current value; `deep?`
+  # is irrelevant (Attrs have no children). Resolved locally — no ETS row to clone.
+  def clone_node(%__MODULE__{type: :attr} = attr, _deep?) do
+    %__MODULE__{
+      server: attr.server,
+      node_id: {nil, attr_key(attr), attr_value(attr)},
+      type: :attr
+    }
+  end
+
+  def clone_node(%__MODULE__{} = node, deep?) do
     DOM._node_clone_node(node.server, node.node_id, deep?)
   end
 
@@ -610,25 +638,42 @@ defmodule DOM.Node do
   # purely from `key`. `key` is a plain qualified-name string OR a `{prefix, local, url}`
   # namespace triple (`DOM.NodeData.Element.attr_key`).
 
+  # An Attr's `node_id` has two shapes:
+  #   {element_id, key}   — OWNED: value lives on the element, read/written through.
+  #   {nil, key, value}   — UNOWNED (createAttribute / removeAttributeNode result): no
+  #                         owner element, so the value rides in the handle.
+  # `attr_key/1` / `attr_owner/1` normalize the two shapes.
+  @doc "The verbatim attribute key (string or `{prefix, local, url}` triple) an Attr references."
+  @spec attr_key(attr()) :: attr_key()
+  def attr_key(%__MODULE__{type: :attr, node_id: {_el, key}}), do: key
+  def attr_key(%__MODULE__{type: :attr, node_id: {nil, key, _value}}), do: key
+  defp attr_owner(%__MODULE__{node_id: {el, _key}}), do: el
+  defp attr_owner(%__MODULE__{node_id: {nil, _key, _value}}), do: nil
+
   @doc "An Attr's qualified name (HTML colon form) — `nodeName`/`name`."
   @spec attr_name(attr()) :: String.t()
-  def attr_name(%__MODULE__{type: :attr, node_id: {_el, key}}),
-    do: NodeData.Element.qualified_name(key)
+  def attr_name(%__MODULE__{type: :attr} = attr),
+    do: NodeData.Element.qualified_name(attr_key(attr))
 
   @doc "An Attr's local name (the part after any prefix)."
   @spec attr_local_name(attr()) :: String.t()
-  def attr_local_name(%__MODULE__{type: :attr, node_id: {_el, key}}), do: attr_local(key)
+  def attr_local_name(%__MODULE__{type: :attr} = attr), do: attr_local(attr_key(attr))
 
   @doc "An Attr's namespace prefix, or `nil` (always `nil` for a plain attribute)."
   @spec attr_prefix(attr()) :: String.t() | nil
-  def attr_prefix(%__MODULE__{type: :attr, node_id: {_el, key}}), do: attr_prefix_of(key)
+  def attr_prefix(%__MODULE__{type: :attr} = attr), do: attr_prefix_of(attr_key(attr))
 
   @doc "An Attr's namespace URI, or `nil` (always `nil` for a plain attribute)."
   @spec attr_namespace_uri(attr()) :: String.t() | nil
-  def attr_namespace_uri(%__MODULE__{type: :attr, node_id: {_el, key}}), do: attr_url(key)
+  def attr_namespace_uri(%__MODULE__{type: :attr} = attr), do: attr_url(attr_key(attr))
 
-  @doc "An Attr's value — read live from the owner element (`nil` if the attribute was removed)."
+  @doc """
+  An Attr's value. OWNED: read live from the owner element (`nil` if since removed).
+  UNOWNED (`createAttribute`): the value carried in the handle.
+  """
   @spec attr_value(attr()) :: String.t() | nil
+  def attr_value(%__MODULE__{type: :attr, node_id: {nil, _key, value}}), do: value
+
   def attr_value(%__MODULE__{type: :attr, server: server, node_id: {el, key}}) do
     case DOM._select_nodes(server, attr_value_spec(el)) do
       [attributes] -> attr_value_for(attributes, key)
@@ -636,10 +681,26 @@ defmodule DOM.Node do
     end
   end
 
-  @doc "The element that owns this Attr (its `ownerElement`)."
-  @spec owner_element(attr()) :: t()
-  def owner_element(%__MODULE__{type: :attr, server: server, node_id: {el, _key}}) do
-    %__MODULE__{server: server, node_id: el, type: :element}
+  @doc """
+  Set an Attr's value. OWNED: writes through to the owner element (returns the handle
+  unchanged). UNOWNED: returns a new handle carrying the value (the handle is immutable,
+  so callers rebind).
+  """
+  @spec set_attr_value(attr(), String.t()) :: attr()
+  def set_attr_value(%__MODULE__{type: :attr, node_id: {nil, key, _old}} = attr, value) do
+    %{attr | node_id: {nil, key, value}}
+  end
+
+  def set_attr_value(%__MODULE__{type: :attr, node_id: {el, key}} = attr, value) do
+    element = %__MODULE__{server: attr.server, node_id: el, type: :element}
+    DOM.Element.set_attribute_by_key(element, key, value)
+    attr
+  end
+
+  @doc "The element that owns this Attr (its `ownerElement`), or `nil` when unowned."
+  @spec owner_element(attr()) :: t() | nil
+  def owner_element(%__MODULE__{type: :attr} = attr) do
+    if el = attr_owner(attr), do: %__MODULE__{server: attr.server, node_id: el, type: :element}
   end
 
   defmatchspecp attr_value_spec(element_id) do

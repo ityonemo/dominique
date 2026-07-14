@@ -241,6 +241,18 @@ defmodule DOM do
   def create_document_fragment(document),
     do: create(document, &DOM.NodeData.create_document_fragment/2)
 
+  @doc """
+  Create a standalone `Attr` node (HTML `document.createAttribute`) — an UNOWNED
+  `%DOM.Node{type: :attr}` handle with local name `name`, empty value, and no owner
+  element. Attach it to an element with `DOM.Element.set_attribute_node/2`. Unlike the
+  other `create_*` functions this mints no NodeData record: an Attr is a reference
+  handle, and an unowned one carries its value inline (`{nil, name, ""}`).
+  """
+  @spec create_attribute(Node.t(), String.t()) :: Node.attr()
+  def create_attribute(%Node{type: :document, server: server}, name) do
+    %Node{server: server, node_id: {nil, name, ""}, type: :attr}
+  end
+
   def create_document_type(document, name, public_id, system_id),
     do: create(document, &DOM.NodeData.create_doctype(&1, &2, name, public_id, system_id))
 
