@@ -21,6 +21,7 @@ defmodule DOM.NodeData.IndexTable do
   use MatchSpec
 
   alias DOM.NodeData
+  alias DOM.NodeData.Extent
 
   @type tid :: :ets.tid()
   @type id :: reference()
@@ -162,8 +163,8 @@ defmodule DOM.NodeData.IndexTable do
   @spec span_put(tid, id, %{
           root: id,
           parent: id | nil,
-          start: binary(),
-          stop: binary(),
+          start: Extent.t(),
+          stop: Extent.t(),
           type: atom()
         }) ::
           :ok
@@ -185,7 +186,7 @@ defmodule DOM.NodeData.IndexTable do
   rows: the `:start` rows whose key falls strictly inside `(pstart, pstop)` and
   whose parent is `parent_id`, in `start` order. A bounded range scan.
   """
-  @spec span_children(tid, id, id, binary(), binary()) :: [id]
+  @spec span_children(tid, id, id, Extent.t(), Extent.t()) :: [id]
   def span_children(index, root, parent_id, pstart, pstop) do
     :ets.select(index, span_children_spec(root, parent_id, pstart, pstop))
   end
@@ -200,7 +201,7 @@ defmodule DOM.NodeData.IndexTable do
   document order — `span_children` plus a `type == :element` value guard, so it's the
   single ordered range scan that backs `ParentNode.children` (no per-node record fetch).
   """
-  @spec span_element_children(tid, id, id, binary(), binary()) :: [id]
+  @spec span_element_children(tid, id, id, Extent.t(), Extent.t()) :: [id]
   def span_element_children(index, root, parent_id, pstart, pstop) do
     :ets.select(index, span_element_children_spec(root, parent_id, pstart, pstop))
   end
@@ -213,7 +214,7 @@ defmodule DOM.NodeData.IndexTable do
   @doc false
   # Every span row as `{root, key, kind, parent, node_id, type}` — used by the consistency
   # checker (in DOM.NodeData).
-  @spec span_rows(tid) :: [{id, binary(), :start | :stop, id | nil, id, atom()}]
+  @spec span_rows(tid) :: [{id, Extent.t(), :start | :stop, id | nil, id, atom()}]
   def span_rows(index) do
     :ets.select(index, span_rows_spec())
   end
@@ -229,13 +230,13 @@ defmodule DOM.NodeData.IndexTable do
   raw `{{:span, root, key, kind, parent}, {node_id, type}}` tuples so a relocation can
   transform and re-insert them. Bounded ordered-set range scan; backs `NodeData.rehome`.
   """
-  @spec span_window(tid, id, binary(), binary()) :: [tuple()]
+  @spec span_window(tid, id, Extent.t(), Extent.t()) :: [tuple()]
   def span_window(index, root, start, stop) do
     :ets.select(index, span_window_spec(root, start, stop))
   end
 
   @doc "Delete every span row in the `(root, start..stop)` window (same match as `span_window`)."
-  @spec span_window_delete(tid, id, binary(), binary()) :: non_neg_integer()
+  @spec span_window_delete(tid, id, Extent.t(), Extent.t()) :: non_neg_integer()
   def span_window_delete(index, root, start, stop) do
     :ets.select_delete(index, span_window_delete_spec(root, start, stop))
   end
@@ -283,7 +284,12 @@ defmodule DOM.NodeData.IndexTable do
   # attr; span checks read only `:span` rows).
 
   @doc "Write (replacing) a range's two boundary rows under `ref`."
-  @spec range_put(tid, reference(), {binary(), non_neg_integer()}, {binary(), non_neg_integer()}) ::
+  @spec range_put(
+          tid,
+          reference(),
+          {Extent.t(), non_neg_integer()},
+          {Extent.t(), non_neg_integer()}
+        ) ::
           :ok
   def range_put(index, ref, {start_key, start_off}, {stop_key, stop_off}) do
     range_delete(index, ref)
@@ -305,7 +311,7 @@ defmodule DOM.NodeData.IndexTable do
   `nil` if the range is not present (detached / evicted).
   """
   @spec range_boundaries(tid, reference()) ::
-          {{binary(), non_neg_integer()}, {binary(), non_neg_integer()}} | nil
+          {{Extent.t(), non_neg_integer()}, {Extent.t(), non_neg_integer()}} | nil
   def range_boundaries(index, ref) do
     with [{start_key, start_off}] <- :ets.select(index, range_boundary_spec(:range_start, ref)),
          [{stop_key, stop_off}] <- :ets.select(index, range_boundary_spec(:range_stop, ref)) do
@@ -787,7 +793,7 @@ defmodule DOM.NodeData.IndexTable do
 
   @doc "Every range boundary row as `{kind, extent_key, ref, offset}`."
   @spec range_all_rows(tid) :: [
-          {:range_start | :range_stop, binary(), reference(), non_neg_integer()}
+          {:range_start | :range_stop, Extent.t(), reference(), non_neg_integer()}
         ]
   def range_all_rows(index), do: :ets.select(index, range_rows_spec())
 
@@ -805,7 +811,7 @@ defmodule DOM.NodeData.IndexTable do
           tid,
           :range_start | :range_stop,
           reference(),
-          binary(),
+          Extent.t(),
           non_neg_integer()
         ) ::
           :ok

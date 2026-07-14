@@ -93,7 +93,8 @@ after
   to each of its span rows, then reflecting the result onto the node records. Cross-table
   and atomic w.r.t. one op. `transform` takes/returns a raw span row tuple.
   """
-  @spec rehome(:ets.tid(), :ets.tid(), {term(), binary(), binary()}, (tuple() -> tuple())) :: :ok
+  @spec rehome(:ets.tid(), :ets.tid(), {term(), Extent.t(), Extent.t()}, (tuple() -> tuple())) ::
+          :ok
   def rehome(nodes, index, {root, start, stop}, transform) do
     rows = IndexTable.span_window(index, root, start, stop)
     IndexTable.span_window_delete(index, root, start, stop)
@@ -335,7 +336,7 @@ after
           :ets.tid(),
           :ets.tid(),
           reference(),
-          (reference(), {binary(), binary()} -> t()),
+          (reference(), {Extent.t(), Extent.t()} -> t()),
           :last | {:before, reference()} | {:after, reference()}
         ) :: reference()
   def create_child(nodes, index, parent_id, build, position) do

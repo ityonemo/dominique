@@ -49,7 +49,7 @@ defmodule DOM.NodeData.Extent do
   @spec interval(t(), t()) :: {t(), t()}
   def interval(a, b), do: interval(a, b, [])
 
-  @spec interval(binary, binary, iodata) :: {binary, binary}
+  @spec interval(t(), t(), iodata) :: {t(), t()}
   defp interval(<<a, rest1::binary>>, <<a, rest2::binary>>, so_far) do
     interval(rest1, rest2, [so_far, a])
   end
@@ -96,7 +96,7 @@ defmodule DOM.NodeData.Extent do
   @spec multispan(t(), t(), pos_integer()) :: [{t(), t()}]
   def multispan(a, b, count), do: multispan(a, b, count, [])
 
-  @spec multispan(binary(), binary(), pos_integer(), iodata()) :: [{binary(), binary()}]
+  @spec multispan(t(), t(), pos_integer(), iodata()) :: [{t(), t()}]
   defp multispan(<<a, rest1::binary>>, <<b, rest2::binary>>, count, so_far) do
     case b - a - 2 do
       -2 ->
@@ -177,7 +177,7 @@ defmodule DOM.NodeData.Extent do
   prefix-remapped onto an anchor inside the gap. Callers overwrite `root` for a
   cross-document move.
   """
-  @spec graft([map()], binary(), binary(), binary(), binary()) :: [map()]
+  @spec graft([map()], t(), t(), t(), t()) :: [map()]
   def graft(nodes, root_start, root_stop, gap_start, gap_stop) do
     anchor = common_bytewise_prefix(gap_start, gap_stop, [])
     prefix_len = common_prefix_len(root_start, root_stop, 0)
@@ -203,7 +203,7 @@ defmodule DOM.NodeData.Extent do
   destination anchor. `anything > anchor` that shares `anchor` as a prefix is still
   `< stop`, so the whole relocated subtree fits under the gap's upper bound.
   """
-  @spec common_bytewise_prefix(binary(), binary(), iodata()) :: binary()
+  @spec common_bytewise_prefix(t(), t(), iodata()) :: t()
   def common_bytewise_prefix(<<a, rest1::binary>>, <<a, rest2::binary>>, so_far) do
     common_bytewise_prefix(rest1, rest2, [so_far, a])
   end
@@ -231,7 +231,7 @@ defmodule DOM.NodeData.Extent do
   defp remainder_prefix(<<c, _rest::binary>>, so_far), do: [so_far, c + 1]
 
   @doc "Number of shared leading bytes of two keys."
-  @spec common_prefix_len(binary(), binary(), non_neg_integer()) :: non_neg_integer()
+  @spec common_prefix_len(t(), t(), non_neg_integer()) :: non_neg_integer()
   def common_prefix_len(<<a, rest1::binary>>, <<a, rest2::binary>>, count) do
     common_prefix_len(rest1, rest2, count + 1)
   end

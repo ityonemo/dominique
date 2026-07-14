@@ -52,7 +52,7 @@ defmodule DOM.NodeData.NodesTable do
   # child joins and its interval in the parent's gap. Nodes-table reads only; NodeData builds
   # the record and writes both tables.
   @spec carve_slot(tid, id, :last | {:before, id} | {:after, id}) ::
-          {id, {binary(), binary()}}
+          {id, {Extent.t(), Extent.t()}}
   def carve_slot(nodes, parent_id, position) do
     parent = ensure_extent(nodes, parent_id)
     {gap_a, gap_b} = gap(nodes, parent_id, parent, position)
@@ -185,7 +185,7 @@ defmodule DOM.NodeData.NodesTable do
   prefix-swap into each child's carved window). `position`: `:last` | `{:before, ref}`.
   """
   @spec graft_plan(tid, id, [id], :last | {:before, id}) ::
-          {id, id, %{optional(id) => {binary(), binary()}}}
+          {id, id, %{optional(id) => {Extent.t(), Extent.t()}}}
   def graft_plan(tid, parent_id, child_ids, position) do
     parent = fetch!(tid, parent_id)
     {gap_a, gap_b} = plan_gap(tid, parent_id, parent, position)
@@ -482,7 +482,7 @@ defmodule DOM.NodeData.NodesTable do
   The id of the node whose extent `start` key equals `extent_key` (the container a
   range boundary pins to), or `nil`. Reverse of the boundary normalization.
   """
-  @spec node_at_start_key(tid, binary()) :: id | nil
+  @spec node_at_start_key(tid, Extent.t()) :: id | nil
   def node_at_start_key(nodes, extent_key) do
     case :ets.select(nodes, node_at_start_key_spec(extent_key)) do
       [id | _] -> id

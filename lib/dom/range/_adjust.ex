@@ -18,6 +18,7 @@ defmodule DOM.Range.Adjust do
   # These run in the server process (both tids in scope), after the structural
   # mutation. The caller passes the pre-mutation facts each rule needs.
 
+  alias DOM.NodeData.Extent
   alias DOM.NodeData.IndexTable
 
   @doc """
@@ -25,7 +26,7 @@ defmodule DOM.Range.Adjust do
   Bump the offset of every child-index boundary in `parent_id` whose offset is
   strictly greater than `at`. `parent_key` is `parent_id`'s (unchanged) start key.
   """
-  @spec on_insert(:ets.tid(), :ets.tid(), binary(), non_neg_integer(), pos_integer()) :: :ok
+  @spec on_insert(:ets.tid(), :ets.tid(), Extent.t(), non_neg_integer(), pos_integer()) :: :ok
   def on_insert(_nodes, index, parent_key, at, count) do
     for {kind, key, ref, offset} <- boundaries_in(index, parent_key), offset > at do
       IndexTable.range_set_boundary(index, kind, ref, key, offset + count)
@@ -41,7 +42,7 @@ defmodule DOM.Range.Adjust do
   container was in the removed subtree relocate to `(parent, at)`; boundaries in
   `parent` past `at` decrement.
   """
-  @spec on_remove(:ets.tid(), :ets.tid(), binary(), non_neg_integer(), MapSet.t()) :: :ok
+  @spec on_remove(:ets.tid(), :ets.tid(), Extent.t(), non_neg_integer(), MapSet.t()) :: :ok
   def on_remove(_nodes, index, parent_key, at, removed_keys) do
     for {kind, key, ref, offset} <- IndexTable.range_all_rows(index) do
       cond do
@@ -64,7 +65,7 @@ defmodule DOM.Range.Adjust do
   and/or its subtree). Remap every boundary sitting on any old key to its new key,
   given the `remap` map `%{old_key => new_key}`.
   """
-  @spec on_remap(:ets.tid(), :ets.tid(), %{binary() => binary()}) :: :ok
+  @spec on_remap(:ets.tid(), :ets.tid(), %{Extent.t() => Extent.t()}) :: :ok
   def on_remap(_nodes, index, remap) do
     for {kind, key, ref, offset} <- IndexTable.range_all_rows(index), new = Map.get(remap, key) do
       IndexTable.range_set_boundary(index, kind, ref, new, offset)
@@ -78,7 +79,7 @@ defmodule DOM.Range.Adjust do
   new node with start key `new_key`. Boundaries in the original text with offset
   greater than `offset` move into the new node (offset - split point).
   """
-  @spec on_split(:ets.tid(), :ets.tid(), binary(), binary(), non_neg_integer()) :: :ok
+  @spec on_split(:ets.tid(), :ets.tid(), Extent.t(), Extent.t(), non_neg_integer()) :: :ok
   def on_split(_nodes, index, orig_key, new_key, offset) do
     for {kind, _key, ref, off} <- boundaries_in(index, orig_key), off > offset do
       IndexTable.range_set_boundary(index, kind, ref, new_key, off - offset)
@@ -101,7 +102,7 @@ defmodule DOM.Range.Adjust do
   @spec on_replace_data(
           :ets.tid(),
           :ets.tid(),
-          binary(),
+          Extent.t(),
           non_neg_integer(),
           non_neg_integer(),
           non_neg_integer()
