@@ -31,9 +31,28 @@ defmodule DOM.Node do
           | :document_type
           | :shadow_root
 
-  @type t :: %__MODULE__{server: GenServer.server(), node_id: reference(), type: node_type()}
+  @type t :: basic() | attr()
+  @type basic :: %__MODULE__{server: GenServer.server(), node_id: reference(), type: node_type()}
+  @type attr :: %__MODULE__{
+          server: GenServer.server(),
+          node_id: {reference(), NodeData.Element.attr_key()},
+          type: :attr
+        }
 
   @leaf [:text, :comment, :document_type]
+
+  # DOM `nodeType` numeric constant per handle kind. nodeType is fixed by the node
+  # kind, so it is answered from the handle's `type` with no ETS lookup.
+  @type_numbers %{
+    element: 1,
+    attr: 2,
+    text: 3,
+    comment: 8,
+    document: 9,
+    document_type: 10,
+    document_fragment: 11,
+    shadow_root: 11
+  }
 
   # ==========================================================================
   # Tree mutation
@@ -415,23 +434,21 @@ defmodule DOM.Node do
 
   @doc "The DOM `nodeType` numeric constant."
   @spec node_type(t()) :: pos_integer()
-  def node_type(%__MODULE__{} = node) do
-    [node_type] = DOM._select_nodes(node.server, node_type_spec(node.node_id))
-    node_type
-  end
-
-  defmatchspecp node_type_spec(node_id) do
-    {^node_id, %{__struct__: NodeData.Element}} -> 1
-    {^node_id, %{__struct__: NodeData.Text}} -> 3
-    {^node_id, %{__struct__: NodeData.Comment}} -> 8
-    {^node_id, %{__struct__: NodeData.Document}} -> 9
-    {^node_id, %{__struct__: NodeData.DocumentType}} -> 10
-    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> 11
-    {^node_id, %{__struct__: NodeData.ShadowRoot}} -> 11
-  end
+  # nodeType is fixed by the node kind — the handle already carries it, so no ETS
+  # lookup is needed (and an :attr handle has no backing row to look up).
+  def node_type(%__MODULE__{type: type}), do: Map.fetch!(@type_numbers, type)
 
   @doc "The DOM `nodeName`."
   @spec node_name(t()) :: String.t()
+  # Dispatch locally when the name is fixed by the kind; only :element and
+  # :document_type carry a data-dependent name that must be read from the record.
+  def node_name(%__MODULE__{type: :text}), do: "#text"
+  def node_name(%__MODULE__{type: :comment}), do: "#comment"
+  def node_name(%__MODULE__{type: :document}), do: "#document"
+
+  def node_name(%__MODULE__{type: type}) when type in [:document_fragment, :shadow_root],
+    do: "#document-fragment"
+
   def node_name(%__MODULE__{} = node) do
     [node_name] = DOM._select_nodes(node.server, node_name_spec(node.node_id))
     node_name
@@ -439,12 +456,7 @@ defmodule DOM.Node do
 
   defmatchspecp node_name_spec(node_id) do
     {^node_id, %{__struct__: NodeData.Element, local_name: local_name}} -> local_name
-    {^node_id, %{__struct__: NodeData.Text}} -> "#text"
-    {^node_id, %{__struct__: NodeData.Comment}} -> "#comment"
-    {^node_id, %{__struct__: NodeData.Document}} -> "#document"
     {^node_id, %{__struct__: NodeData.DocumentType, name: name}} -> name
-    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> "#document-fragment"
-    {^node_id, %{__struct__: NodeData.ShadowRoot}} -> "#document-fragment"
   end
 
   @doc "A DocumentType's `{public_id, system_id}` (each `nil` when absent)."
@@ -580,4 +592,6 @@ defmodule DOM.Node do
   def __listeners(%__MODULE__{} = node) do
     DOM._node_listeners(node.server, node.node_id)
   end
+
+  ## Attr node-only accessor API (these are ~obsolete, but we include them for compat reasons.)
 end
