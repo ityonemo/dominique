@@ -39,7 +39,10 @@ defmodule DOM.Node do
           type: :attr
         }
 
-  @leaf [:text, :comment, :document_type]
+  # Node kinds that never have children: appending/inserting under them raises
+  # HierarchyRequestError, and their child_nodes/children are always []. An Attr
+  # (nodeType 2) is childless too, so it joins the leaf kinds for those guards.
+  @leaf [:text, :comment, :document_type, :attr]
 
   # DOM `nodeType` numeric constant per handle kind. nodeType is fixed by the node
   # kind, so it is answered from the handle's `type` with no ETS lookup.
@@ -147,6 +150,9 @@ defmodule DOM.Node do
 
   @doc "The node's parent, or `nil`."
   @spec parent_node(t()) :: t() | nil
+  # An Attr is not a child of anything (its owner is `owner_element/1`, not a parent).
+  def parent_node(%__MODULE__{type: :attr}), do: nil
+
   def parent_node(%__MODULE__{} = node) do
     # Two dependent reads (parent id, then that id's handle) run in one atomic op
     # so the tree can't be mutated between them.
@@ -449,6 +455,9 @@ defmodule DOM.Node do
   def node_name(%__MODULE__{type: type}) when type in [:document_fragment, :shadow_root],
     do: "#document-fragment"
 
+  # An Attr's nodeName is its qualified name — derivable from the key in the handle.
+  def node_name(%__MODULE__{type: :attr} = attr), do: attr_name(attr)
+
   def node_name(%__MODULE__{} = node) do
     [node_name] = DOM._select_nodes(node.server, node_name_spec(node.node_id))
     node_name
@@ -594,4 +603,65 @@ defmodule DOM.Node do
   end
 
   ## Attr node-only accessor API (these are ~obsolete, but we include them for compat reasons.)
+  #
+  # An Attr handle is `%DOM.Node{type: :attr, node_id: {element_id, key}}` — no backing
+  # NodeData record. Every accessor resolves through the OWNER element's attribute tuple
+  # (so the handle stays live: a later set_attribute is reflected here), or is derived
+  # purely from `key`. `key` is a plain qualified-name string OR a `{prefix, local, url}`
+  # namespace triple (`DOM.NodeData.Element.attr_key`).
+
+  @doc "An Attr's qualified name (HTML colon form) — `nodeName`/`name`."
+  @spec attr_name(attr()) :: String.t()
+  def attr_name(%__MODULE__{type: :attr, node_id: {_el, key}}),
+    do: NodeData.Element.qualified_name(key)
+
+  @doc "An Attr's local name (the part after any prefix)."
+  @spec attr_local_name(attr()) :: String.t()
+  def attr_local_name(%__MODULE__{type: :attr, node_id: {_el, key}}), do: attr_local(key)
+
+  @doc "An Attr's namespace prefix, or `nil` (always `nil` for a plain attribute)."
+  @spec attr_prefix(attr()) :: String.t() | nil
+  def attr_prefix(%__MODULE__{type: :attr, node_id: {_el, key}}), do: attr_prefix_of(key)
+
+  @doc "An Attr's namespace URI, or `nil` (always `nil` for a plain attribute)."
+  @spec attr_namespace_uri(attr()) :: String.t() | nil
+  def attr_namespace_uri(%__MODULE__{type: :attr, node_id: {_el, key}}), do: attr_url(key)
+
+  @doc "An Attr's value — read live from the owner element (`nil` if the attribute was removed)."
+  @spec attr_value(attr()) :: String.t() | nil
+  def attr_value(%__MODULE__{type: :attr, server: server, node_id: {el, key}}) do
+    case DOM._select_nodes(server, attr_value_spec(el)) do
+      [attributes] -> attr_value_for(attributes, key)
+      [] -> nil
+    end
+  end
+
+  @doc "The element that owns this Attr (its `ownerElement`)."
+  @spec owner_element(attr()) :: t()
+  def owner_element(%__MODULE__{type: :attr, server: server, node_id: {el, _key}}) do
+    %__MODULE__{server: server, node_id: el, type: :element}
+  end
+
+  defmatchspecp attr_value_spec(element_id) do
+    {^element_id, %{__struct__: NodeData.Element, attributes: attributes}} -> attributes
+  end
+
+  # The value in `attributes` under the exact `key`, or nil. The Attr handle carries the
+  # verbatim key, so this is an identity match (not the qualified-name lookup getAttribute uses).
+  defp attr_value_for(attributes, key) do
+    case List.keyfind(attributes, key, 0) do
+      {^key, value} -> value
+      nil -> nil
+    end
+  end
+
+  # Key-part extractors: a plain string key is an unprefixed, null-namespace attribute.
+  defp attr_local(key) when is_binary(key), do: key
+  defp attr_local({_prefix, local, _url}), do: local
+
+  defp attr_prefix_of(key) when is_binary(key), do: nil
+  defp attr_prefix_of({prefix, _local, _url}), do: prefix
+
+  defp attr_url(key) when is_binary(key), do: nil
+  defp attr_url({_prefix, _local, url}), do: url
 end

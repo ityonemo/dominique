@@ -81,6 +81,19 @@ defmodule DOM.Element do
     Enum.any?(attributes(element), fn {key, _v} -> Element.matches_key?(key, name) end)
   end
 
+  @doc """
+  The attribute (by qualified name) as an `Attr` node handle (`%DOM.Node{type: :attr}`),
+  or `nil` when absent. The handle references `{element_id, key}` and resolves live — its
+  `attr_value` reflects later `set_attribute` calls on this element.
+  """
+  @spec get_attribute_node(Node.t(), String.t()) :: Node.t() | nil
+  def get_attribute_node(%Node{type: :element} = element, name) do
+    case Enum.find(attributes(element), fn {key, _v} -> Element.matches_key?(key, name) end) do
+      {key, _value} -> %Node{server: element.server, node_id: {element.node_id, key}, type: :attr}
+      nil -> nil
+    end
+  end
+
   @doc "The element's attribute qualified names, in insertion order."
   @spec get_attribute_names(Node.t()) :: [String.t()]
   def get_attribute_names(%Node{type: :element} = element) do
