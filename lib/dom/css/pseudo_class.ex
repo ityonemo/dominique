@@ -12,7 +12,8 @@ defmodule DOM.CSS.PseudoClass do
 
   alias DOM.CSS.Query
   alias DOM.CSS.Serialize
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
+  alias DOM.NodeData.NodesTable
 
   @enforce_keys [:name]
   defstruct [:name, arg: nil]
@@ -176,7 +177,7 @@ defmodule DOM.CSS.PseudoClass do
   # a keyboard/mouse distinction, so :focus-visible aliases :focus for programmatic focus.
   def match(%{name: name}, %{index: index}, candidates)
       when name in ["focus", "focus-visible"] do
-    case Table.active_element_get(index) do
+    case IndexTable.active_element_get(index) do
       nil -> []
       active -> Enum.filter(candidates, &(&1 == active))
     end
@@ -184,17 +185,17 @@ defmodule DOM.CSS.PseudoClass do
 
   # :focus-within — the active element or any of its ancestors.
   def match(%{name: "focus-within"}, %{nodes: nodes, index: index}, candidates) do
-    ancestor_chain_match(candidates, nodes, Table.active_element_get(index))
+    ancestor_chain_match(candidates, nodes, IndexTable.active_element_get(index))
   end
 
   # :hover / :active — the hovered / pressed element or any of its ancestors (the
   # "hover chain"). Pointer state set by DOM.set_hover / set_active (no pointer input).
   def match(%{name: "hover"}, %{nodes: nodes, index: index}, candidates) do
-    ancestor_chain_match(candidates, nodes, Table.pointer_state_get(index, :hover))
+    ancestor_chain_match(candidates, nodes, IndexTable.pointer_state_get(index, :hover))
   end
 
   def match(%{name: "active"}, %{nodes: nodes, index: index}, candidates) do
-    ancestor_chain_match(candidates, nodes, Table.pointer_state_get(index, :active))
+    ancestor_chain_match(candidates, nodes, IndexTable.pointer_state_get(index, :active))
   end
 
   # :target — the "indicated part of the document": the element whose id equals the
@@ -203,7 +204,7 @@ defmodule DOM.CSS.PseudoClass do
   # WHOLE document (not just `candidates`) so id-precedence holds even when the query
   # scope is a single name-anchor, then keep the candidates that are that target.
   def match(%{name: "target"}, %{nodes: nodes, index: index}, candidates) do
-    case Table.fragment_get(index) do
+    case IndexTable.fragment_get(index) do
       nil -> []
       fragment -> Enum.filter(candidates, &(&1 == target_id(nodes, index, fragment)))
     end
@@ -346,7 +347,7 @@ defmodule DOM.CSS.PseudoClass do
   # An input's checkedness: the `checked` OVERRIDE field if set (dirty / user-toggled),
   # else the `checked` attribute (clean default). See NodeData.Element.
   defp input_checkedness(nodes, id) do
-    case Table.fetch!(nodes, id).checked do
+    case NodesTable.fetch!(nodes, id).checked do
       nil -> Query.has_own_attribute?(nodes, id, "checked")
       value -> value
     end
@@ -365,8 +366,8 @@ defmodule DOM.CSS.PseudoClass do
 
   # The concatenated text of a textarea's direct text-node children.
   defp textarea_text(nodes, id) do
-    for child <- Table.children(nodes, id),
-        %DOM.NodeData.Text{value: value} <- [Table.fetch!(nodes, child)],
+    for child <- NodesTable.children(nodes, id),
+        %DOM.NodeData.Text{value: value} <- [NodesTable.fetch!(nodes, child)],
         into: "",
         do: value
   end
@@ -481,7 +482,7 @@ defmodule DOM.CSS.PseudoClass do
   # :indeterminate sources: a checkbox with the indeterminate property; a radio whose
   # whole name group is unchecked; a <progress> with no value.
   defp indeterminate?(nodes, id) do
-    case Table.fetch!(nodes, id) do
+    case NodesTable.fetch!(nodes, id) do
       %DOM.NodeData.Element{local_name: "input"} = el ->
         indeterminate_input?(nodes, id, el)
 
@@ -506,7 +507,7 @@ defmodule DOM.CSS.PseudoClass do
     name = Query.own_attribute(nodes, id, "name")
 
     nodes
-    |> Table.elements_by_tag_name(Process.get(:document_id), "input")
+    |> NodesTable.elements_by_tag_name(Process.get(:document_id), "input")
     |> Enum.filter(
       &(input_type(nodes, &1) == "radio" and Query.own_attribute(nodes, &1, "name") == name)
     )
@@ -526,13 +527,13 @@ defmodule DOM.CSS.PseudoClass do
 
   # An upgraded custom element carries a definition on its record.
   defp upgraded?(nodes, id) do
-    match?(%DOM.NodeData.Element{definition: def} when def != nil, Table.fetch!(nodes, id))
+    match?(%DOM.NodeData.Element{definition: def} when def != nil, NodesTable.fetch!(nodes, id))
   end
 
   # The document's :target element for `fragment`: the first element with id==fragment
   # (via the id index), else the first <a name==fragment> in document order, else nil.
   defp target_id(nodes, index, fragment) do
-    case Table.index_lookup(index, :id, fragment) do
+    case IndexTable.index_lookup(index, :id, fragment) do
       [id | _] -> id
       [] -> named_anchor(nodes, fragment)
     end
@@ -540,7 +541,7 @@ defmodule DOM.CSS.PseudoClass do
 
   defp named_anchor(nodes, fragment) do
     nodes
-    |> Table.elements_by_tag_name(Process.get(:document_id), "a")
+    |> NodesTable.elements_by_tag_name(Process.get(:document_id), "a")
     |> Enum.find(&(Query.own_attribute(nodes, &1, "name") == fragment))
   end
 
@@ -586,7 +587,7 @@ defmodule DOM.CSS.PseudoClass do
 
   defp first_submit_control(nodes, form) do
     nodes
-    |> DOM.NodeData.Table.descendant_ids(form)
+    |> NodesTable.descendant_ids(form)
     |> Enum.find(&submit_control?(nodes, &1))
   end
 

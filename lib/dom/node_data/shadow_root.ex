@@ -9,6 +9,7 @@ defmodule DOM.NodeData.ShadowRoot do
 
   use DOM.NodeData
   use DOM.HTML
+  alias DOM.NodeData.NodesTable
 
   defstruct @enforce_keys ++ [:host, :parent, mode: :open, slot_assignment: :named]
 
@@ -40,6 +41,6 @@ defmodule DOM.NodeData.ShadowRoot do
   # outerHTML never reaches here, since it reads the host's own children).
   @impl DOM.HTML
   def serialize(%__MODULE__{}, node_id, nodes) do
-    DOM.HTML.children("", DOM.NodeData.Table.children_by_extent(nodes, node_id), nodes)
+    DOM.HTML.children("", NodesTable.children_by_extent(nodes, node_id), nodes)
   end
 end

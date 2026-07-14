@@ -11,7 +11,7 @@ defmodule DOM.Element do
 
   alias DOM.Node
   alias DOM.NodeData.Element
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
 
   @doc "The element's local name, or `nil` for a non-element node."
   @spec local_name(Node.t()) :: String.t() | nil
@@ -286,7 +286,7 @@ defmodule DOM.Element do
         after_attrs = fun.(before)
         updated = %{record | attributes: after_attrs}
         :ets.insert(nodes, {node_id, updated})
-        Table.index_put(index, node_id, updated)
+        IndexTable.index_put(index, node_id, updated)
         # A slot= (light child) or name= (a <slot>) change re-slots the affected
         # shadow host and signals slotchange on any slot whose assignment changed.
         DOM._recompute_slots(nodes, index, node_id)

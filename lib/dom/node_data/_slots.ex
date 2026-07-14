@@ -15,16 +15,16 @@ defmodule DOM.NodeData.Slots do
   use MatchSpec
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.NodesTable
 
   @doc """
   Recompute and store the `:slot`/`:assigned` rows for `host_id`'s shadow tree.
   Returns the ids of the slots whose assigned-node list actually CHANGED — the
   slots to signal `slotchange` on (empty when nothing changed).
   """
-  @spec recompute(Table.tid(), Table.tid(), Table.id()) :: [Table.id()]
+  @spec recompute(NodesTable.tid(), NodesTable.tid(), NodesTable.id()) :: [NodesTable.id()]
   def recompute(nodes, index, host_id) do
-    shadow = Table.shadow_root(nodes, host_id)
+    shadow = NodesTable.shadow_root(nodes, host_id)
 
     # Every slot that could be involved: those with an assignment before, plus the
     # slots present in the shadow tree now. Snapshot each before, mutate, diff after.
@@ -60,7 +60,7 @@ defmodule DOM.NodeData.Slots do
   # root's slot-assignment mode: :named (default) matches light children to slots by
   # attribute; :manual uses each slot's explicitly-assigned nodes (slot.assign()).
   defp assign(nodes, index, host_id, shadow) do
-    case Table.fetch!(nodes, shadow).slot_assignment do
+    case NodesTable.fetch!(nodes, shadow).slot_assignment do
       :manual -> assign_manual(nodes, index, host_id, shadow)
       _named -> assign_named(nodes, index, host_id, shadow)
     end
@@ -73,7 +73,7 @@ defmodule DOM.NodeData.Slots do
     slot_by_name = first_slot_per_name(nodes, slots)
 
     _final_positions =
-      Enum.reduce(Table.children_by_extent(nodes, host_id), %{}, fn child, acc ->
+      Enum.reduce(NodesTable.children_by_extent(nodes, host_id), %{}, fn child, acc ->
         name = effective_slot_name(nodes, child)
 
         case Map.get(slot_by_name, name) do
@@ -93,10 +93,10 @@ defmodule DOM.NodeData.Slots do
   # Manual mode: each slot receives its manually-assigned nodes (slot.assign()),
   # filtered to actual host light-DOM children, in assign order.
   defp assign_manual(nodes, index, host_id, shadow) do
-    host_children = MapSet.new(Table.children_by_extent(nodes, host_id))
+    host_children = MapSet.new(NodesTable.children_by_extent(nodes, host_id))
 
     for slot_id <- slots_in(nodes, shadow) do
-      Table.fetch!(nodes, slot_id).manual_assigned
+      NodesTable.fetch!(nodes, slot_id).manual_assigned
       |> Enum.filter(&MapSet.member?(host_children, &1))
       |> Enum.with_index()
       |> Enum.each(fn {child, pos} -> write_assignment(index, host_id, slot_id, child, pos) end)
@@ -117,7 +117,7 @@ defmodule DOM.NodeData.Slots do
   # ==========================================================================
 
   @doc "The assigned nodes of `slot_id`, in assignment (host light-tree) order."
-  @spec assigned_nodes(Table.tid(), Table.id()) :: [Table.id()]
+  @spec assigned_nodes(NodesTable.tid(), NodesTable.id()) :: [NodesTable.id()]
   def assigned_nodes(index, slot_id) do
     index
     |> :ets.select(assigned_nodes_spec(slot_id))
@@ -130,7 +130,7 @@ defmodule DOM.NodeData.Slots do
   end
 
   @doc "The slot `node_id` is assigned to, or nil."
-  @spec assigned_slot(Table.tid(), Table.id()) :: Table.id() | nil
+  @spec assigned_slot(NodesTable.tid(), NodesTable.id()) :: NodesTable.id() | nil
   def assigned_slot(index, node_id) do
     case :ets.select(index, assigned_slot_spec(node_id)) do
       [slot_id] -> slot_id
@@ -147,29 +147,29 @@ defmodule DOM.NodeData.Slots do
   # ==========================================================================
 
   @doc "The `<slot>` element ids in `shadow_root_id`'s tree, in document order."
-  @spec slots_in(Table.tid(), Table.id()) :: [Table.id()]
+  @spec slots_in(NodesTable.tid(), NodesTable.id()) :: [NodesTable.id()]
   def slots_in(nodes, shadow_root_id) do
-    Table.elements_by_tag_name(nodes, shadow_root_id, "slot")
+    NodesTable.elements_by_tag_name(nodes, shadow_root_id, "slot")
   end
 
   @doc """
   The host id a slot belongs to: the slot's shadow-root's host. Walks the slot up
   to its tree root (a ShadowRoot), then reads its host.
   """
-  @spec host_of_slot(Table.tid(), Table.id()) :: Table.id() | nil
+  @spec host_of_slot(NodesTable.tid(), NodesTable.id()) :: NodesTable.id() | nil
   def host_of_slot(nodes, slot_id) do
     root = tree_root(nodes, slot_id)
 
-    case Table.fetch!(nodes, root) do
+    case NodesTable.fetch!(nodes, root) do
       %NodeData.ShadowRoot{host: host} -> host
       _ -> nil
     end
   end
 
   @doc "Whether `id` is an element that currently hosts a shadow root."
-  @spec shadow_host?(Table.tid(), Table.id()) :: boolean()
+  @spec shadow_host?(NodesTable.tid(), NodesTable.id()) :: boolean()
   def shadow_host?(nodes, id) do
-    match?(%NodeData.Element{shadow_root: s} when s != nil, Table.fetch!(nodes, id))
+    match?(%NodeData.Element{shadow_root: s} when s != nil, NodesTable.fetch!(nodes, id))
   end
 
   @doc """
@@ -177,9 +177,9 @@ defmodule DOM.NodeData.Slots do
   parent hosts a shadow (a light child's `slot=` changed), else the host of the
   shadow tree `node_id` lives in (a `<slot>`'s `name=` changed). `nil` if neither.
   """
-  @spec affected_host(Table.tid(), Table.id()) :: Table.id() | nil
+  @spec affected_host(NodesTable.tid(), NodesTable.id()) :: NodesTable.id() | nil
   def affected_host(nodes, node_id) do
-    parent = Table.parent(nodes, node_id)
+    parent = NodesTable.parent(nodes, node_id)
 
     if parent && shadow_host?(nodes, parent) do
       parent
@@ -196,18 +196,18 @@ defmodule DOM.NodeData.Slots do
     end)
   end
 
-  defp slot_name(nodes, slot_id), do: Table.get_attribute(nodes, slot_id, "name") || ""
+  defp slot_name(nodes, slot_id), do: NodesTable.get_attribute(nodes, slot_id, "name") || ""
 
   defp effective_slot_name(nodes, node_id) do
-    case Table.fetch!(nodes, node_id) do
-      %NodeData.Element{} -> Table.get_attribute(nodes, node_id, "slot") || ""
+    case NodesTable.fetch!(nodes, node_id) do
+      %NodeData.Element{} -> NodesTable.get_attribute(nodes, node_id, "slot") || ""
       # non-element nodes (text) have no slot attribute -> the default slot
       _ -> ""
     end
   end
 
   defp tree_root(nodes, id) do
-    case Table.parent(nodes, id) do
+    case NodesTable.parent(nodes, id) do
       nil -> id
       parent -> tree_root(nodes, parent)
     end

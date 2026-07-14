@@ -2,12 +2,12 @@ defmodule DOM.NodeData.IntervalPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
 
-  # The primary correctness proof for `Table.interval/2` and, later, the whole
+  # The primary correctness proof for `Extent.interval/2` and, later, the whole
   # nested-set adjacency subsystem. We generate a random sequence of tree
   # operations (append / prepend / insert-after) and apply each by allocating the
-  # new node's extent with `Table.interval(a, b)` against the correct sibling
+  # new node's extent with `Extent.interval(a, b)` against the correct sibling
   # bounds. After every op we assert the nested-set invariant that
   # `check_consistency!`'s forward walk will encode:
   #
@@ -51,7 +51,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
     parent = tree.nodes[parent_id]
 
     {a, b, insert_at} = bounds(kind, parent, tree, child_pick)
-    {start, stop} = Table.interval(a, b)
+    {start, stop} = Extent.interval(a, b)
 
     id = tree.next_id
     child = %{parent: parent_id, start: start, stop: stop, children: []}
@@ -160,7 +160,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
   # prefixes, adjacent-byte, and 0xFF-boundary cases. Rejects pairs where `a` is a
   # proper prefix of `b`: that is OUT OF CONTRACT for interval/graft (real bounds
   # are disjoint sibling gap keys, never in a prefix relationship — see
-  # Table.interval/2's doc).
+  # Extent.interval/2's doc).
   defp ordered_pair do
     gen all(x <- corner_binary(), y <- corner_binary(), x != y, not prefix_pair?(x, y)) do
       if x < y, do: {x, y}, else: {y, x}
@@ -175,7 +175,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
 
   property "interval(a, b) returns {c, d} strictly between: a < c < d < b" do
     check all({a, b} <- ordered_pair()) do
-      {c, d} = Table.interval(a, b)
+      {c, d} = Extent.interval(a, b)
 
       assert a < c, "start not above lower bound: a=#{inspect(a)} c=#{inspect(c)}"
       assert c < d, "start not below stop: c=#{inspect(c)} d=#{inspect(d)}"
@@ -187,7 +187,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
 
   property "multispan(a, b, n) returns n ordered, disjoint windows strictly inside (a, b)" do
     check all({a, b} <- ordered_pair(), count <- integer(1..8)) do
-      windows = Table.multispan(a, b, count)
+      windows = Extent.multispan(a, b, count)
 
       assert length(windows) == count,
              "wrong window count for #{inspect({a, b})} n=#{count}: got #{length(windows)}"
@@ -223,7 +223,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
       else
         {kids, _} =
           Enum.map_reduce(1..breadth, pstart, fn _i, prev ->
-            {cstart, cstop} = Table.interval(prev, pstop)
+            {cstart, cstop} = Extent.interval(prev, pstop)
             {carve_subtree(cstart, cstop, depth - 1, breadth), cstop}
           end)
 
@@ -236,7 +236,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
   defp subtree_gen do
     gen all(depth <- integer(0..3), breadth <- integer(1..3)) do
       # carve inside a nested window so the shared prefix is non-trivial
-      {rs, re} = Table.interval(<<0x10>>, <<0x70>>)
+      {rs, re} = Extent.interval(<<0x10>>, <<0x70>>)
       carve_subtree(rs, re, depth, breadth)
     end
   end
@@ -244,7 +244,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
   property "graft relocates a subtree into a gap, preserving order and containment" do
     check all(nodes <- subtree_gen(), {gap_a, gap_b} <- ordered_pair()) do
       [root | _] = nodes
-      grafted = Table.graft(nodes, root.start, root.stop, gap_a, gap_b)
+      grafted = Extent.graft(nodes, root.start, root.stop, gap_a, gap_b)
       [new_root | _] = grafted
 
       # every remapped key is a valid, non-empty binary

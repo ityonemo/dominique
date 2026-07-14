@@ -15,7 +15,7 @@ defmodule DOM.HTML.TreeBuilder do
 
   alias DOM.HTML.Token
   alias DOM.HTML.TreeBuilder.Tree
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.NodesTable
 
   # `tree` is the in-memory parse tree (DOM.HTML.TreeBuilder.Tree — plain Elixir
   # data, no ETS) the algorithm mutates during construction; at EOF it is
@@ -118,7 +118,7 @@ defmodule DOM.HTML.TreeBuilder do
   nodes ETS table `tid` + `index` (§13.2.6.4). `document_id` is the pre-inserted
   Document record's id. Construction runs against an in-memory Tree; at EOF the
   finished tree is materialized in one pass (records + extents + element index).
-  The caller mirrors extents into span rows (`Table.span_index_all`). Returns
+  The caller mirrors extents into span rows (`DOM.NodeData.span_index_all`). Returns
   `:ok`.
   """
   @spec build_into(:ets.tid(), :ets.tid(), reference(), [struct()]) :: :ok
@@ -134,21 +134,21 @@ defmodule DOM.HTML.TreeBuilder do
   # <option>: a deep clone of that option's children becomes the selectedcontent's
   # children. The selected option is the last one bearing a `selected` attribute,
   # else the first option (matching Chromium's default selection). Modeled as a
-  # post-parse pass over the loaded ETS table `tid` (Table.* / Table.clone) — the
+  # post-parse pass over the loaded ETS table `tid` (Table.* / DOM.NodeData.clone) — the
   # reflection is a snapshot of the final parsed tree.
   defp reflect_selectedcontent(tid, root) do
-    for select <- Table.elements_by_tag_name(tid, root, "select"),
+    for select <- NodesTable.elements_by_tag_name(tid, root, "select"),
         do: reflect_select(tid, select)
 
     :ok
   end
 
   defp reflect_select(tid, select) do
-    contents = Table.elements_by_tag_name(tid, select, "selectedcontent")
+    contents = NodesTable.elements_by_tag_name(tid, select, "selectedcontent")
     option = contents != [] && selected_option(tid, select)
 
     if option do
-      children = Table.children(tid, option)
+      children = NodesTable.children(tid, option)
       Enum.each(contents, &clone_children_into(tid, &1, children))
     end
   end
@@ -156,16 +156,16 @@ defmodule DOM.HTML.TreeBuilder do
   # The selected <option> of a select: the last one with a `selected` attribute,
   # else the first option (nil when the select has no options).
   defp selected_option(tid, select) do
-    options = Table.elements_by_tag_name(tid, select, "option")
+    options = NodesTable.elements_by_tag_name(tid, select, "option")
 
-    Enum.find(Enum.reverse(options), &Table.has_attribute(tid, &1, "selected")) ||
+    Enum.find(Enum.reverse(options), &NodesTable.has_attribute(tid, &1, "selected")) ||
       List.first(options)
   end
 
   # Deep-clone each of `children` and append the clones to `target`.
   defp clone_children_into(tid, target, children) do
     Enum.each(children, fn child ->
-      Table.append_child(tid, target, Table.clone_record(tid, child, true))
+      NodesTable.append_child(tid, target, NodesTable.clone_record(tid, child, true))
     end)
   end
 

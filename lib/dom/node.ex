@@ -118,7 +118,7 @@ defmodule DOM.Node do
 
     DOM._atomic_ets_op(server, fn nodes, index ->
       nodes
-      |> DOM.NodeData.Table.span_children_of(index, node.node_id)
+      |> DOM.NodeData.span_children_of(index, node.node_id)
       |> Enum.map(fn child_id ->
         [handle] = :ets.select(nodes, handle_spec(server, child_id))
         handle
@@ -230,7 +230,7 @@ defmodule DOM.Node do
 
     DOM._atomic_ets_op(server, fn nodes, index ->
       nodes
-      |> NodeData.Table.span_element_children_of(index, node.node_id)
+      |> DOM.NodeData.span_element_children_of(index, node.node_id)
       |> Enum.map(&%DOM.Node{server: server, node_id: &1, type: :element})
     end)
   end

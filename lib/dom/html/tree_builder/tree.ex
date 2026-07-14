@@ -29,7 +29,8 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   """
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
+  alias DOM.NodeData.IndexTable
 
   @enforce_keys [:nodes]
   defstruct [:nodes]
@@ -257,10 +258,10 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   # single interval for one child, a multispan partition for many.
   defp carve_children([], _start, _stop), do: []
 
-  defp carve_children([only], start, stop), do: [{only, Table.interval(start, stop)}]
+  defp carve_children([only], start, stop), do: [{only, Extent.interval(start, stop)}]
 
   defp carve_children(kids, start, stop) do
-    Enum.zip(kids, Table.multispan(start, stop, length(kids)))
+    Enum.zip(kids, Extent.multispan(start, stop, length(kids)))
   end
 
   # Build the DOM.NodeData.* record for `id`, index it if element, then insert it —
@@ -269,7 +270,7 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   defp write_record(tree, tid, index, id, root, parent, start, stop) do
     data = fetch(tree, id)
     record = to_record(data, parent, root, start, stop)
-    if data.kind == :element, do: Table.index_put(index, id, record)
+    if data.kind == :element, do: IndexTable.index_put(index, id, record)
     :ets.insert(tid, {id, record})
     :ok
   end

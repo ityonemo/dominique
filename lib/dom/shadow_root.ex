@@ -7,7 +7,7 @@ defmodule DOM.ShadowRoot do
   """
 
   alias DOM.Node
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.NodesTable
 
   @doc "The shadow tree serialized as HTML (its children)."
   @spec inner_html(Node.t()) :: String.t()
@@ -29,7 +29,7 @@ defmodule DOM.ShadowRoot do
   @spec mode(Node.t()) :: :open | :closed
   def mode(%Node{type: :shadow_root} = shadow) do
     DOM._atomic_ets_op(shadow.server, fn nodes, _index ->
-      Table.shadow_mode(nodes, shadow.node_id)
+      NodesTable.shadow_mode(nodes, shadow.node_id)
     end)
   end
 end

@@ -19,7 +19,8 @@ defmodule CSSTable do
   """
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
+  alias DOM.NodeData.IndexTable
 
   @doc """
   Describes an element node. `attributes` is a list of `{name, value}` tuples.
@@ -57,10 +58,10 @@ defmodule CSSTable do
     # comes from these + their span rows) — the shape DOM.CSS.match/3 expects.
     carve_extents(table, kids, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
     # mirror span rows (from extents) and membership rows (tag/id/class) for every element.
-    Table.span_index_all(table, index)
+    DOM.NodeData.span_index_all(table, index)
 
     for {id, %NodeData.Element{} = element} <- :ets.tab2list(table),
-        do: Table.index_put(index, id, element)
+        do: IndexTable.index_put(index, id, element)
 
     {%{nodes: table, index: index}, ids}
   end
@@ -134,7 +135,7 @@ defmodule CSSTable do
     kids
     |> Map.get(id, [])
     |> Enum.reduce(start, fn child, prev ->
-      {cstart, cstop} = Table.interval(prev, stop)
+      {cstart, cstop} = Extent.interval(prev, stop)
       carve_extents(table, kids, child, root, id, cstart, cstop)
       cstop
     end)

@@ -7,11 +7,11 @@ defmodule DOM.Range.Contents do
   # detached fragment of copies; the fragment's children are returned as a list of
   # freshly-cloned node ids (the caller appends them to a DocumentFragment).
   #
-  # Every produced clone is a detached, fully extent-labeled tree (via Table.clone
+  # Every produced clone is a detached, fully extent-labeled tree (via DOM.NodeData.clone
   # or a fresh Text node), ready to be placed under the fragment.
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.NodesTable
 
   @doc """
   Clone the contents of the range `[(sc, so), (ec, eo)]` into a list of detached
@@ -19,14 +19,14 @@ defmodule DOM.Range.Contents do
   is untouched.
   """
   @spec clone(
-          Table.tid(),
-          Table.tid(),
-          Table.id(),
+          NodesTable.tid(),
+          NodesTable.tid(),
+          NodesTable.id(),
           non_neg_integer(),
-          Table.id(),
+          NodesTable.id(),
           non_neg_integer()
         ) ::
-          [Table.id()]
+          [NodesTable.id()]
   def clone(nodes, index, sc, so, ec, eo) do
     cond do
       # collapsed
@@ -51,14 +51,14 @@ defmodule DOM.Range.Contents do
   copies.
   """
   @spec extract(
-          Table.tid(),
-          Table.tid(),
-          Table.id(),
+          NodesTable.tid(),
+          NodesTable.tid(),
+          NodesTable.id(),
           non_neg_integer(),
-          Table.id(),
+          NodesTable.id(),
           non_neg_integer()
         ) ::
-          [Table.id()]
+          [NodesTable.id()]
   def extract(nodes, index, sc, so, ec, eo) do
     cond do
       sc == ec and so == eo ->
@@ -124,7 +124,7 @@ defmodule DOM.Range.Contents do
   # Detach every fully-contained child of `common` from the source (they become fragment
   # children directly, no clone) — keeping each labeled via NodeData.detach. Document order.
   defp extract_contained_children(nodes, index, common, sc, so, ec, eo) do
-    kids = Table.children_by_extent(nodes, common)
+    kids = NodesTable.children_by_extent(nodes, common)
     from = contained_lo(nodes, common, sc, so, kids)
     to = contained_hi(nodes, common, ec, eo, kids)
     contained = Enum.slice(kids, from, max(to - from, 0))
@@ -135,10 +135,10 @@ defmodule DOM.Range.Contents do
   # A new character node holding `value[from..to]`, REMOVED from the source node's
   # value (the source keeps everything outside [from, to)).
   defp extract_char_slice(nodes, index, id, from, to) do
-    data = Table.fetch!(nodes, id)
+    data = NodesTable.fetch!(nodes, id)
     extracted = String.slice(data.value, from, to - from)
     kept = String.slice(data.value, 0, from) <> String.slice(data.value, to, char_len(nodes, id))
-    Table.set_value(nodes, id, kept)
+    NodesTable.set_value(nodes, id, kept)
     new_char_node(nodes, index, data, extracted)
   end
 
@@ -202,13 +202,13 @@ defmodule DOM.Range.Contents do
   # the boundary sits inside the path child (partially contained, handled by the
   # start/end sides), so contained children begin just after / end just before it.
   defp clone_contained_children(nodes, index, common, sc, so, ec, eo) do
-    kids = Table.children_by_extent(nodes, common)
+    kids = NodesTable.children_by_extent(nodes, common)
     from = contained_lo(nodes, common, sc, so, kids)
     to = contained_hi(nodes, common, ec, eo, kids)
 
     kids
     |> Enum.slice(from, max(to - from, 0))
-    |> Enum.map(&Table.clone(nodes, index, &1, true))
+    |> Enum.map(&DOM.NodeData.clone(nodes, index, &1, true))
   end
 
   # First fully-contained child index: `so` when sc is common (the boundary is a
@@ -234,7 +234,7 @@ defmodule DOM.Range.Contents do
   defp child_on_path(_tid, ancestor, ancestor), do: nil
 
   defp child_on_path(tid, ancestor, node) do
-    case Table.parent(tid, node) do
+    case NodesTable.parent(tid, node) do
       ^ancestor -> node
       nil -> nil
       parent -> child_on_path(tid, ancestor, parent)
@@ -249,7 +249,7 @@ defmodule DOM.Range.Contents do
   end
 
   defp ancestor_chain(tid, id) do
-    case Table.parent(tid, id) do
+    case NodesTable.parent(tid, id) do
       nil -> [id]
       parent -> [id | ancestor_chain(tid, parent)]
     end
@@ -261,18 +261,18 @@ defmodule DOM.Range.Contents do
 
   # A fresh Text/Comment node holding `value[from..to]` (a slice of char data).
   defp clone_char_slice(nodes, index, id, from, to) do
-    data = Table.fetch!(nodes, id)
+    data = NodesTable.fetch!(nodes, id)
     slice = String.slice(data.value, from, to - from)
     new_char_node(nodes, index, data, slice)
   end
 
   defp new_char_node(nodes, index, %NodeData.Text{}, value),
-    do: Table.create_text(nodes, index, value)
+    do: DOM.NodeData.create_text(nodes, index, value)
 
   defp new_char_node(nodes, index, %NodeData.Comment{}, value),
-    do: Table.create_comment(nodes, index, value)
+    do: DOM.NodeData.create_comment(nodes, index, value)
 
-  defp shallow_clone(nodes, index, id), do: Table.clone(nodes, index, id, false)
+  defp shallow_clone(nodes, index, id), do: DOM.NodeData.clone(nodes, index, id, false)
 
   # The produced ids are now fully-labeled subtrees — MOVE them under `parent` via graft_into
   # (both tables), not a record-only append.
@@ -284,13 +284,13 @@ defmodule DOM.Range.Contents do
   # ==========================================================================
 
   defp character_data?(tid, id) do
-    case Table.fetch!(tid, id) do
+    case NodesTable.fetch!(tid, id) do
       %NodeData.Text{} -> true
       %NodeData.Comment{} -> true
       _ -> false
     end
   end
 
-  defp char_len(tid, id), do: String.length(Table.fetch!(tid, id).value)
-  defp max_offset(tid, id), do: Table.max_boundary_offset(tid, id)
+  defp char_len(tid, id), do: String.length(NodesTable.fetch!(tid, id).value)
+  defp max_offset(tid, id), do: NodesTable.max_boundary_offset(tid, id)
 end

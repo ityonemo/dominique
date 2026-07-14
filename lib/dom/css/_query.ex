@@ -10,7 +10,8 @@ defmodule DOM.CSS.Query do
   use MatchSpec
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
+  alias DOM.NodeData.NodesTable
 
   @doc """
   Element ids in `candidates` whose local name is `name` — read from the tag
@@ -19,7 +20,7 @@ defmodule DOM.CSS.Query do
   """
   @spec type(:ets.tid(), [reference()], String.t()) :: [reference()]
   def type(index, candidates, name) do
-    index |> Table.index_lookup(:tag, name) |> intersect(candidates)
+    index |> IndexTable.index_lookup(:tag, name) |> intersect(candidates)
   end
 
   @doc "Element ids in `candidates` (the universal selector)."
@@ -34,7 +35,7 @@ defmodule DOM.CSS.Query do
   """
   @spec id(:ets.tid(), [reference()], String.t()) :: [reference()]
   def id(index, candidates, id) do
-    index |> Table.index_lookup(:id, id) |> intersect(candidates)
+    index |> IndexTable.index_lookup(:id, id) |> intersect(candidates)
   end
 
   @doc """
@@ -44,7 +45,7 @@ defmodule DOM.CSS.Query do
   """
   @spec class(:ets.tid(), [reference()], String.t()) :: [reference()]
   def class(index, candidates, token) do
-    index |> Table.index_lookup(:class, token) |> intersect(candidates)
+    index |> IndexTable.index_lookup(:class, token) |> intersect(candidates)
   end
 
   @doc """
@@ -67,17 +68,17 @@ defmodule DOM.CSS.Query do
           :i | :s | nil
         ) :: [reference()]
   def attribute(index, candidates, name, :eq, value, flag) when flag != :i do
-    index |> Table.index_lookup(:attr, name, value) |> intersect(candidates)
+    index |> IndexTable.index_lookup(:attr, name, value) |> intersect(candidates)
   end
 
   def attribute(index, candidates, name, nil, _value, _flag) do
-    matched = for {_value, node_id} <- Table.index_lookup_attr_name(index, name), do: node_id
+    matched = for {_value, node_id} <- IndexTable.index_lookup_attr_name(index, name), do: node_id
     intersect(matched, candidates)
   end
 
   def attribute(index, candidates, name, op, value, flag) do
     matched =
-      for {actual, node_id} <- Table.index_lookup_attr_name(index, name),
+      for {actual, node_id} <- IndexTable.index_lookup_attr_name(index, name),
           value_match?(op, fold(actual, flag), fold(value, flag)),
           do: node_id
 
@@ -110,7 +111,7 @@ defmodule DOM.CSS.Query do
   @spec shadow_parent(:ets.tid(), reference()) :: reference() | nil
   def shadow_parent(nodes, node_id) do
     case parent(nodes, node_id) do
-      nil -> Table.shadow_host(nodes, node_id)
+      nil -> NodesTable.shadow_host(nodes, node_id)
       parent_id -> cross_shadow(nodes, parent_id)
     end
   end
@@ -126,13 +127,13 @@ defmodule DOM.CSS.Query do
 
   # If `id` is a shadow root, the boundary crosses to its host; else `id` itself.
   defp cross_shadow(nodes, id) do
-    Table.shadow_host(nodes, id) || id
+    NodesTable.shadow_host(nodes, id) || id
   end
 
   @doc "All child ids of `node_id`, in document order (span-backed range scan)."
   @spec children_ids(DOM.CSS.context(), reference()) :: [reference()]
   def children_ids(%{nodes: nodes, index: index}, node_id) do
-    Table.span_children_of(nodes, index, node_id)
+    DOM.NodeData.span_children_of(nodes, index, node_id)
   end
 
   @doc "Element children of `node_id`, in document order."
@@ -284,7 +285,7 @@ defmodule DOM.CSS.Query do
   # The first <legend> child of `fieldset`, or nil.
   defp first_legend(nodes, fieldset) do
     nodes
-    |> Table.children(fieldset)
+    |> NodesTable.children(fieldset)
     |> Enum.find(&(local_name(nodes, &1) == "legend"))
   end
 

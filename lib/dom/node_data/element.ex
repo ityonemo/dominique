@@ -3,10 +3,11 @@ defmodule DOM.NodeData.Element do
 
   use DOM.NodeData
   use DOM.HTML
+  alias DOM.NodeData.NodesTable
 
   # `@enforce_keys` from DOM.NodeData is `[:root, :start, :stop]` (the nested-set extent:
   # `root` is the tree root's id, `{start, stop}` the binary order-keys containing all
-  # descendants — this IS the child adjacency; see DOM.NodeData.Table). `:local_name` is
+  # descendants — this IS the child adjacency; see DOM.NodeData.NodesTable). `:local_name` is
   # enforced too. `content`/`shadow_root`/`definition`/`checked`/`parent` default nil.
   @enforce_keys @enforce_keys ++ [:local_name]
   defstruct @enforce_keys ++
@@ -89,7 +90,7 @@ defmodule DOM.NodeData.Element do
     if DOM.HTML.void?(name) do
       start_tag
     else
-      child_ids = DOM.NodeData.Table.children_by_extent(nodes, node_id)
+      child_ids = NodesTable.children_by_extent(nodes, node_id)
       [start_tag, DOM.HTML.children(name, child_ids, nodes), "</", name | ">"]
     end
   end

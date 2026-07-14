@@ -6,7 +6,7 @@ defmodule DOM.Range do
   text/comment.
 
   A range is a handle `%DOM.Range{server, range_id}` into range rows the document
-  server keeps in its index table (see `DOM.NodeData.Table` `range_*`). The
+  server keeps in its index table (see `DOM.NodeData.IndexTable` `range_*`). The
   `range_id` IS the monitor ref of the range's owner: the server monitors the
   owner process at `create_range/2`, so an abandoned range is reclaimed when its
   owner dies, and `detach/1` reclaims it explicitly.
@@ -21,7 +21,8 @@ defmodule DOM.Range do
   """
 
   alias DOM.Node
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
+  alias DOM.NodeData.NodesTable
 
   @enforce_keys [:server, :range_id]
   defstruct [:server, :range_id]
@@ -61,7 +62,7 @@ defmodule DOM.Range do
   @spec detached?(t()) :: boolean()
   def detached?(%__MODULE__{} = range) do
     DOM._atomic_ets_op(range.server, fn _nodes, index ->
-      not Table.range_present?(index, range.range_id)
+      not IndexTable.range_present?(index, range.range_id)
     end)
   end
 
@@ -120,7 +121,7 @@ defmodule DOM.Range do
   def select_node_contents(%__MODULE__{} = range, %Node{} = node) do
     update(range, fn nodes, _index, _bounds ->
       key = start_key!(nodes, node.node_id)
-      max = Table.max_boundary_offset(nodes, node.node_id)
+      max = NodesTable.max_boundary_offset(nodes, node.node_id)
       {{key, 0}, {key, max}}
     end)
   end
@@ -163,8 +164,8 @@ defmodule DOM.Range do
   def common_ancestor_container(range) do
     DOM._atomic_ets_op(range.server, fn nodes, index ->
       {{start_key, _}, {stop_key, _}} = boundaries!(index, range.range_id)
-      a = Table.node_at_start_key(nodes, start_key)
-      b = Table.node_at_start_key(nodes, stop_key)
+      a = NodesTable.node_at_start_key(nodes, start_key)
+      b = NodesTable.node_at_start_key(nodes, stop_key)
       node_handle(range.server, nodes, common_ancestor(nodes, a, b))
     end)
   end
@@ -286,7 +287,7 @@ defmodule DOM.Range do
             {:error, reason}
 
           {new_start, new_stop} ->
-            Table.range_put(index, range.range_id, new_start, new_stop)
+            IndexTable.range_put(index, range.range_id, new_start, new_stop)
             :ok
         end
       end)
@@ -327,7 +328,7 @@ defmodule DOM.Range do
   # validating the offset against the container's max. Returns `{:ok, boundary}` or
   # `{:error, :index_size}` (the caller raises client-side).
   defp normalize(nodes, %Node{node_id: id}, offset) do
-    max = Table.max_boundary_offset(nodes, id)
+    max = NodesTable.max_boundary_offset(nodes, id)
 
     if offset < 0 or offset > max do
       {:error, :index_size}
@@ -358,12 +359,12 @@ defmodule DOM.Range do
 
   # `select_node`: the node's parent id and its index among the parent's children.
   defp node_position!(nodes, %Node{node_id: id}) do
-    parent_id = Table.parent(nodes, id)
-    kids = Table.children_by_extent(nodes, parent_id)
+    parent_id = NodesTable.parent(nodes, id)
+    kids = NodesTable.children_by_extent(nodes, parent_id)
     {parent_id, Enum.find_index(kids, &(&1 == id))}
   end
 
-  defp start_key!(nodes, id), do: Table.fetch!(nodes, id).start
+  defp start_key!(nodes, id), do: NodesTable.fetch!(nodes, id).start
 
   # The boundary pair (a, b) to compare for a given `how`.
   defp boundary_pair(:start_to_start, {ts, _te}, {os, _oe}), do: {ts, os}
@@ -373,7 +374,7 @@ defmodule DOM.Range do
 
   # Read a range's boundaries or raise if it is detached.
   defp boundaries!(index, ref) do
-    case Table.range_boundaries(index, ref) do
+    case IndexTable.range_boundaries(index, ref) do
       nil -> raise ArgumentError, "range #{inspect(ref)} is detached"
       bounds -> bounds
     end
@@ -381,7 +382,7 @@ defmodule DOM.Range do
 
   # The container handle for a boundary's extent key (reverse lookup).
   defp container(nodes, extent_key) do
-    id = Table.node_at_start_key(nodes, extent_key)
+    id = NodesTable.node_at_start_key(nodes, extent_key)
     node_handle(self_server(), nodes, id)
   end
 
@@ -393,7 +394,7 @@ defmodule DOM.Range do
   end
 
   defp ancestor_chain(nodes, id) do
-    case Table.parent(nodes, id) do
+    case NodesTable.parent(nodes, id) do
       nil -> [id]
       parent -> [id | ancestor_chain(nodes, parent)]
     end
@@ -404,7 +405,7 @@ defmodule DOM.Range do
   defp self_server, do: self()
 
   defp node_handle(server, nodes, id) do
-    type = nodes |> Table.fetch!(id) |> DOM.NodeData.type()
+    type = nodes |> NodesTable.fetch!(id) |> DOM.NodeData.type()
     %Node{server: server, node_id: id, type: type}
   end
 end

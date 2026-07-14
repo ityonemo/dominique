@@ -3,9 +3,10 @@ defmodule DOM.NodeData.DocumentFragment do
 
   # `root`/`start`/`stop`: a fragment is a tree root (until adopted), so it carries
   # its own extent. Child adjacency is extent-borne (no `children` field); see
-  # DOM.NodeData.Table.
+  # DOM.NodeData.NodesTable.
   use DOM.NodeData
   use DOM.HTML
+  alias DOM.NodeData.NodesTable
 
   defstruct @enforce_keys ++ [:parent]
 
@@ -27,6 +28,6 @@ defmodule DOM.NodeData.DocumentFragment do
 
   @impl DOM.HTML
   def serialize(%__MODULE__{}, node_id, nodes) do
-    DOM.HTML.children("", DOM.NodeData.Table.children_by_extent(nodes, node_id), nodes)
+    DOM.HTML.children("", NodesTable.children_by_extent(nodes, node_id), nodes)
   end
 end

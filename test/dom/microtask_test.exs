@@ -20,7 +20,6 @@ defmodule DOM.MicrotaskTest do
 
   alias DOM.Event
   alias DOM.Node
-  alias DOM.NodeData.Table
 
   # _enqueue_microtask/2 called from OUTSIDE the server (the test process) exercises
   # the real GenServer.call → {:continue, :drain} → checkpoint path.
@@ -125,7 +124,7 @@ defmodule DOM.MicrotaskTest do
         DOM._enqueue_microtask(server, fn -> :never_drained end)
 
         try do
-          Table.check_consistency!(Process.get(:nodes), Process.get(:index))
+          DOM.NodeData.check_consistency!(Process.get(:nodes), Process.get(:index))
           :no_raise
         rescue
           e in RuntimeError -> e.message

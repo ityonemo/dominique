@@ -8,7 +8,8 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
   alias DOM.HTML.TreeBuilder.Tree
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
+  alias DOM.NodeData.NodesTable
 
   describe "mutable tree ops (no ETS)" do
     test "new/1 seeds a document root; append_child links parent + order" do
@@ -111,13 +112,13 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
       # doc's id is the pre-inserted document record; bulk_load writes every node.
       :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
-      Table.span_index_all(tid, index)
+      DOM.NodeData.span_index_all(tid, index)
 
-      assert Table.check_consistency!(tid, index) == :ok
-      assert Table.children_by_extent(tid, doc) == [ul]
-      assert Table.children_by_extent(tid, ul) == [a, b]
-      assert Table.children_by_extent(tid, b) == [c]
-      assert Table.node_name(tid, a) == "a"
+      assert DOM.NodeData.check_consistency!(tid, index) == :ok
+      assert NodesTable.children_by_extent(tid, doc) == [ul]
+      assert NodesTable.children_by_extent(tid, ul) == [a, b]
+      assert NodesTable.children_by_extent(tid, b) == [c]
+      assert NodesTable.node_name(tid, a) == "a"
     end
 
     test "loads a wide child list (multispan path) in order",
@@ -136,10 +137,10 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
-      Table.span_index_all(tid, index)
+      DOM.NodeData.span_index_all(tid, index)
 
-      assert Table.check_consistency!(tid, index) == :ok
-      assert Table.children_by_extent(tid, root) == kids
+      assert DOM.NodeData.check_consistency!(tid, index) == :ok
+      assert NodesTable.children_by_extent(tid, root) == kids
     end
 
     test "carries element attributes, text values, and namespaces into the records",
@@ -151,13 +152,13 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
-      Table.span_index_all(tid, index)
+      DOM.NodeData.span_index_all(tid, index)
 
-      assert Table.get_attribute(tid, svg, "width") == "10"
-      assert Table.namespace(tid, svg) == :svg
-      assert Table.value(tid, t) == "hi"
+      assert NodesTable.get_attribute(tid, svg, "width") == "10"
+      assert NodesTable.namespace(tid, svg) == :svg
+      assert NodesTable.value(tid, t) == "hi"
       # the svg attribute is indexed too
-      assert Table.index_lookup(index, :attr, "width", "10") == [svg]
+      assert IndexTable.index_lookup(index, :attr, "width", "10") == [svg]
     end
 
     test "materializes a template's content fragment (linked via content, not children)",
@@ -173,16 +174,16 @@ defmodule DOM.HTML.TreeBuilder.TreeTest do
 
       :ets.insert(tid, {doc, %NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
       Tree.bulk_load(tree, tid, index, doc)
-      Table.span_index_all(tid, index)
+      DOM.NodeData.span_index_all(tid, index)
 
-      assert Table.check_consistency!(tid, index) == :ok
+      assert DOM.NodeData.check_consistency!(tid, index) == :ok
       # the template is in the document; the fragment is a detached root carrying
       # the parsed content; the fragment's child is materialized.
-      assert Table.children_by_extent(tid, doc) == [template]
-      assert Table.children_by_extent(tid, template) == []
-      assert Table.content(tid, template) == content
-      assert Table.children_by_extent(tid, content) == [inner]
-      assert Table.node_name(tid, inner) == "span"
+      assert NodesTable.children_by_extent(tid, doc) == [template]
+      assert NodesTable.children_by_extent(tid, template) == []
+      assert NodesTable.content(tid, template) == content
+      assert NodesTable.children_by_extent(tid, content) == [inner]
+      assert NodesTable.node_name(tid, inner) == "span"
     end
   end
 end

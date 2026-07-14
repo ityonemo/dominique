@@ -6,7 +6,8 @@ defmodule DOM.NodeData.RehomeTest do
   # consistency net (span rows mirror records, roots match topology) still holds.
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
+  alias DOM.NodeData.NodesTable
 
   setup do
     {:ok,
@@ -16,31 +17,31 @@ defmodule DOM.NodeData.RehomeTest do
 
   # doc -> ul -> [a, b -> [c]], target. Span rows mirrored. Returns the ids.
   defp tree(nodes, index) do
-    doc = Table.create_document(nodes, index)
-    ul = Table.create_element(nodes, index, "ul")
-    a = Table.create_element(nodes, index, "a")
-    b = Table.create_element(nodes, index, "b")
-    c = Table.create_element(nodes, index, "c")
-    target = Table.create_element(nodes, index, "target")
-    Table.append_child(nodes, doc, ul)
-    Table.append_child(nodes, ul, a)
-    Table.append_child(nodes, ul, b)
-    Table.append_child(nodes, b, c)
-    Table.append_child(nodes, doc, target)
-    Table.span_index_all(nodes, index)
+    doc = DOM.NodeData.create_document(nodes, index)
+    ul = DOM.NodeData.create_element(nodes, index, "ul")
+    a = DOM.NodeData.create_element(nodes, index, "a")
+    b = DOM.NodeData.create_element(nodes, index, "b")
+    c = DOM.NodeData.create_element(nodes, index, "c")
+    target = DOM.NodeData.create_element(nodes, index, "target")
+    NodesTable.append_child(nodes, doc, ul)
+    NodesTable.append_child(nodes, ul, a)
+    NodesTable.append_child(nodes, ul, b)
+    NodesTable.append_child(nodes, b, c)
+    NodesTable.append_child(nodes, doc, target)
+    DOM.NodeData.span_index_all(nodes, index)
     %{doc: doc, ul: ul, a: a, b: b, c: c, target: target}
   end
 
   # The window (root, start, stop) of a node's subtree, from its record.
   defp window(nodes, id) do
-    rec = Table.fetch!(nodes, id)
+    rec = NodesTable.fetch!(nodes, id)
     root = Map.get(rec, :root) || id
     {root, rec.start, rec.stop}
   end
 
   test "baseline tree is consistent", %{nodes: nodes, index: index} do
     tree(nodes, index)
-    assert Table.check_consistency!(nodes, index) == :ok
+    assert DOM.NodeData.check_consistency!(nodes, index) == :ok
   end
 
   test "rehome-to-self detaches a subtree (b's subtree becomes its own tree)",
@@ -59,14 +60,14 @@ defmodule DOM.NodeData.RehomeTest do
         {{:span, ids.b, key, kind, parent}, val}
     end)
 
-    assert Table.check_consistency!(nodes, index) == :ok
+    assert DOM.NodeData.check_consistency!(nodes, index) == :ok
     # b is now a detached tree root (root == self); c is still its child.
-    assert Table.parent(nodes, ids.b) == nil
-    assert Table.fetch!(nodes, ids.b).root == ids.b
-    assert Table.children_by_extent(nodes, ids.b) == [ids.c]
-    assert Table.fetch!(nodes, ids.c).root == ids.b
+    assert NodesTable.parent(nodes, ids.b) == nil
+    assert NodesTable.fetch!(nodes, ids.b).root == ids.b
+    assert NodesTable.children_by_extent(nodes, ids.b) == [ids.c]
+    assert NodesTable.fetch!(nodes, ids.c).root == ids.b
     # ul lost b (only a remains under ul).
-    assert Table.children_by_extent(nodes, ids.ul) == [ids.a]
+    assert NodesTable.children_by_extent(nodes, ids.ul) == [ids.a]
   end
 
   test "rehome into a new parent slot (move b's subtree under target)",
@@ -75,14 +76,14 @@ defmodule DOM.NodeData.RehomeTest do
 
     # Move b's subtree under `target`: graft computes each moved node's NEW start/stop in
     # target's append gap; root -> target's tree root (doc); b's parent -> target.
-    target = Table.fetch!(nodes, ids.target)
-    b = Table.fetch!(nodes, ids.b)
+    target = NodesTable.fetch!(nodes, ids.target)
+    b = NodesTable.fetch!(nodes, ids.b)
     {gap_a, gap_b} = {target.start, target.stop}
 
     # graft returns records with remapped start/stop (root first). Build id -> new extent.
-    moved_ids = [ids.b | Table.descendant_ids(nodes, ids.b)]
-    recs = Enum.map(moved_ids, &Table.fetch!(nodes, &1))
-    grafted = Table.graft(recs, b.start, b.stop, gap_a, gap_b)
+    moved_ids = [ids.b | NodesTable.descendant_ids(nodes, ids.b)]
+    recs = Enum.map(moved_ids, &NodesTable.fetch!(nodes, &1))
+    grafted = Extent.graft(recs, b.start, b.stop, gap_a, gap_b)
     new_extent = Map.new(Enum.zip(moved_ids, grafted), fn {id, r} -> {id, {r.start, r.stop}} end)
 
     new_root = Map.get(target, :root) || ids.target
@@ -100,13 +101,13 @@ defmodule DOM.NodeData.RehomeTest do
         {{:span, new_root, key, kind, parent}, {node_id, type}}
     end)
 
-    assert Table.check_consistency!(nodes, index) == :ok
+    assert DOM.NodeData.check_consistency!(nodes, index) == :ok
     # b now under target; ul keeps only a.
-    assert Table.children_by_extent(nodes, ids.target) == [ids.b]
-    assert Table.children_by_extent(nodes, ids.b) == [ids.c]
-    assert Table.parent(nodes, ids.b) == ids.target
-    assert Table.fetch!(nodes, ids.b).root == ids.doc
-    assert Table.fetch!(nodes, ids.c).root == ids.doc
-    assert Table.children_by_extent(nodes, ids.ul) == [ids.a]
+    assert NodesTable.children_by_extent(nodes, ids.target) == [ids.b]
+    assert NodesTable.children_by_extent(nodes, ids.b) == [ids.c]
+    assert NodesTable.parent(nodes, ids.b) == ids.target
+    assert NodesTable.fetch!(nodes, ids.b).root == ids.doc
+    assert NodesTable.fetch!(nodes, ids.c).root == ids.doc
+    assert NodesTable.children_by_extent(nodes, ids.ul) == [ids.a]
   end
 end

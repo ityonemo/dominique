@@ -1,7 +1,7 @@
 defmodule DOM.ConsistencyTest do
   use ExUnit.Case, async: true
 
-  # Exercises DOM.NodeData.Table.check_consistency! (via DOM._check_index_consistency!)
+  # Exercises DOM.NodeData.check_consistency! (via DOM._check_index_consistency!)
   # against documents produced by the real parser and mutated through the public API,
   # proving the parent/children pointers stay mutually consistent at every rest point.
 

@@ -26,8 +26,9 @@ defmodule DOM do
   alias DOM.MutationRecord
   alias DOM.Node
   alias DOM.NodeData
+  alias DOM.NodeData.IndexTable
+  alias DOM.NodeData.NodesTable
   alias DOM.NodeData.Slots
-  alias DOM.NodeData.Table
   alias DOM.Traversal
 
   # ==========================================================================
@@ -164,7 +165,7 @@ defmodule DOM do
 
   def create_element(document, local_name) do
     create(document, fn nodes, index ->
-      Table.create_element(nodes, index, local_name)
+      DOM.NodeData.create_element(nodes, index, local_name)
     end)
   end
 
@@ -178,7 +179,7 @@ defmodule DOM do
     namespace = DOM.Namespace.element_atom(url) || :html
 
     create(document, fn nodes, index ->
-      Table.create_element_ns(nodes, index, qualified_name, namespace, [])
+      DOM.NodeData.create_element_ns(nodes, index, qualified_name, namespace, [])
     end)
   end
 
@@ -188,7 +189,7 @@ defmodule DOM do
   # content). Attributes are stored verbatim — no name normalization.
   def _create_element_ns(document, local_name, namespace, attributes) do
     create(document, fn nodes, index ->
-      Table.create_element_ns(nodes, index, local_name, namespace, attributes)
+      DOM.NodeData.create_element_ns(nodes, index, local_name, namespace, attributes)
     end)
   end
 
@@ -219,7 +220,7 @@ defmodule DOM do
   @doc false
   def _element_shadow_root(%Node{server: server, node_id: node_id}) do
     _atomic_ets_op(server, fn nodes, _index ->
-      case Table.shadow_root(nodes, node_id) do
+      case NodesTable.shadow_root(nodes, node_id) do
         nil -> nil
         shadow_id -> open_shadow_handle(nodes, shadow_id)
       end
@@ -227,19 +228,19 @@ defmodule DOM do
   end
 
   def create_text_node(document, value),
-    do: create(document, &Table.create_text(&1, &2, value))
+    do: create(document, &DOM.NodeData.create_text(&1, &2, value))
 
   def create_comment(document, value),
-    do: create(document, &Table.create_comment(&1, &2, value))
+    do: create(document, &DOM.NodeData.create_comment(&1, &2, value))
 
   def create_document_fragment(document),
-    do: create(document, &Table.create_document_fragment/2)
+    do: create(document, &DOM.NodeData.create_document_fragment/2)
 
   def create_document_type(document, name, public_id, system_id),
-    do: create(document, &Table.create_doctype(&1, &2, name, public_id, system_id))
+    do: create(document, &DOM.NodeData.create_doctype(&1, &2, name, public_id, system_id))
 
   # `create_node` is a `(nodes, index -> id)` that mints the labeled node (index-first,
-  # via Table.create_*). A created node is a labeled 1-node tree from birth.
+  # via DOM.NodeData.create_*). A created node is a labeled 1-node tree from birth.
   defp create(%Node{type: :document, server: server}, create_node) do
     _atomic_ets_op(server, fn nodes, index ->
       node_id = create_node.(nodes, index)
@@ -291,7 +292,7 @@ defmodule DOM do
   def active_element(%Node{type: :document, server: server} = document) do
     focused =
       _atomic_ets_op(server, fn nodes, index ->
-        if id = Table.active_element_get(index), do: node_handle(nodes, id)
+        if id = IndexTable.active_element_get(index), do: node_handle(nodes, id)
       end)
 
     focused || body(document) || document_element(document)
@@ -306,7 +307,7 @@ defmodule DOM do
   @spec set_fragment(Node.t(), String.t() | nil) :: :ok
   def set_fragment(%Node{type: :document, server: server}, fragment) do
     fragment = if fragment in [nil, ""], do: nil, else: fragment
-    _atomic_ets_op(server, fn _nodes, index -> Table.fragment_put(index, fragment) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.fragment_put(index, fragment) end)
   end
 
   @doc """
@@ -317,12 +318,14 @@ defmodule DOM do
   @spec set_hover(Node.t()) :: :ok
   def set_hover(%Node{server: server, node_id: node_id}),
     do:
-      _atomic_ets_op(server, fn _n, index -> Table.pointer_state_put(index, :hover, node_id) end)
+      _atomic_ets_op(server, fn _n, index ->
+        IndexTable.pointer_state_put(index, :hover, node_id)
+      end)
 
   @doc "Clear the `:hover` target."
   @spec clear_hover(Node.t()) :: :ok
   def clear_hover(%Node{server: server}),
-    do: _atomic_ets_op(server, fn _n, index -> Table.pointer_state_clear(index, :hover) end)
+    do: _atomic_ets_op(server, fn _n, index -> IndexTable.pointer_state_clear(index, :hover) end)
 
   @doc """
   Set the `:active` target to `element` (the pressed element) — a convenience for
@@ -331,12 +334,14 @@ defmodule DOM do
   @spec set_active(Node.t()) :: :ok
   def set_active(%Node{server: server, node_id: node_id}),
     do:
-      _atomic_ets_op(server, fn _n, index -> Table.pointer_state_put(index, :active, node_id) end)
+      _atomic_ets_op(server, fn _n, index ->
+        IndexTable.pointer_state_put(index, :active, node_id)
+      end)
 
   @doc "Clear the `:active` target."
   @spec clear_active(Node.t()) :: :ok
   def clear_active(%Node{server: server}),
-    do: _atomic_ets_op(server, fn _n, index -> Table.pointer_state_clear(index, :active) end)
+    do: _atomic_ets_op(server, fn _n, index -> IndexTable.pointer_state_clear(index, :active) end)
 
   @doc """
   Set the input's `indeterminate` property (the `:indeterminate` checkbox tri-state) —
@@ -351,7 +356,7 @@ defmodule DOM do
         record = fetch_node!(nodes, node_id)
         updated = %{record | indeterminate: value}
         :ets.insert(nodes, {node_id, updated})
-        Table.index_put(index, node_id, updated)
+        IndexTable.index_put(index, node_id, updated)
         :ok
       end,
       :mutates
@@ -421,11 +426,11 @@ defmodule DOM do
   end
 
   # Build the parsed tree directly into this server's ETS table, in-process (via
-  # DOM.NodeData.Table — no GenServer round-trips), before it serves any request.
+  # DOM.NodeData.NodesTable — no GenServer round-trips), before it serves any request.
   # handle_continue impls take no `from`.
   defp parse_impl(tokens, state) do
     TreeBuilder.build_into(state.nodes, state.index, state.document_id, tokens)
-    Table.span_index_all(state.nodes, state.index)
+    DOM.NodeData.span_index_all(state.nodes, state.index)
     {:noreply, state}
   end
 
@@ -439,7 +444,7 @@ defmodule DOM do
         context
       )
 
-    Table.span_index_all(state.nodes, state.index)
+    DOM.NodeData.span_index_all(state.nodes, state.index)
     {:noreply, %{state | fragment_root: root_id}}
   end
 
@@ -450,7 +455,7 @@ defmodule DOM do
                         header main nav p section span)
 
   defp attach_shadow(nodes, index, id, mode, slot_assignment) do
-    element = Table.fetch!(nodes, id)
+    element = NodesTable.fetch!(nodes, id)
 
     cond do
       element.shadow_root != nil ->
@@ -460,7 +465,7 @@ defmodule DOM do
         {:error, :not_supported}
 
       :else ->
-        shadow_id = Table.create_shadow_root(nodes, index, id, mode, slot_assignment)
+        shadow_id = DOM.NodeData.create_shadow_root(nodes, index, id, mode, slot_assignment)
         signal_slots(index, DOM.NodeData.Slots.recompute(nodes, index, id))
         {:ok, node_handle(nodes, shadow_id)}
     end
@@ -474,7 +479,7 @@ defmodule DOM do
   defp custom_element_name?(local_name), do: String.contains?(local_name, "-")
 
   defp open_shadow_handle(nodes, shadow_id) do
-    if Table.shadow_mode(nodes, shadow_id) == :open, do: node_handle(nodes, shadow_id)
+    if NodesTable.shadow_mode(nodes, shadow_id) == :open, do: node_handle(nodes, shadow_id)
   end
 
   # Generic ETS primitives. A caller module (DOM.Node/DOM.Element) builds a match
@@ -568,12 +573,12 @@ defmodule DOM do
   # but recursion under an outer frame that already owns the drain.
   def _enqueue_microtask(server, lambda) do
     if server == self(),
-      do: Table.microtask_enqueue(Process.get(:index), lambda),
+      do: IndexTable.microtask_enqueue(Process.get(:index), lambda),
       else: GenServer.call(server, {:enqueue_microtask, lambda})
   end
 
   defp enqueue_microtask_impl(lambda, _from, state) do
-    Table.microtask_enqueue(state.index, lambda)
+    IndexTable.microtask_enqueue(state.index, lambda)
     {:reply, :ok, state, {:continue, :drain_microtasks}}
   end
 
@@ -585,7 +590,7 @@ defmodule DOM do
   # (including a deferred dispatch_event) are picked up before it exits. An infinite
   # enqueue loop never returns to the mailbox — a faithful frozen tab.
   defp drain_microtasks_impl(state) do
-    case Table.microtask_take_oldest(state.index) do
+    case IndexTable.microtask_take_oldest(state.index) do
       :empty ->
         {:noreply, state}
 
@@ -623,10 +628,10 @@ defmodule DOM do
       _atomic_ets_op(
         server,
         fn nodes, index ->
-          if Table.custom_element_get(index, name) do
+          if IndexTable.custom_element_get(index, name) do
             {:error, :already_defined}
           else
-            Table.custom_element_put(index, name, definition)
+            IndexTable.custom_element_put(index, name, definition)
             upgrade_all(nodes, index, name, definition)
             :ok
           end
@@ -643,7 +648,7 @@ defmodule DOM do
   @doc "The definition registered for custom-element `name`, or nil. HTML `customElements.get`."
   @spec custom_element_get(Node.t(), String.t()) :: DOM.CustomElementDefinition.t() | nil
   def custom_element_get(%Node{server: server}, name) do
-    _atomic_ets_op(server, fn _nodes, index -> Table.custom_element_get(index, name) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.custom_element_get(index, name) end)
   end
 
   # Upgrade every UNDEFINED element of `name` in document order (an already-upgraded
@@ -658,7 +663,7 @@ defmodule DOM do
 
   # Elements whose local_name is `name`, in document order.
   defp elements_named(nodes, name) do
-    Table.elements_by_tag_name(nodes, Process.get(:document_id), name)
+    NodesTable.elements_by_tag_name(nodes, Process.get(:document_id), name)
   end
 
   # Attach `definition` to the element (the upgrade marker), then run constructed,
@@ -681,7 +686,7 @@ defmodule DOM do
     record = fetch_node!(nodes, node_id)
     updated = %{record | definition: definition}
     # index-first: refresh membership rows, then the record.
-    Table.index_put(index, node_id, updated)
+    IndexTable.index_put(index, node_id, updated)
     :ets.insert(nodes, {node_id, updated})
     :ok
   end
@@ -704,7 +709,7 @@ defmodule DOM do
   # constructed: at create_element, if `local_name` is a defined custom element. The
   # definition is attached to the element (its upgrade marker) before the callback.
   defp custom_element_constructed(nodes, index, node_id, local_name) do
-    if definition = Table.custom_element_get(index, local_name) do
+    if definition = IndexTable.custom_element_get(index, local_name) do
       set_definition(nodes, index, node_id, definition)
       run_callback(definition.constructed, node_handle(nodes, node_id))
     end
@@ -818,7 +823,7 @@ defmodule DOM do
     mask = what_to_show_mask(what_to_show)
 
     _atomic_ets_op(server, fn _nodes, index ->
-      Table.traversal_put(index, ref, %{
+      IndexTable.traversal_put(index, ref, %{
         kind: :tree_walker,
         root: root_id,
         what_to_show: mask,
@@ -844,7 +849,7 @@ defmodule DOM do
     mask = what_to_show_mask(what_to_show)
 
     _atomic_ets_op(server, fn _nodes, index ->
-      Table.traversal_put(index, ref, %{
+      IndexTable.traversal_put(index, ref, %{
         kind: :node_iterator,
         root: root_id,
         what_to_show: mask,
@@ -886,9 +891,9 @@ defmodule DOM do
   # traversal step reads/advances a private state row, no DOM mutation.
   def _traversal_step(server, ref, op) do
     _atomic_ets_op(server, fn nodes, index ->
-      state = Table.traversal_get(index, ref)
+      state = IndexTable.traversal_get(index, ref)
       {new_state, result} = op.(nodes, index, state)
-      Table.traversal_put(index, ref, new_state)
+      IndexTable.traversal_put(index, ref, new_state)
       result && node_handle(nodes, result)
     end)
   end
@@ -897,7 +902,7 @@ defmodule DOM do
   # Read a traversal's current/reference node as a handle.
   def _traversal_node(server, ref, key) do
     _atomic_ets_op(server, fn nodes, index ->
-      node_handle(nodes, Map.fetch!(Table.traversal_get(index, ref), key))
+      node_handle(nodes, Map.fetch!(IndexTable.traversal_get(index, ref), key))
     end)
   end
 
@@ -905,8 +910,8 @@ defmodule DOM do
   # Set a TreeWalker's current node.
   def _traversal_set_current(server, ref, node_id) do
     _atomic_ets_op(server, fn _nodes, index ->
-      state = Table.traversal_get(index, ref)
-      Table.traversal_put(index, ref, %{state | current: node_id})
+      state = IndexTable.traversal_get(index, ref)
+      IndexTable.traversal_put(index, ref, %{state | current: node_id})
     end)
   end
 
@@ -932,10 +937,10 @@ defmodule DOM do
   # deepest-last-descendant of the removed node's previous sibling, else the parent; and
   # set the pointer to AFTER it (before? = false).
   defp adjust_node_iterators(nodes, index, parent_id, removed_id, at) do
-    for {ref, state} <- Table.node_iterators(index),
+    for {ref, state} <- IndexTable.node_iterators(index),
         inclusive_descendant?(nodes, state.reference, removed_id) do
       new_reference = iterator_new_reference(nodes, parent_id, removed_id, at)
-      Table.traversal_put(index, ref, %{state | reference: new_reference, before?: false})
+      IndexTable.traversal_put(index, ref, %{state | reference: new_reference, before?: false})
     end
 
     :ok
@@ -945,7 +950,7 @@ defmodule DOM do
   # previous sibling if any, otherwise its parent. (Both exist pre-remove.)
   defp iterator_new_reference(nodes, parent_id, _removed_id, at) do
     if at > 0 do
-      prev_sibling = Enum.at(Table.children(nodes, parent_id), at - 1)
+      prev_sibling = Enum.at(NodesTable.children(nodes, parent_id), at - 1)
       deepest_last_descendant(nodes, prev_sibling)
     else
       parent_id
@@ -953,7 +958,7 @@ defmodule DOM do
   end
 
   defp deepest_last_descendant(nodes, id) do
-    case Table.children(nodes, id) do
+    case NodesTable.children(nodes, id) do
       [] -> id
       children -> deepest_last_descendant(nodes, List.last(children))
     end
@@ -963,7 +968,7 @@ defmodule DOM do
   defp inclusive_descendant?(_nodes, ancestor, ancestor), do: true
 
   defp inclusive_descendant?(nodes, id, ancestor) do
-    case Table.parent(nodes, id) do
+    case NodesTable.parent(nodes, id) do
       nil -> false
       parent -> inclusive_descendant?(nodes, parent, ancestor)
     end
@@ -1032,7 +1037,7 @@ defmodule DOM do
     if current == root do
       nil
     else
-      parent = Table.parent(nodes, current)
+      parent = NodesTable.parent(nodes, current)
 
       cond do
         parent == nil -> nil
@@ -1046,7 +1051,7 @@ defmodule DOM do
   # firstChild/lastChild: the first/last matching child, descending through SKIP nodes,
   # skipping REJECT subtrees.
   defp tw_child(nodes, current, filter, side) do
-    children = Table.children(nodes, current)
+    children = NodesTable.children(nodes, current)
     children = if side == :last, do: Enum.reverse(children), else: children
     tw_child_scan(nodes, children, filter, side)
   end
@@ -1059,7 +1064,7 @@ defmodule DOM do
         child
 
       :skip ->
-        grandkids = Table.children(nodes, child)
+        grandkids = NodesTable.children(nodes, child)
         grandkids = if side == :last, do: Enum.reverse(grandkids), else: grandkids
         tw_child_scan(nodes, grandkids, filter, side) || tw_child_scan(nodes, rest, filter, side)
 
@@ -1083,7 +1088,7 @@ defmodule DOM do
 
   defp tw_sibling_scan(nodes, root, current, nil, filter, side) do
     # no sibling: climb to parent and try its sibling (unless we hit root)
-    parent = Table.parent(nodes, current)
+    parent = NodesTable.parent(nodes, current)
 
     if parent == nil or parent == root,
       do: nil,
@@ -1118,10 +1123,10 @@ defmodule DOM do
     _atomic_ets_op(
       server,
       fn nodes, index ->
-        previous = Table.active_element_get(index)
+        previous = IndexTable.active_element_get(index)
 
         if focusable?(nodes, node_id) and connected?(nodes, node_id) and previous != node_id do
-          Table.active_element_put(index, node_id)
+          IndexTable.active_element_put(index, node_id)
           fire_focus_change(nodes, index, previous, node_id)
         end
 
@@ -1138,8 +1143,8 @@ defmodule DOM do
       fn nodes, index ->
         # blur only clears focus if THIS element is the active one (matches the browser:
         # blurring a non-focused element is a no-op).
-        if Table.active_element_get(index) == node_id do
-          Table.active_element_clear(index)
+        if IndexTable.active_element_get(index) == node_id do
+          IndexTable.active_element_clear(index)
           fire_focus_change(nodes, index, node_id, nil)
         end
 
@@ -1264,7 +1269,7 @@ defmodule DOM do
           tref
       end
 
-    Table.timer_put(Process.get(:index), ref, kind, callback, tref)
+    IndexTable.timer_put(Process.get(:index), ref, kind, callback, tref)
     ref
   end
 
@@ -1282,10 +1287,10 @@ defmodule DOM do
 
   defp cancel_timer(%Node{server: server}, id) do
     _atomic_ets_op(server, fn _nodes, index ->
-      if timer = Table.timer_get(index, id) do
+      if timer = IndexTable.timer_get(index, id) do
         {kind, _callback, tref} = timer
         cancel_tref(kind, tref)
-        Table.timer_delete(index, id)
+        IndexTable.timer_delete(index, id)
       end
 
       :ok
@@ -1300,12 +1305,12 @@ defmodule DOM do
   # a microtask checkpoint (the timer's trailing checkpoint — a microtask it enqueued
   # drains before the next task, since handle_continue runs before the mailbox is read).
   defp run_timer_impl(ref, state) do
-    case Table.timer_get(state.index, ref) do
+    case IndexTable.timer_get(state.index, ref) do
       nil ->
         {:noreply, state}
 
       {:timeout, callback, _tref} ->
-        Table.timer_delete(state.index, ref)
+        IndexTable.timer_delete(state.index, ref)
         callback.()
         {:noreply, state, {:continue, :drain_microtasks}}
 
@@ -1332,25 +1337,25 @@ defmodule DOM do
   @doc false
   def _mutation_observer_new(server, callback) do
     ref = make_ref()
-    _atomic_ets_op(server, fn _nodes, index -> Table.observer_put(index, ref, callback) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.observer_put(index, ref, callback) end)
     ref
   end
 
   @doc false
   def _mutation_observer_observe(server, ref, target_id, options) do
     _atomic_ets_op(server, fn _nodes, index ->
-      Table.observe_put(index, ref, target_id, options)
+      IndexTable.observe_put(index, ref, target_id, options)
     end)
   end
 
   @doc false
   def _mutation_observer_disconnect(server, ref) do
-    _atomic_ets_op(server, fn _nodes, index -> Table.observer_delete(index, ref) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.observer_delete(index, ref) end)
   end
 
   @doc false
   def _mutation_observer_take_records(server, ref) do
-    _atomic_ets_op(server, fn _nodes, index -> Table.mo_take_records(index, ref) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.mo_take_records(index, ref) end)
   end
 
   @doc false
@@ -1388,8 +1393,8 @@ defmodule DOM do
     end
 
     ref = Process.monitor(owner)
-    key = Table.fetch!(state.nodes, document_id).start
-    Table.range_put(state.index, ref, {key, 0}, {key, 0})
+    key = NodesTable.fetch!(state.nodes, document_id).start
+    IndexTable.range_put(state.index, ref, {key, 0}, {key, 0})
     {:reply, ref, state}
   end
 
@@ -1400,13 +1405,13 @@ defmodule DOM do
 
   defp range_detach_impl(range_id, _from, state) do
     Process.demonitor(range_id, [:flush])
-    Table.range_delete(state.index, range_id)
+    IndexTable.range_delete(state.index, range_id)
     {:reply, :ok, state}
   end
 
   # An owner process died: drop all of its ranges (the :DOWN ref IS the range id).
   defp range_cleanup_impl(range_id, state) do
-    Table.range_delete(state.index, range_id)
+    IndexTable.range_delete(state.index, range_id)
     {:noreply, state}
   end
 
@@ -1428,23 +1433,23 @@ defmodule DOM do
   end
 
   defp text_split_op(nodes, index, node_id, offset) do
-    value = Table.value(nodes, node_id)
+    value = NodesTable.value(nodes, node_id)
 
     if offset > String.length(value) do
       {:error, :index_size}
     else
       {before, rest} = String.split_at(value, offset)
-      orig_key = Table.fetch!(nodes, node_id).start
-      parent_id = Table.parent(nodes, node_id)
+      orig_key = NodesTable.fetch!(nodes, node_id).start
+      parent_id = NodesTable.parent(nodes, node_id)
 
       snapshot = range_snapshot(nodes, index)
-      Table.set_value(nodes, node_id, before)
+      NodesTable.set_value(nodes, node_id, before)
       # create the tail directly in its final slot (immediately after node_id) — no
       # detached-then-graft; the shortened original keeps its extent (value-only change).
-      root = Table.fetch!(nodes, parent_id).root
+      root = NodesTable.fetch!(nodes, parent_id).root
 
       new_id =
-        Table.create_child(
+        DOM.NodeData.create_child(
           nodes,
           index,
           parent_id,
@@ -1454,7 +1459,7 @@ defmodule DOM do
           {:after, node_id}
         )
 
-      new_key = Table.fetch!(nodes, new_id).start
+      new_key = NodesTable.fetch!(nodes, new_id).start
       adjust_split_ranges(nodes, index, snapshot, parent_id, node_id, orig_key, new_key, offset)
 
       {:ok, node_handle(nodes, new_id)}
@@ -1467,7 +1472,7 @@ defmodule DOM do
       {sc, so, ec, eo} = range_endpoints!(nodes, index, range_id)
       # clones are fully-labeled detached subtrees; move them under the fragment.
       clones = DOM.Range.Contents.clone(nodes, index, sc, so, ec, eo)
-      fragment_id = Table.create_document_fragment(nodes, index)
+      fragment_id = DOM.NodeData.create_document_fragment(nodes, index)
       NodeData.graft_into(nodes, index, fragment_id, clones, :last)
 
       node_handle(nodes, fragment_id)
@@ -1488,7 +1493,7 @@ defmodule DOM do
     snapshot = range_snapshot(nodes, index)
     # extracted are fully-labeled detached subtrees; move them under the fragment.
     extracted = DOM.Range.Contents.extract(nodes, index, sc, so, ec, eo)
-    fragment_id = Table.create_document_fragment(nodes, index)
+    fragment_id = DOM.NodeData.create_document_fragment(nodes, index)
     NodeData.graft_into(nodes, index, fragment_id, extracted, :last)
 
     collapse_range_to_start(index, range_id)
@@ -1523,8 +1528,8 @@ defmodule DOM do
     _atomic_ets_op(
       server,
       fn nodes, index ->
-        {{start_key, so}, _stop} = Table.range_boundaries(index, range_id)
-        container = Table.node_at_start_key(nodes, start_key)
+        {{start_key, so}, _stop} = IndexTable.range_boundaries(index, range_id)
+        container = NodesTable.node_at_start_key(nodes, start_key)
         do_insert_at_boundary(nodes, index, container, so, node_id)
         :ok
       end,
@@ -1536,7 +1541,7 @@ defmodule DOM do
   # (unless at an edge) and insert before the tail. Element/fragment: insert at the
   # child index `offset`.
   defp do_insert_at_boundary(nodes, index, container, offset, node_id) do
-    if Table.type(nodes, container) in [:text, :comment] do
+    if NodesTable.type(nodes, container) in [:text, :comment] do
       insert_into_text(nodes, index, container, offset, node_id)
     else
       insert_at_child_index(nodes, index, container, offset, node_id)
@@ -1544,12 +1549,12 @@ defmodule DOM do
   end
 
   defp insert_into_text(nodes, index, text_id, offset, node_id) do
-    parent_id = Table.parent(nodes, text_id)
+    parent_id = NodesTable.parent(nodes, text_id)
 
     reference =
       cond do
         offset == 0 -> text_id
-        offset >= String.length(Table.value(nodes, text_id)) -> nil
+        offset >= String.length(NodesTable.value(nodes, text_id)) -> nil
         :else -> split_text_for_insert(nodes, index, text_id, offset)
       end
 
@@ -1559,12 +1564,12 @@ defmodule DOM do
   # Split `text_id` at `offset`; return the tail node to insert before. The tail is
   # created directly in its final slot (immediately after `text_id`).
   defp split_text_for_insert(nodes, index, text_id, offset) do
-    {before, rest} = String.split_at(Table.value(nodes, text_id), offset)
-    Table.set_value(nodes, text_id, before)
-    parent_id = Table.parent(nodes, text_id)
-    root = Table.fetch!(nodes, parent_id).root
+    {before, rest} = String.split_at(NodesTable.value(nodes, text_id), offset)
+    NodesTable.set_value(nodes, text_id, before)
+    parent_id = NodesTable.parent(nodes, text_id)
+    root = NodesTable.fetch!(nodes, parent_id).root
 
-    Table.create_child(
+    DOM.NodeData.create_child(
       nodes,
       index,
       parent_id,
@@ -1576,7 +1581,7 @@ defmodule DOM do
   end
 
   defp insert_at_child_index(nodes, index, container, offset, node_id) do
-    reference = Enum.at(Table.children(nodes, container), offset)
+    reference = Enum.at(NodesTable.children(nodes, container), offset)
     insert_relative(nodes, index, container, node_id, reference)
   end
 
@@ -1617,11 +1622,11 @@ defmodule DOM do
       fragment = range_extract_op(nodes, index, range_id)
 
       # move the extracted fragment's (labeled) children under the wrapper element.
-      moved = Table.children(nodes, fragment.node_id)
+      moved = NodesTable.children(nodes, fragment.node_id)
       NodeData.graft_into(nodes, index, element_id, moved, :last)
 
-      {{start_key, so2}, _} = Table.range_boundaries(index, range_id)
-      container = Table.node_at_start_key(nodes, start_key)
+      {{start_key, so2}, _} = IndexTable.range_boundaries(index, range_id)
+      container = NodesTable.node_at_start_key(nodes, start_key)
       do_insert_at_boundary(nodes, index, container, so2, element_id)
 
       # select the inserted element
@@ -1638,14 +1643,14 @@ defmodule DOM do
     common = range_common_ancestor(nodes, sc, ec)
 
     (partially_contained_chain(nodes, sc, common) ++ partially_contained_chain(nodes, ec, common))
-    |> Enum.any?(&(Table.type(nodes, &1) not in [:text, :comment]))
+    |> Enum.any?(&(NodesTable.type(nodes, &1) not in [:text, :comment]))
   end
 
   # The nodes from `boundary` up to (but not including) `common`.
   defp partially_contained_chain(_nodes, common, common), do: []
 
   defp partially_contained_chain(nodes, node, common) do
-    case Table.parent(nodes, node) do
+    case NodesTable.parent(nodes, node) do
       ^common -> [node]
       nil -> [node]
       parent -> [node | partially_contained_chain(nodes, parent, common)]
@@ -1659,7 +1664,7 @@ defmodule DOM do
   end
 
   defp ancestor_or_self_chain(nodes, id) do
-    case Table.parent(nodes, id) do
+    case NodesTable.parent(nodes, id) do
       nil -> [id]
       parent -> [id | ancestor_or_self_chain(nodes, parent)]
     end
@@ -1667,16 +1672,16 @@ defmodule DOM do
 
   # After surround, set the range to select `element_id` (start before, end after).
   defp select_element_in_range(nodes, index, range_id, element_id) do
-    parent_id = Table.parent(nodes, element_id)
+    parent_id = NodesTable.parent(nodes, element_id)
     at = child_index(nodes, parent_id, element_id)
-    pkey = Table.fetch!(nodes, parent_id).start
-    Table.range_put(index, range_id, {pkey, at}, {pkey, at + 1})
+    pkey = NodesTable.fetch!(nodes, parent_id).start
+    IndexTable.range_put(index, range_id, {pkey, at}, {pkey, at + 1})
   end
 
   # Collapse `range_id` onto its start boundary (after extract/delete, per spec).
   defp collapse_range_to_start(index, range_id) do
-    {{start_key, so}, _stop} = Table.range_boundaries(index, range_id)
-    Table.range_put(index, range_id, {start_key, so}, {start_key, so})
+    {{start_key, so}, _stop} = IndexTable.range_boundaries(index, range_id)
+    IndexTable.range_put(index, range_id, {start_key, so}, {start_key, so})
   end
 
   # After an extract/delete that moved/removed nodes, re-pin every OTHER range's
@@ -1688,8 +1693,10 @@ defmodule DOM do
   # Resolve a range's stored boundaries into `{start_container_id, start_offset,
   # end_container_id, end_offset}` via the extent-key reverse lookup.
   defp range_endpoints!(nodes, index, range_id) do
-    {{start_key, so}, {stop_key, eo}} = Table.range_boundaries(index, range_id)
-    {Table.node_at_start_key(nodes, start_key), so, Table.node_at_start_key(nodes, stop_key), eo}
+    {{start_key, so}, {stop_key, eo}} = IndexTable.range_boundaries(index, range_id)
+
+    {NodesTable.node_at_start_key(nodes, start_key), so,
+     NodesTable.node_at_start_key(nodes, stop_key), eo}
   end
 
   # split rule (boundaries past the split move into the new node) + the insert of
@@ -1705,7 +1712,7 @@ defmodule DOM do
   end
 
   @doc """
-  Assert the document's ETS invariants (see `DOM.NodeData.Table.check_consistency!/1`),
+  Assert the document's ETS invariants (see `DOM.NodeData.check_consistency!/1`),
   raising on violation. Test-only; wired into an `on_exit` hook by `DOM.Case`.
   """
   @spec _check_index_consistency!(GenServer.server()) :: :ok
@@ -1714,7 +1721,7 @@ defmodule DOM do
   end
 
   defp check_index_consistency_impl(_from, state) do
-    {:reply, Table.check_consistency!(state.nodes, state.index), state}
+    {:reply, DOM.NodeData.check_consistency!(state.nodes, state.index), state}
   end
 
   def _node_append_child(server, parent_id, %{server: child_server, node_id: child_id} = child) do
@@ -1767,7 +1774,7 @@ defmodule DOM do
 
       :else ->
         snapshot = range_snapshot(nodes, index)
-        siblings = Table.children(nodes, parent_id)
+        siblings = NodesTable.children(nodes, parent_id)
         at = length(siblings)
         NodeData.graft_into(nodes, index, parent_id, [child_id], :last)
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
@@ -1801,9 +1808,9 @@ defmodule DOM do
   # bubbles:true, composed:false, run from inside the drain loop (server == self()),
   # so its dispatch is a re-entrant in-place call.
   defp signal_slots(index, changed_slots) do
-    for slot_id <- changed_slots, Table.signal_slot(index, slot_id) do
+    for slot_id <- changed_slots, IndexTable.signal_slot(index, slot_id) do
       _enqueue_microtask(self(), fn ->
-        Table.unsignal_slot(Process.get(:index), slot_id)
+        IndexTable.unsignal_slot(Process.get(:index), slot_id)
 
         Events.dispatch(
           Process.get(:nodes),
@@ -1906,7 +1913,7 @@ defmodule DOM do
   defp observers_of(nodes, index, target_id, kind) do
     ancestors = MapSet.new(ancestor_ids(nodes, target_id))
 
-    for {ref, observed_id, options} <- Table.observations(index),
+    for {ref, observed_id, options} <- IndexTable.observations(index),
         Map.get(options, kind),
         observed_id == target_id or
           (options[:subtree] and MapSet.member?(ancestors, observed_id)),
@@ -1915,7 +1922,7 @@ defmodule DOM do
 
   # `target_id` and every ancestor up to the document root.
   defp ancestor_ids(nodes, node_id) do
-    case Table.parent(nodes, node_id) do
+    case NodesTable.parent(nodes, node_id) do
       nil -> [node_id]
       parent_id -> [node_id | ancestor_ids(nodes, parent_id)]
     end
@@ -1930,7 +1937,7 @@ defmodule DOM do
 
   # Queue a record on `ref` and enqueue the per-task "notify" microtask once.
   defp queue_record(index, ref, record) do
-    Table.mo_record_put(index, ref, record)
+    IndexTable.mo_record_put(index, ref, record)
     signal_notify_observers(index)
   end
 
@@ -1939,7 +1946,7 @@ defmodule DOM do
   # microtask clears the guard, then for each observer with queued records invokes
   # its callback once with the drained batch (re-entrantly, server == self()).
   defp signal_notify_observers(index) do
-    if Table.signal_slot(index, :mo_notify) do
+    if IndexTable.signal_slot(index, :mo_notify) do
       _enqueue_microtask(self(), &notify_mutation_observers/0)
     end
 
@@ -1948,11 +1955,11 @@ defmodule DOM do
 
   defp notify_mutation_observers do
     index = Process.get(:index)
-    Table.unsignal_slot(index, :mo_notify)
+    IndexTable.unsignal_slot(index, :mo_notify)
 
-    for ref <- Table.mo_record_refs(index) do
-      records = Table.mo_take_records(index, ref)
-      callback = Table.observer_callback(index, ref)
+    for ref <- IndexTable.mo_record_refs(index) do
+      records = IndexTable.mo_take_records(index, ref)
+      callback = IndexTable.observer_callback(index, ref)
       if records != [] && callback, do: callback.(records)
     end
 
@@ -1963,7 +1970,7 @@ defmodule DOM do
   # live-range adjustment can (a) remap boundaries whose container's key changed
   # (graft) and (b) find a parent/removed container by its pre-mutation key.
   defp range_snapshot(nodes, index) do
-    if Table.range_all_rows(index) == [] do
+    if IndexTable.range_all_rows(index) == [] do
       nil
     else
       for {id, %{start: start}} when start != nil <- :ets.tab2list(nodes),
@@ -2019,7 +2026,7 @@ defmodule DOM do
   # multispan-carved gap in a single cross-table rehome (the fragment is emptied). Returns
   # the moved child ids.
   defp append_fragment(nodes, index, parent_id, fragment_id, _fragment) do
-    moved = Table.children(nodes, fragment_id)
+    moved = NodesTable.children(nodes, fragment_id)
     NodeData.graft_into(nodes, index, parent_id, moved, :last)
     moved
   end
@@ -2027,7 +2034,7 @@ defmodule DOM do
   # Flatten a fragment's children into `parent_id` before `reference_child_id`, in order,
   # in one multispan-carved gap. Returns the moved child ids.
   defp insert_fragment(nodes, index, parent_id, fragment_id, _fragment, reference_child_id) do
-    moved = Table.children(nodes, fragment_id)
+    moved = NodesTable.children(nodes, fragment_id)
     NodeData.graft_into(nodes, index, parent_id, moved, {:before, reference_child_id})
     moved
   end
@@ -2086,7 +2093,7 @@ defmodule DOM do
       inclusive_ancestor?(nodes, child_id, parent_id) ->
         {:error, :hierarchy_request}
 
-      reference_child_id not in Table.children(nodes, parent_id) ->
+      reference_child_id not in NodesTable.children(nodes, parent_id) ->
         {:error, :not_found}
 
       invalid_hierarchy?(
@@ -2109,7 +2116,7 @@ defmodule DOM do
 
       :else ->
         snapshot = range_snapshot(nodes, index)
-        siblings = Table.children(nodes, parent_id)
+        siblings = NodesTable.children(nodes, parent_id)
         at = child_index(nodes, parent_id, reference_child_id)
         NodeData.graft_into(nodes, index, parent_id, [child_id], {:before, reference_child_id})
         adjust_ranges(nodes, index, snapshot, {:insert, parent_id, at, 1})
@@ -2150,7 +2157,7 @@ defmodule DOM do
     parent_data = fetch_node!(nodes, parent_id)
 
     cond do
-      reference_child_id not in Table.children(nodes, parent_id) ->
+      reference_child_id not in NodesTable.children(nodes, parent_id) ->
         {:error, :not_found}
 
       invalid_hierarchy?(
@@ -2244,14 +2251,14 @@ defmodule DOM do
 
   @doc false
   # importNode: copy `node_id` (deep when `deep?`) into `dst_server`, detached,
-  # leaving the source intact. Same server → Table.clone; cross server → export a
+  # leaving the source intact. Same server → DOM.NodeData.clone; cross server → export a
   # (possibly shallow) snapshot and materialize a fresh-keyed copy into dst.
   def _import_node(dst_server, dst_server, node_id, deep?) do
     _atomic_ets_op(
       dst_server,
       fn nodes, index ->
         # clone writes a fresh labeled subtree into both tables (span + membership).
-        clone_id = Table.clone(nodes, index, node_id, deep?)
+        clone_id = DOM.NodeData.clone(nodes, index, node_id, deep?)
         node_handle(nodes, clone_id)
       end,
       :mutates
@@ -2313,9 +2320,9 @@ defmodule DOM do
   end
 
   defp remove_child_op(nodes, index, parent_id, child_id) do
-    if child_id in Table.children(nodes, parent_id) do
+    if child_id in NodesTable.children(nodes, parent_id) do
       snapshot = range_snapshot(nodes, index)
-      siblings = Table.children(nodes, parent_id)
+      siblings = NodesTable.children(nodes, parent_id)
       at = child_index(nodes, parent_id, child_id)
       removed_keys = removed_subtree_keys(nodes, child_id)
       # custom element: capture the connected custom elements in the subtree BEFORE
@@ -2349,13 +2356,13 @@ defmodule DOM do
 
   # The index of `child_id` among `parent_id`'s children (document order).
   defp child_index(nodes, parent_id, child_id) do
-    nodes |> Table.children(parent_id) |> Enum.find_index(&(&1 == child_id))
+    nodes |> NodesTable.children(parent_id) |> Enum.find_index(&(&1 == child_id))
   end
 
   # The set of start keys of `id` and its descendants (a removed subtree's keys),
   # for relocating boundaries that were inside it.
   defp removed_subtree_keys(nodes, id) do
-    [id | Table.descendant_ids(nodes, id)]
+    [id | NodesTable.descendant_ids(nodes, id)]
     |> Enum.map(&current_start(nodes, &1))
     |> Enum.reject(&is_nil/1)
     |> MapSet.new()
@@ -2415,7 +2422,7 @@ defmodule DOM do
       new_child_data,
       old_child_id,
       nil,
-      fn -> Table.detach(nodes, new_child_id) end
+      fn -> NodesTable.detach(nodes, new_child_id) end
     )
   end
 
@@ -2452,7 +2459,7 @@ defmodule DOM do
          prepare
        ) do
     cond do
-      old_child_id not in Table.children(nodes, parent_id) ->
+      old_child_id not in NodesTable.children(nodes, parent_id) ->
         {:error, :not_found}
 
       new_child_id == old_child_id ->
@@ -2496,7 +2503,7 @@ defmodule DOM do
       fn nodes, index ->
         # unlink (record-only) then delete — delete_subtree retracts every removed node's
         # index rows, so no rehome is needed (nothing remaining moved).
-        Table.detach(nodes, node_id)
+        NodesTable.detach(nodes, node_id)
         delete_subtree(nodes, index, node_id)
         :ok
       end,
@@ -2511,7 +2518,7 @@ defmodule DOM do
   end
 
   # `document_id` is the document (parent) being inserted into; its ordered children
-  # come from the extent index (Table.children), not a record field.
+  # come from the extent index (NodesTable.children), not a record field.
   defp invalid_document_child?(
          nodes,
          document_id,
@@ -2555,7 +2562,7 @@ defmodule DOM do
   # element counts; otherwise only elements before the reference child.
   defp element_before?(nodes, document_id, reference_child_id) do
     nodes
-    |> Table.children(document_id)
+    |> NodesTable.children(document_id)
     |> Enum.take_while(&(&1 != reference_child_id))
     |> Enum.any?(&match?(%NodeData.Element{}, fetch_node!(nodes, &1)))
   end
@@ -2564,7 +2571,7 @@ defmodule DOM do
   # (append), any doctype counts; otherwise doctypes from the reference child on.
   defp doctype_at_or_after?(nodes, document_id, reference_child_id) do
     nodes
-    |> Table.children(document_id)
+    |> NodesTable.children(document_id)
     |> Enum.drop_while(&(&1 != reference_child_id))
     |> Enum.any?(&match?(%NodeData.DocumentType{}, fetch_node!(nodes, &1)))
   end
@@ -2585,7 +2592,7 @@ defmodule DOM do
   # A fragment's children: from the live extents (same-doc), else from the
   # transported subtree map — derived by parent pointer + extent order, since the
   # records carry `parent`/`start`, not a `children` field.
-  defp fragment_children(nodes, fragment_id, nil), do: Table.children(nodes, fragment_id)
+  defp fragment_children(nodes, fragment_id, nil), do: NodesTable.children(nodes, fragment_id)
 
   defp fragment_children(_nodes, fragment_id, subtree_nodes) do
     subtree_nodes
@@ -2602,7 +2609,7 @@ defmodule DOM do
 
   defp document_has_kind?(nodes, document_id, kind, except_id) do
     nodes
-    |> Table.children(document_id)
+    |> NodesTable.children(document_id)
     |> Enum.any?(fn node_id ->
       node_id != except_id and fetch_node!(nodes, node_id).__struct__ == kind
     end)
@@ -2634,7 +2641,7 @@ defmodule DOM do
   def _node_clone_node(server, node_id, deep?) do
     _atomic_ets_op(server, fn nodes, index ->
       # clone writes a fresh labeled subtree into both tables (span + membership).
-      clone_id = Table.clone(nodes, index, node_id, deep?)
+      clone_id = DOM.NodeData.clone(nodes, index, node_id, deep?)
       node_handle(nodes, clone_id)
     end)
   end
@@ -2643,7 +2650,7 @@ defmodule DOM do
   # `node` contains `other` iff `other` is `node` or a descendant of it.
   def _node_contains(server, node_id, other_id) do
     _atomic_ets_op(server, fn nodes, _index ->
-      other_id == node_id or other_id in Table.descendant_ids(nodes, node_id)
+      other_id == node_id or other_id in NodesTable.descendant_ids(nodes, node_id)
     end)
   end
 
@@ -2690,11 +2697,11 @@ defmodule DOM do
   # into element/fragment children. Removals ride remove_child_op so live-range
   # boundaries and slot assignment are maintained.
   defp normalize_subtree(nodes, index, node_id) do
-    merge_text_runs(Table.children(nodes, node_id), nodes, index, node_id)
+    merge_text_runs(NodesTable.children(nodes, node_id), nodes, index, node_id)
 
     # recurse into the (possibly changed) element/fragment children
-    for child <- Table.children(nodes, node_id),
-        Table.type(nodes, child) not in [:text, :comment] do
+    for child <- NodesTable.children(nodes, node_id),
+        NodesTable.type(nodes, child) not in [:text, :comment] do
       normalize_subtree(nodes, index, child)
     end
 
@@ -2710,10 +2717,10 @@ defmodule DOM do
     # irrelevant — the work is the ETS mutations performed along the way.
     Enum.reduce(children, nil, fn child, run_head ->
       cond do
-        Table.type(nodes, child) != :text ->
+        NodesTable.type(nodes, child) != :text ->
           nil
 
-        run_head == nil and Table.value(nodes, child) == "" ->
+        run_head == nil and NodesTable.value(nodes, child) == "" ->
           remove_child_op(nodes, index, parent_id, child)
           nil
 
@@ -2721,8 +2728,8 @@ defmodule DOM do
           child
 
         :else ->
-          merged = Table.value(nodes, run_head) <> Table.value(nodes, child)
-          Table.set_value(nodes, run_head, merged)
+          merged = NodesTable.value(nodes, run_head) <> NodesTable.value(nodes, child)
+          NodesTable.set_value(nodes, run_head, merged)
           remove_child_op(nodes, index, parent_id, child)
           run_head
       end
@@ -2734,8 +2741,8 @@ defmodule DOM do
   # retract any existing match first, then insert.
   def _node_add_event_listener(server, node_id, %DOM.Listener{} = listener) do
     _atomic_ets_op(server, fn _nodes, index ->
-      Table.listener_delete(index, node_id, listener.type, listener.fn, listener.capture)
-      Table.listener_put(index, node_id, listener)
+      IndexTable.listener_delete(index, node_id, listener.type, listener.fn, listener.capture)
+      IndexTable.listener_put(index, node_id, listener)
       :ok
     end)
   end
@@ -2743,14 +2750,14 @@ defmodule DOM do
   @doc false
   def _node_remove_event_listener(server, node_id, type, fun, capture) do
     _atomic_ets_op(server, fn _nodes, index ->
-      Table.listener_delete(index, node_id, type, fun, capture)
+      IndexTable.listener_delete(index, node_id, type, fun, capture)
       :ok
     end)
   end
 
   @doc false
   def _node_listeners(server, node_id) do
-    _atomic_ets_op(server, fn _nodes, index -> Table.listeners_of(index, node_id) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.listeners_of(index, node_id) end)
   end
 
   @doc false
@@ -2800,17 +2807,17 @@ defmodule DOM do
 
   # A click on a <summary> toggles its parent <details>'s `open` attribute.
   defp toggle_details(nodes, index, summary_id) do
-    parent_id = Table.parent(nodes, summary_id)
+    parent_id = NodesTable.parent(nodes, summary_id)
 
     if parent_id &&
          match?(%NodeData.Element{local_name: "details"}, fetch_node!(nodes, parent_id)) do
-      if Table.has_attribute(nodes, parent_id, "open") do
-        Table.remove_attribute(nodes, parent_id, "open")
+      if NodesTable.has_attribute(nodes, parent_id, "open") do
+        NodesTable.remove_attribute(nodes, parent_id, "open")
       else
-        Table.set_attribute(nodes, parent_id, "open", "")
+        NodesTable.set_attribute(nodes, parent_id, "open", "")
       end
 
-      Table.index_put(index, parent_id, fetch_node!(nodes, parent_id))
+      IndexTable.index_put(index, parent_id, fetch_node!(nodes, parent_id))
     end
 
     :ok
@@ -2838,7 +2845,7 @@ defmodule DOM do
     if record.indeterminate do
       updated = %{record | indeterminate: false}
       :ets.insert(nodes, {node_id, updated})
-      Table.index_put(index, node_id, updated)
+      IndexTable.index_put(index, node_id, updated)
     end
 
     :ok
@@ -2858,7 +2865,7 @@ defmodule DOM do
     record = fetch_node!(nodes, node_id)
     updated = %{record | checked: value}
     :ets.insert(nodes, {node_id, updated})
-    Table.index_put(index, node_id, updated)
+    IndexTable.index_put(index, node_id, updated)
     :ok
   end
 
@@ -2878,7 +2885,7 @@ defmodule DOM do
   end
 
   defp radios_named(nodes, name) do
-    for id <- Table.elements_by_tag_name(nodes, Process.get(:document_id), "input"),
+    for id <- NodesTable.elements_by_tag_name(nodes, Process.get(:document_id), "input"),
         el = fetch_node!(nodes, id),
         input_type(el) == "radio",
         get_string_attr(el, "name") == name,
@@ -2889,7 +2896,7 @@ defmodule DOM do
   # Flip one flag on an in-flight event's :active_event row (from a listener's
   # prevent_default/stop_*). Re-entrant: the listener runs inside this same server.
   def _event_set_flag(server, ref, flag) do
-    _atomic_ets_op(server, fn _nodes, index -> Table.active_event_set(index, ref, flag) end)
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.active_event_set(index, ref, flag) end)
   end
 
   @doc false
@@ -2904,7 +2911,7 @@ defmodule DOM do
   def _element_inner_html(server, node_id) do
     _atomic_ets_op(server, fn nodes, _index ->
       element = fetch_node!(nodes, node_id)
-      child_ids = Table.children_by_extent(nodes, node_id)
+      child_ids = NodesTable.children_by_extent(nodes, node_id)
       IO.iodata_to_binary(DOM.HTML.children(element.local_name, child_ids, nodes))
     end)
   end
@@ -2912,18 +2919,18 @@ defmodule DOM do
   @doc false
   # innerHTML setter (§): fragment-parse `html` with this element as the context,
   # then replace the element's children with the parsed fragment's children. All
-  # in-process on this server's table via DOM.NodeData.Table.
+  # in-process on this server's table via DOM.NodeData.NodesTable.
   def _element_set_inner_html(server, node_id, html) do
     _atomic_ets_op(
       server,
       fn nodes, index ->
-        element = Table.fetch!(nodes, node_id)
+        element = NodesTable.fetch!(nodes, node_id)
         context = %{name: element.local_name, namespace: element.namespace}
         root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-        old = Table.children(nodes, node_id)
+        old = NodesTable.children(nodes, node_id)
         Enum.each(old, &NodeData.detach(nodes, index, &1))
-        parsed = Table.children(nodes, root)
+        parsed = NodesTable.children(nodes, root)
         NodeData.graft_into(nodes, index, node_id, parsed, :last)
         :ok
       end,
@@ -2939,10 +2946,10 @@ defmodule DOM do
       server,
       fn nodes, index ->
         context_id = adjacent_context_id(nodes, node_id, position)
-        context_el = Table.fetch!(nodes, context_id)
+        context_el = NodesTable.fetch!(nodes, context_id)
         context = %{name: context_el.local_name, namespace: context_el.namespace}
         root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
-        parsed = Table.children(nodes, root)
+        parsed = NodesTable.children(nodes, root)
 
         insert_adjacent(nodes, index, node_id, position, parsed)
         :ok
@@ -2956,7 +2963,7 @@ defmodule DOM do
   defp adjacent_context_id(_nodes, node_id, position) when position in ~w(afterbegin beforeend),
     do: node_id
 
-  defp adjacent_context_id(nodes, node_id, _sibling), do: Table.parent(nodes, node_id)
+  defp adjacent_context_id(nodes, node_id, _sibling), do: NodesTable.parent(nodes, node_id)
 
   # Splice `parsed` child ids at the adjacency position relative to `node_id`.
   # Resolve the (parent, position) for an insertAdjacent position and move `parsed` there in
@@ -2970,20 +2977,20 @@ defmodule DOM do
   end
 
   defp insert_adjacent(nodes, index, node_id, "beforebegin", parsed) do
-    parent = Table.parent(nodes, node_id)
+    parent = NodesTable.parent(nodes, node_id)
     NodeData.graft_into(nodes, index, parent, parsed, {:before, node_id})
   end
 
   defp insert_adjacent(nodes, index, node_id, "afterend", parsed) do
-    parent = Table.parent(nodes, node_id)
-    next = Enum.at(Table.children(nodes, parent), child_index(nodes, parent, node_id) + 1)
+    parent = NodesTable.parent(nodes, node_id)
+    next = Enum.at(NodesTable.children(nodes, parent), child_index(nodes, parent, node_id) + 1)
     position = if next, do: {:before, next}, else: :last
     NodeData.graft_into(nodes, index, parent, parsed, position)
   end
 
   # `:last` when `parent_id` has no children, else `{:before, first_child}`.
   defp before_first(nodes, parent_id) do
-    case List.first(Table.children(nodes, parent_id)) do
+    case List.first(NodesTable.children(nodes, parent_id)) do
       nil -> :last
       first -> {:before, first}
     end
@@ -2994,7 +3001,7 @@ defmodule DOM do
   # (so no raw-text handling), like a DocumentFragment.
   def _shadow_inner_html(server, node_id) do
     _atomic_ets_op(server, fn nodes, _index ->
-      child_ids = Table.children_by_extent(nodes, node_id)
+      child_ids = NodesTable.children_by_extent(nodes, node_id)
       IO.iodata_to_binary(DOM.HTML.children("", child_ids, nodes))
     end)
   end
@@ -3015,9 +3022,9 @@ defmodule DOM do
             Process.get(:document_id)
           )
 
-        old = Table.children(nodes, node_id)
+        old = NodesTable.children(nodes, node_id)
         Enum.each(old, &NodeData.detach(nodes, index, &1))
-        parsed = Table.children(nodes, root)
+        parsed = NodesTable.children(nodes, root)
         NodeData.graft_into(nodes, index, node_id, parsed, :last)
         # The shadow tree's <slot>s changed — reassign the host's light children.
         _recompute_slots(nodes, index, node_id)
@@ -3030,7 +3037,7 @@ defmodule DOM do
   @doc false
   def _shadow_host(%Node{server: server, node_id: node_id}) do
     _atomic_ets_op(server, fn nodes, _index ->
-      host_id = Table.shadow_host(nodes, node_id)
+      host_id = NodesTable.shadow_host(nodes, node_id)
       host_id && node_handle(nodes, host_id)
     end)
   end
@@ -3086,14 +3093,14 @@ defmodule DOM do
   # parent nil, so it IS the root). Composed jumps a shadow root to its host and
   # keeps walking, crossing every nested shadow boundary to the document.
   defp root_node(nodes, node_id, composed?) do
-    case Table.parent(nodes, node_id) do
+    case NodesTable.parent(nodes, node_id) do
       nil -> maybe_cross_shadow(nodes, node_id, composed?)
       parent -> root_node(nodes, parent, composed?)
     end
   end
 
   defp maybe_cross_shadow(nodes, root_id, composed?) do
-    host = composed? && Table.shadow_host(nodes, root_id)
+    host = composed? && NodesTable.shadow_host(nodes, root_id)
     if host, do: root_node(nodes, host, composed?), else: root_id
   end
 
@@ -3106,16 +3113,16 @@ defmodule DOM do
       _atomic_ets_op(
         server,
         fn nodes, index ->
-          parent_id = Table.parent(nodes, node_id)
+          parent_id = NodesTable.parent(nodes, node_id)
 
-          if is_nil(parent_id) or Table.type(nodes, parent_id) != :element do
+          if is_nil(parent_id) or NodesTable.type(nodes, parent_id) != :element do
             {:error, :no_modification}
           else
-            parent = Table.fetch!(nodes, parent_id)
+            parent = NodesTable.fetch!(nodes, parent_id)
             context = %{name: parent.local_name, namespace: parent.namespace}
             root = fragment_root_for(html, context, nodes, index, Process.get(:document_id))
 
-            parsed = Table.children(nodes, root)
+            parsed = NodesTable.children(nodes, root)
             NodeData.graft_into(nodes, index, parent_id, parsed, {:before, node_id})
             # node_id is replaced — detach it (cross-table re-root to self).
             NodeData.detach(nodes, index, node_id)
@@ -3138,7 +3145,7 @@ defmodule DOM do
   defp fragment_root_for(html, context, nodes, index, document_id) do
     tokens = DOM.HTML.fragment_tokens(html, context.name)
     root = TreeBuilder.build_fragment_into(nodes, index, document_id, tokens, context)
-    Table.span_index_all(nodes, index)
+    DOM.NodeData.span_index_all(nodes, index)
     root
   end
 
@@ -3159,7 +3166,7 @@ defmodule DOM do
       else
         # A named tag is a point lookup in the tag index; keep tree order by
         # filtering the ordered descendant walk against the (scope-free) match set.
-        matched = MapSet.new(Table.index_lookup(index, :tag, name))
+        matched = MapSet.new(IndexTable.index_lookup(index, :tag, name))
         Enum.filter(descendants, &MapSet.member?(matched, &1))
       end
 
@@ -3171,7 +3178,7 @@ defmodule DOM do
   defp get_element_by_id(nodes, index, root_id, id) do
     # The index gives every node with this id doc-wide (unordered); intersect with
     # the scope root's descendants and return the first in tree order.
-    matches = MapSet.new(Table.index_lookup(index, :id, id))
+    matches = MapSet.new(IndexTable.index_lookup(index, :id, id))
 
     match_id =
       if MapSet.size(matches) == 0 do
@@ -3194,7 +3201,7 @@ defmodule DOM do
       # root's descendants in tree order.
       matched =
         wanted
-        |> Enum.map(&MapSet.new(Table.index_lookup(index, :class, &1)))
+        |> Enum.map(&MapSet.new(IndexTable.index_lookup(index, :class, &1)))
         |> Enum.reduce(&MapSet.intersection/2)
 
       nodes
@@ -3227,7 +3234,7 @@ defmodule DOM do
   defp shadow_scope_host(nodes, node_id) do
     cond do
       Slots.shadow_host?(nodes, node_id) -> node_id
-      host = Table.shadow_host(nodes, root_node(nodes, node_id, false)) -> host
+      host = NodesTable.shadow_host(nodes, root_node(nodes, node_id, false)) -> host
       true -> nil
     end
   end
@@ -3264,7 +3271,7 @@ defmodule DOM do
   # The host of the query root, when the root is a shadow root; else nil. Sets the
   # :host-context scope for matches run inside a shadow-scoped query.
   defp shadow_query_host(nodes, root_id) do
-    if Table.type(nodes, root_id) == :shadow_root, do: Table.shadow_host(nodes, root_id)
+    if NodesTable.type(nodes, root_id) == :shadow_root, do: NodesTable.shadow_host(nodes, root_id)
   end
 
   defp class_tokens(names), do: String.split(names)
@@ -3284,7 +3291,7 @@ defmodule DOM do
       server,
       fn nodes, index ->
         nodes
-        |> Table.children(node_id)
+        |> NodesTable.children(node_id)
         |> Enum.each(&delete_subtree(nodes, index, &1))
 
         if value != "", do: append_text_child(nodes, index, node_id, value)
@@ -3296,13 +3303,13 @@ defmodule DOM do
 
   # Create a single Text child directly in place under `parent_id` (its sole child).
   defp append_text_child(nodes, index, parent_id, value) do
-    root = Table.fetch!(nodes, parent_id).root
+    root = NodesTable.fetch!(nodes, parent_id).root
 
     build = fn _id, {start, stop} ->
       %NodeData.Text{value: value, root: root, parent: parent_id, start: start, stop: stop}
     end
 
-    Table.create_child(nodes, index, parent_id, build, :last)
+    DOM.NodeData.create_child(nodes, index, parent_id, build, :last)
   end
 
   # Delete a subtree from the node table and retract each node's index + span +
@@ -3311,9 +3318,9 @@ defmodule DOM do
     nodes
     |> subtree(node_id)
     |> Enum.each(fn {id, _node_data} ->
-      Table.index_retract(index, id)
-      Table.span_retract(index, id)
-      Table.listeners_retract(index, id)
+      IndexTable.index_retract(index, id)
+      IndexTable.span_retract(index, id)
+      IndexTable.listeners_retract(index, id)
       :ets.delete(nodes, id)
     end)
   end
@@ -3372,13 +3379,13 @@ defmodule DOM do
   # wholeText: concatenate the contiguous run of Text siblings including `node_id`.
   def _text_whole_text(server, node_id) do
     _atomic_ets_op(server, fn nodes, _index ->
-      case Table.parent(nodes, node_id) do
+      case NodesTable.parent(nodes, node_id) do
         nil ->
           fetch_node!(nodes, node_id).value
 
         parent_id ->
           nodes
-          |> Table.children(parent_id)
+          |> NodesTable.children(parent_id)
           |> contiguous_text_run(nodes, node_id)
           |> Enum.map_join("", &fetch_node!(nodes, &1).value)
       end
@@ -3387,7 +3394,7 @@ defmodule DOM do
 
   # The maximal run of adjacent :text children around `node_id` in `children`.
   defp contiguous_text_run(children, nodes, node_id) do
-    text? = fn id -> Table.type(nodes, id) == :text end
+    text? = fn id -> NodesTable.type(nodes, id) == :text end
 
     before =
       children
@@ -3417,7 +3424,7 @@ defmodule DOM do
 
   defp descendant_entries(nodes, node_id) do
     nodes
-    |> Table.children(node_id)
+    |> NodesTable.children(node_id)
     |> Enum.flat_map(&subtree(nodes, &1))
   end
 
@@ -3425,9 +3432,9 @@ defmodule DOM do
   # Helper functions
   # ==========================================================================
 
-  defp fetch_node!(nodes, node_id), do: Table.fetch!(nodes, node_id)
+  defp fetch_node!(nodes, node_id), do: NodesTable.fetch!(nodes, node_id)
 
-  defp put_node(nodes, node_id, node), do: Table.put(nodes, node_id, node)
+  defp put_node(nodes, node_id, node), do: NodesTable.put(nodes, node_id, node)
 
   defp node_handle(nodes, node_id) do
     type = nodes |> fetch_node!(node_id) |> NodeData.type()
@@ -3438,7 +3445,7 @@ defmodule DOM do
     node_data = fetch_node!(nodes, node_id)
 
     [{node_id, node_data}] ++
-      Enum.flat_map(Table.children(nodes, node_id), &subtree(nodes, &1))
+      Enum.flat_map(NodesTable.children(nodes, node_id), &subtree(nodes, &1))
   end
 
   # Structural equality: `a_id` (live in `nodes`) vs `b_id` (a snapshot map from a
@@ -3451,7 +3458,7 @@ defmodule DOM do
     equal_fields?(a, b) and
       equal_children?(
         nodes,
-        Table.children(nodes, a_id),
+        NodesTable.children(nodes, a_id),
         b_snapshot,
         snapshot_children(b_snapshot, b_id)
       )
@@ -3504,9 +3511,9 @@ defmodule DOM do
       # IMPLEMENTATION_SPECIFIC (32) + a stable direction (PRECEDING 2).
       tree_root_of(nodes, node_id) != tree_root_of(nodes, other_id) -> 1 + 32 + 2
       # other is contained by node: CONTAINED_BY (16) + FOLLOWING (4)
-      other_id in Table.descendant_ids(nodes, node_id) -> 16 + 4
+      other_id in NodesTable.descendant_ids(nodes, node_id) -> 16 + 4
       # node is contained by other: CONTAINS (8) + PRECEDING (2)
-      node_id in Table.descendant_ids(nodes, other_id) -> 8 + 2
+      node_id in NodesTable.descendant_ids(nodes, other_id) -> 8 + 2
       # otherwise pure document order via extent start keys
       doc_order_precedes?(nodes, node_id, other_id) -> 4
       true -> 2
@@ -3514,7 +3521,7 @@ defmodule DOM do
   end
 
   defp tree_root_of(nodes, node_id) do
-    case Table.parent(nodes, node_id) do
+    case NodesTable.parent(nodes, node_id) do
       nil -> node_id
       parent_id -> tree_root_of(nodes, parent_id)
     end

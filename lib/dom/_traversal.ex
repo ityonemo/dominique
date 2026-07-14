@@ -10,7 +10,7 @@ defmodule DOM.Traversal do
   # whatToShow (a non-shown node returns :skip). It runs in the server (re-entrant).
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.NodesTable
 
   # Whether `node_id`'s type is shown by the `what_to_show` bitmask. The DOM constant
   # for a node type N is (1 <<< (N - 1)); :all is every bit set.
@@ -24,7 +24,7 @@ defmodule DOM.Traversal do
     (mask &&& 1 <<< (node_type(nodes, id) - 1)) != 0
   end
 
-  defp node_type(nodes, id), do: nodes |> Table.fetch!(id) |> NodeData.node_type()
+  defp node_type(nodes, id), do: nodes |> NodesTable.fetch!(id) |> NodeData.node_type()
 
   # ==========================================================================
   # NodeIterator: document-order next / previous over the root's inclusive subtree.
@@ -139,7 +139,7 @@ defmodule DOM.Traversal do
   defp tw_following(nodes, root, id) do
     case next_sibling(nodes, id) do
       nil ->
-        parent = Table.parent(nodes, id)
+        parent = NodesTable.parent(nodes, id)
         if parent == nil or id == root, do: nil, else: tw_following(nodes, root, parent)
 
       sibling ->
@@ -148,7 +148,7 @@ defmodule DOM.Traversal do
   end
 
   defp first_child_candidate(nodes, id) do
-    case Table.children(nodes, id) do
+    case NodesTable.children(nodes, id) do
       [first | _] -> first
       [] -> nil
     end
@@ -195,7 +195,7 @@ defmodule DOM.Traversal do
   end
 
   defp tw_prev_parent(nodes, root, node, filter) do
-    parent = Table.parent(nodes, node)
+    parent = NodesTable.parent(nodes, node)
 
     cond do
       # previousNode never yields the root (mirrors nextNode excluding it).
@@ -208,7 +208,7 @@ defmodule DOM.Traversal do
   # The deepest last-descendant of `node` that is accepted (descending through accepted/
   # skipped children, not rejected ones), or nil if none in the subtree.
   defp tw_deepest_accepted(nodes, node, filter) do
-    case Table.children(nodes, node) do
+    case NodesTable.children(nodes, node) do
       [] -> nil
       children -> tw_last_accepted_descendant(children, nodes, filter)
     end
@@ -239,7 +239,7 @@ defmodule DOM.Traversal do
   # nearest ancestor's next sibling), staying within `root`; nil at the end.
   @doc false
   def following_in(nodes, root, id) do
-    case Table.children(nodes, id) do
+    case NodesTable.children(nodes, id) do
       [first | _] -> first
       [] -> next_skipping_up(nodes, root, id)
     end
@@ -250,7 +250,7 @@ defmodule DOM.Traversal do
   defp next_skipping_up(nodes, root, id) do
     case next_sibling(nodes, id) do
       nil ->
-        parent = Table.parent(nodes, id)
+        parent = NodesTable.parent(nodes, id)
         if parent == nil or id == root, do: nil, else: next_skipping_up(nodes, root, parent)
 
       sibling ->
@@ -266,14 +266,14 @@ defmodule DOM.Traversal do
       nil
     else
       case prev_sibling(nodes, id) do
-        nil -> Table.parent(nodes, id)
+        nil -> NodesTable.parent(nodes, id)
         sibling -> deepest_last(nodes, sibling)
       end
     end
   end
 
   defp deepest_last(nodes, id) do
-    case Table.children(nodes, id) do
+    case NodesTable.children(nodes, id) do
       [] -> id
       children -> deepest_last(nodes, List.last(children))
     end
@@ -289,10 +289,10 @@ defmodule DOM.Traversal do
   def prev_sibling(nodes, id), do: sibling(nodes, id, :prev)
 
   defp sibling(nodes, id, direction) do
-    parent = Table.parent(nodes, id)
+    parent = NodesTable.parent(nodes, id)
 
     if parent do
-      siblings = Table.children(nodes, parent)
+      siblings = NodesTable.children(nodes, parent)
       index = Enum.find_index(siblings, &(&1 == id))
       sibling_at(siblings, index, direction)
     end
