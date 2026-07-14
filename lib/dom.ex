@@ -3629,32 +3629,27 @@ defmodule DOM do
   end
 
   # DOCUMENT_POSITION_* bitmask relating `other_id` to `node_id`, both in `nodes`.
+  # Answered purely from each node's nested-set extent `{root, start, stop}` (one fetch
+  # per node, no subtree walks): `root` is the tree root, so a mismatch is DISCONNECTED;
+  # containment is window nesting; document order is `start`-key order.
   defp compare_document_position(_nodes, node_id, node_id), do: 0
 
   defp compare_document_position(nodes, node_id, other_id) do
+    %{root: n_root, start: n_start, stop: n_stop} = fetch_node!(nodes, node_id)
+    %{root: o_root, start: o_start, stop: o_stop} = fetch_node!(nodes, other_id)
+
     cond do
       # different trees (detached subtrees have distinct roots): DISCONNECTED (1) +
       # IMPLEMENTATION_SPECIFIC (32) + a stable direction (PRECEDING 2).
-      tree_root_of(nodes, node_id) != tree_root_of(nodes, other_id) -> 1 + 32 + 2
-      # other is contained by node: CONTAINED_BY (16) + FOLLOWING (4)
-      other_id in NodesTable.descendant_ids(nodes, node_id) -> 16 + 4
-      # node is contained by other: CONTAINS (8) + PRECEDING (2)
-      node_id in NodesTable.descendant_ids(nodes, other_id) -> 8 + 2
-      # otherwise pure document order via extent start keys
-      doc_order_precedes?(nodes, node_id, other_id) -> 4
+      n_root != o_root -> 1 + 32 + 2
+      # other's window sits strictly inside node's: CONTAINED_BY (16) + FOLLOWING (4)
+      n_start < o_start and o_stop < n_stop -> 16 + 4
+      # node's window sits strictly inside other's: CONTAINS (8) + PRECEDING (2)
+      o_start < n_start and n_stop < o_stop -> 8 + 2
+      # disjoint: pure document order via extent start keys — FOLLOWING (4) / PRECEDING (2)
+      n_start < o_start -> 4
       true -> 2
     end
-  end
-
-  defp tree_root_of(nodes, node_id) do
-    case NodesTable.parent(nodes, node_id) do
-      nil -> node_id
-      parent_id -> tree_root_of(nodes, parent_id)
-    end
-  end
-
-  defp doc_order_precedes?(nodes, a_id, b_id) do
-    fetch_node!(nodes, a_id).start < fetch_node!(nodes, b_id).start
   end
 
   # ==========================================================================
