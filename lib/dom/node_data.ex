@@ -493,14 +493,17 @@ after
     end
   end
 
-  # Listener consistency: every :listener row must reference a live node.
+  # Listener consistency: every :listener row must reference a live node — OR a live
+  # AbortSignal (an AbortSignal is an EventTarget whose `abort`-event listeners are
+  # stored in :listener rows keyed by the signal ref, not a node id).
   defp check_listeners!(rows, index) do
     live = MapSet.new(rows, fn {id, _data} -> id end)
 
     dangling =
-      for {{:listener, node_id, _seq}, _listener} <- IndexTable.index_rows_of(index, :listener),
-          not MapSet.member?(live, node_id),
-          do: node_id
+      for {{:listener, target_id, _seq}, _listener} <- IndexTable.index_rows_of(index, :listener),
+          not MapSet.member?(live, target_id),
+          IndexTable.abort_signal_get(index, target_id) == nil,
+          do: target_id
 
     if dangling != [] do
       raise "dangling listener rows for dead nodes: #{inspect(Enum.uniq(dangling))}"

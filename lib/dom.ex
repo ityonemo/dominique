@@ -932,6 +932,96 @@ defmodule DOM do
     end)
   end
 
+  # ==========================================================================
+  # AbortController / AbortSignal bridges
+  # ==========================================================================
+
+  @doc false
+  # Create a fresh (non-aborted) AbortSignal state row.
+  def _abort_signal_create(server, ref) do
+    _atomic_ets_op(server, fn _nodes, index -> IndexTable.abort_signal_put(index, ref) end)
+  end
+
+  @doc false
+  # Create a composite (AbortSignal.any) signal over `source_refs`: register it as a
+  # dependent of each source, and if any source is ALREADY aborted, abort it now with
+  # that source's reason (so the composite is born aborted).
+  def _abort_signal_create_any(server, ref, source_refs) do
+    _atomic_ets_op(
+      server,
+      fn nodes, index ->
+        IndexTable.abort_signal_put(index, ref)
+        Enum.each(source_refs, &IndexTable.abort_signal_add_dep(index, &1, ref))
+
+        already =
+          Enum.find_value(source_refs, fn src ->
+            state = IndexTable.abort_signal_get(index, src)
+            state && state.aborted && state.reason
+          end)
+
+        if already, do: abort_signal_op(nodes, index, ref, already)
+      end,
+      :mutates
+    )
+  end
+
+  @doc false
+  def _abort_signal_aborted?(server, ref) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      state = IndexTable.abort_signal_get(index, ref)
+      state != nil and state.aborted
+    end)
+  end
+
+  @doc false
+  def _abort_signal_reason(server, ref) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      state = IndexTable.abort_signal_get(index, ref)
+      state && state.reason
+    end)
+  end
+
+  @doc false
+  # Run the abort algorithm (idempotent). `:mutates` — it deletes listener rows and
+  # dispatches the `abort` event.
+  def _abort_signal_abort(server, ref, reason) do
+    _atomic_ets_op(
+      server,
+      fn nodes, index -> abort_signal_op(nodes, index, ref, reason) end,
+      :mutates
+    )
+  end
+
+  @doc false
+  def _abort_signal_add_listener(server, ref, listener) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      IndexTable.listener_put(index, ref, listener)
+    end)
+  end
+
+  @doc false
+  def _abort_signal_remove_listener(server, ref, type, fun) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      # Signal listeners are non-capturing; capture is always false.
+      IndexTable.listener_delete(index, ref, type, fun, false)
+    end)
+  end
+
+  # The abort algorithm: flip the signal aborted (once), sweep listeners registered
+  # with it, fire its `abort` event target-only, then propagate to composite deps.
+  defp abort_signal_op(nodes, index, ref, reason) do
+    state = IndexTable.abort_signal_get(index, ref)
+
+    if state && not state.aborted do
+      IndexTable.abort_signal_set(index, ref, %{state | aborted: true, reason: reason})
+      IndexTable.listeners_delete_by_signal(index, ref)
+      Events.dispatch_to_target(index, ref, Event.new("abort"))
+      Enum.each(state.deps, &abort_signal_op(nodes, index, &1, reason))
+    end
+
+    :ok
+  end
+
   # The combined filter for a traversal state: whatToShow first (a non-shown node maps to
   # :skip), then the user callback (given a Node handle). Returns a (node_id -> atom) fun.
   defp traversal_filter(nodes, state) do

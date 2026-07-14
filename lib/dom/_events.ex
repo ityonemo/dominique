@@ -144,6 +144,24 @@ defmodule DOM.Events do
     :ok
   end
 
+  @doc """
+  Fire `target_ref`'s listeners for `event` target-only — no capture/bubble, no tree
+  walk. For an `EventTarget` that is not in the node tree (an `AbortSignal`): its
+  listeners live in `:listener` rows keyed by `target_ref`, dispatched at-target.
+  """
+  @spec dispatch_to_target(:ets.tid(), reference(), Event.t()) :: :ok
+  def dispatch_to_target(index, target_ref, %Event{} = event) do
+    ref = make_ref()
+    IndexTable.active_event_open(index, ref)
+    event = %{event | ref: ref, target: target_ref}
+
+    try do
+      fire_listeners(index, target_ref, :at_target, event)
+    after
+      IndexTable.active_event_close(index, ref)
+    end
+  end
+
   # Run one listener's lambda with the event. Listener exceptions currently
   # propagate (crashing the server) — event-loop isolation is a later concern.
   defp call_listener(listener, event), do: listener.fn.(event)

@@ -567,15 +567,23 @@ defmodule DOM.Node do
   @spec add_event_listener(t(), String.t(), (DOM.Event.t() -> any()), keyword()) :: :ok
   def add_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
       when is_binary(type) and is_function(fun, 1) do
-    listener = %DOM.Listener{
-      type: type,
-      fn: fun,
-      capture: Keyword.get(opts, :capture, false),
-      once: Keyword.get(opts, :once, false),
-      passive: Keyword.get(opts, :passive, false)
-    }
+    signal = Keyword.get(opts, :signal)
 
-    DOM._node_add_event_listener(node.server, node.node_id, listener)
+    # A listener registered with an already-aborted signal is never added (per spec).
+    if signal && DOM.AbortSignal.aborted?(signal) do
+      :ok
+    else
+      listener = %DOM.Listener{
+        type: type,
+        fn: fun,
+        capture: Keyword.get(opts, :capture, false),
+        once: Keyword.get(opts, :once, false),
+        passive: Keyword.get(opts, :passive, false),
+        signal_ref: signal && signal.ref
+      }
+
+      DOM._node_add_event_listener(node.server, node.node_id, listener)
+    end
   end
 
   @doc """

@@ -390,6 +390,68 @@ defmodule DOM.NodeData.IndexTable do
     :ok
   end
 
+  @doc """
+  Delete every listener (on ANY node) registered with AbortSignal `signal_ref` — the
+  `abort()` sweep for the `{signal}` addEventListener option.
+  """
+  @spec listeners_delete_by_signal(tid, reference()) :: :ok
+  def listeners_delete_by_signal(index, signal_ref) do
+    for key <- :ets.select(index, listeners_by_signal_spec(signal_ref)) do
+      :ets.delete(index, key)
+    end
+
+    :ok
+  end
+
+  # The row KEYS of listeners registered with `signal_ref` (subset match on the struct's
+  # signal_ref field — extra fields ignored).
+  defmatchspecp listeners_by_signal_spec(signal_ref) do
+    {{:listener, node_id, seq}, %{__struct__: DOM.Listener, signal_ref: ^signal_ref}} ->
+      {:listener, node_id, seq}
+  end
+
+  # ==========================================================================
+  # AbortSignal state ({:abort_signal, ref} rows)
+  # ==========================================================================
+  #
+  # A signal's mutable state lives in one row keyed by its ref (shared with its
+  # controller). `deps` holds the refs of composite signals (AbortSignal.any) that
+  # must abort when this one does. AbortSignal/AbortController handles stay valid as
+  # the row flips aborted — same server-backed-ref pattern as Range/TreeWalker.
+
+  @doc "Create a fresh non-aborted AbortSignal state row under `ref`."
+  @spec abort_signal_put(tid, reference()) :: :ok
+  def abort_signal_put(index, ref) do
+    :ets.insert(index, {{:abort_signal, ref}, %{aborted: false, reason: nil, deps: []}})
+    :ok
+  end
+
+  @doc "An AbortSignal's state map (`%{aborted:, reason:, deps:}`), or `nil` if unknown."
+  @spec abort_signal_get(tid, reference()) :: map() | nil
+  def abort_signal_get(index, ref) do
+    case :ets.lookup(index, {:abort_signal, ref}) do
+      [{_key, state}] -> state
+      [] -> nil
+    end
+  end
+
+  @doc "Replace an AbortSignal's state map."
+  @spec abort_signal_set(tid, reference(), map()) :: :ok
+  def abort_signal_set(index, ref, state) do
+    :ets.insert(index, {{:abort_signal, ref}, state})
+    :ok
+  end
+
+  @doc "Register `dependent_ref` as a composite signal to notify when `ref` aborts."
+  @spec abort_signal_add_dep(tid, reference(), reference()) :: :ok
+  def abort_signal_add_dep(index, ref, dependent_ref) do
+    if state = abort_signal_get(index, ref) do
+      abort_signal_set(index, ref, %{state | deps: [dependent_ref | state.deps]})
+    end
+
+    :ok
+  end
+
   # ==========================================================================
   # Active (in-flight) events (:active_event rows)
   # ==========================================================================
