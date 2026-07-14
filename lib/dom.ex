@@ -26,10 +26,15 @@ defmodule DOM do
   alias DOM.MutationRecord
   alias DOM.Node
   alias DOM.NodeData
+  alias DOM.NodeData.Extent
   alias DOM.NodeData.IndexTable
   alias DOM.NodeData.NodesTable
   alias DOM.NodeData.Slots
   alias DOM.Traversal
+
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
 
   # ==========================================================================
   # Types
@@ -72,7 +77,7 @@ defmodule DOM do
     # fixed root window). `NodeData.insert` writes it index-first, like every other node.
     NodeData.insert(
       document_id,
-      %NodeData.Document{root: document_id, start: <<0x00>>, stop: <<0x80>>},
+      %NodeData.Document{root: document_id, start: @root_start, stop: @root_stop},
       nodes,
       index
     )
@@ -2286,7 +2291,7 @@ defmodule DOM do
   defp shallow_subtree(subtree, root_id) do
     subtree
     |> Enum.filter(fn {id, _rec} -> id == root_id end)
-    |> Enum.map(fn {id, rec} -> {id, %{rec | start: <<0x00>>, stop: <<0x80>>}} end)
+    |> Enum.map(fn {id, rec} -> {id, %{rec | start: @root_start, stop: @root_stop}} end)
   end
 
   # Re-key an exported subtree to fresh refs (so an import is independent of its

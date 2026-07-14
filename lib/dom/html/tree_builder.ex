@@ -15,7 +15,12 @@ defmodule DOM.HTML.TreeBuilder do
 
   alias DOM.HTML.Token
   alias DOM.HTML.TreeBuilder.Tree
+  alias DOM.NodeData.Extent
   alias DOM.NodeData.NodesTable
+
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
 
   # `tree` is the in-memory parse tree (DOM.HTML.TreeBuilder.Tree — plain Elixir
   # data, no ETS) the algorithm mutates during construction; at EOF it is
@@ -206,7 +211,11 @@ defmodule DOM.HTML.TreeBuilder do
     state = tokens |> Enum.reduce(state, &step/2) |> eof()
     # Seed the synthetic Document record bulk_load assumes present at its root — a
     # labeled tree root (root == self, the fixed root window).
-    :ets.insert(tid, {doc, %DOM.NodeData.Document{root: doc, start: <<0x00>>, stop: <<0x80>>}})
+    :ets.insert(
+      tid,
+      {doc, %DOM.NodeData.Document{root: doc, start: @root_start, stop: @root_stop}}
+    )
+
     Tree.bulk_load(state.tree, tid, index, doc)
     reflect_selectedcontent(tid, root)
     root

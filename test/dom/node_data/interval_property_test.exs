@@ -4,6 +4,10 @@ defmodule DOM.NodeData.IntervalPropertyTest do
 
   alias DOM.NodeData.Extent
 
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
+
   # The primary correctness proof for `Extent.interval/2` and, later, the whole
   # nested-set adjacency subsystem. We generate a random sequence of tree
   # operations (append / prepend / insert-after) and apply each by allocating the
@@ -27,7 +31,7 @@ defmodule DOM.NodeData.IntervalPropertyTest do
   defp new_tree do
     %{
       next_id: 1,
-      nodes: %{0 => %{parent: nil, start: <<0x00>>, stop: <<0x80>>, children: []}}
+      nodes: %{0 => %{parent: nil, start: @root_start, stop: @root_stop, children: []}}
     }
   end
 

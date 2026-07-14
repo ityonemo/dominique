@@ -21,6 +21,10 @@ defmodule DOM.NodeData.NodesTable do
   alias DOM.NodeData
   alias DOM.NodeData.Extent
 
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
+
   @type tid :: :ets.tid()
   @type id :: reference()
 
@@ -121,12 +125,12 @@ defmodule DOM.NodeData.NodesTable do
   end
 
   # Ensure `id` carries an extent: a tree root (parent nil) with no extent yet is
-  # seeded with the fixed root window `<<0x00>>..<<0x80>>` (the tree-root extent).
+  # seeded with the fixed `Extent.root_window/0` (the tree-root extent).
   # Returns the (possibly updated) record.
   defp ensure_extent(tid, id) do
     case fetch!(tid, id) do
       %{start: nil} = data ->
-        seeded = %{data | root: id, start: <<0x00>>, stop: <<0x80>>}
+        seeded = %{data | root: id, start: @root_start, stop: @root_stop}
         put(tid, id, seeded)
         seeded
 
@@ -363,7 +367,7 @@ defmodule DOM.NodeData.NodesTable do
   @spec clone_record(tid, id, boolean()) :: id
   def clone_record(nodes, id, deep?) do
     clone_id = make_ref()
-    clone_record_subtree(nodes, id, deep?, clone_id, clone_id, nil, <<0x00>>, <<0x80>>)
+    clone_record_subtree(nodes, id, deep?, clone_id, clone_id, nil, @root_start, @root_stop)
     clone_id
   end
 

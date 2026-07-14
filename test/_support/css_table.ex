@@ -22,6 +22,10 @@ defmodule CSSTable do
   alias DOM.NodeData.Extent
   alias DOM.NodeData.IndexTable
 
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
+
   @doc """
   Describes an element node. `attributes` is a list of `{name, value}` tuples.
   Pass `as: label` in `attributes`? No — use `element/4` with opts for a label.
@@ -56,7 +60,16 @@ defmodule CSSTable do
     {_next, ids, kids} = insert(table, root, nil, 0, %{}, %{})
     # Carve nested-set extents over the built tree (adjacency the matcher reads
     # comes from these + their span rows) — the shape DOM.CSS.match/3 expects.
-    carve_extents(table, kids, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
+    carve_extents(
+      table,
+      kids,
+      Map.fetch!(ids, 0),
+      Map.fetch!(ids, 0),
+      nil,
+      @root_start,
+      @root_stop
+    )
+
     # mirror span rows (from extents) and membership rows (tag/id/class) for every element.
     DOM.NodeData.span_index_all(table, index)
 
@@ -86,8 +99,8 @@ defmodule CSSTable do
           attributes: node.attributes,
           parent: parent_id,
           root: id,
-          start: <<0x00>>,
-          stop: <<0x80>>
+          start: @root_start,
+          stop: @root_stop
         }
       }
     )
@@ -107,8 +120,8 @@ defmodule CSSTable do
          value: node.value,
          parent: parent_id,
          root: id,
-         start: <<0x00>>,
-         stop: <<0x80>>
+         start: @root_start,
+         stop: @root_stop
        }}
     )
 

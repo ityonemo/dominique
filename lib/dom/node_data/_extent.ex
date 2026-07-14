@@ -16,11 +16,14 @@ defmodule DOM.NodeData.Extent do
 
   # The fixed tree-root extent window (a node is a labeled 1-node tree from birth: its own
   # root, parent nil, this window). Every creator seeds it.
-  @root_start <<0x00>>
-  @root_stop <<0x80>>
+  @root_start <<0x10>>
+  @root_stop <<0xF0>>
+
+  def root_start, do: @root_start
+  def root_stop, do: @root_stop
 
   @doc "The fixed root-window extent `{start, stop}` for a freshly-created tree root."
-  @spec root_window() :: {binary(), binary()}
+  @spec root_window() :: {t(), t()}
   def root_window, do: {@root_start, @root_stop}
 
   # ==========================================================================
@@ -43,7 +46,7 @@ defmodule DOM.NodeData.Extent do
     never arises; the algorithm does not handle it and may return keys outside
     `(a, b)`.
   """
-  @spec interval(binary(), binary()) :: {binary(), binary()}
+  @spec interval(t(), t()) :: {t(), t()}
   def interval(a, b), do: interval(a, b, [])
 
   @spec interval(binary, binary, iodata) :: {binary, binary}
@@ -90,7 +93,7 @@ defmodule DOM.NodeData.Extent do
   Same input contract as `interval/2`: `a`, `b` non-empty binaries with `a < b`,
   `a` not a proper prefix of `b`. `count >= 1`.
   """
-  @spec multispan(binary(), binary(), pos_integer()) :: [{binary(), binary()}]
+  @spec multispan(t(), t(), pos_integer()) :: [{t(), t()}]
   def multispan(a, b, count), do: multispan(a, b, count, [])
 
   @spec multispan(binary(), binary(), pos_integer(), iodata()) :: [{binary(), binary()}]

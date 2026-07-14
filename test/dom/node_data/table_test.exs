@@ -7,8 +7,13 @@ defmodule DOM.NodeData.TablesTest do
   # uses it in.
 
   alias DOM.NodeData
+  alias DOM.NodeData.Extent
   alias DOM.NodeData.IndexTable
   alias DOM.NodeData.NodesTable
+
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
 
   setup do
     {:ok,
@@ -24,8 +29,8 @@ defmodule DOM.NodeData.TablesTest do
       local_name: local_name,
       attributes: attributes,
       root: ref,
-      start: <<0>>,
-      stop: <<0x80>>
+      start: @root_start,
+      stop: @root_stop
     }
   end
 
@@ -42,8 +47,8 @@ defmodule DOM.NodeData.TablesTest do
                local_name: "div",
                parent: nil,
                root: ^id,
-               start: <<0x00>>,
-               stop: <<0x80>>
+               start: @root_start,
+               stop: @root_stop
              } =
                NodesTable.fetch!(tid, id)
 
@@ -445,7 +450,7 @@ defmodule DOM.NodeData.TablesTest do
     end
 
     test "handles multiple roots (a detached second tree)", %{tid: tid, index: index} do
-      ids = field_tree(tid, index)
+      _ids = field_tree(tid, index)
       # a second, detached root (parent nil) — e.g. a template content fragment
       frag = DOM.NodeData.create_document(tid, index)
       x = DOM.NodeData.create_element(tid, index, "x")

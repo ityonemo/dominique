@@ -373,7 +373,7 @@ after
 
   @doc """
   Clone the node (deep when `deep?`) as a detached, fully-labeled subtree written into BOTH
-  tables; returns the new id. The clone is its own tree (root window `<<0x00>>..<<0x80>>`,
+  tables; returns the new id. The clone is its own tree (the fixed `Extent.root_window/0`,
   descendants carved inside from the SOURCE's extent order).
   """
   @spec clone(:ets.tid(), :ets.tid(), reference(), boolean()) :: reference()

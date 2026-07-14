@@ -2,7 +2,7 @@ defmodule DOM.NodeData.Document do
   @moduledoc "ETS record for the document node."
 
   # `root`/`start`/`stop`: the document is a tree root, so `parent` is nil and
-  # `start`/`stop` are the fixed root extent (<<0x00>>..<<0x80>>). Child adjacency
+  # `start`/`stop` are the fixed `Extent.root_window/0`. Child adjacency
   # is extent-borne (no `children` field); see DOM.NodeData.NodesTable.
   use DOM.NodeData
   use DOM.HTML

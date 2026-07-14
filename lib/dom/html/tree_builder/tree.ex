@@ -32,6 +32,10 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   alias DOM.NodeData.Extent
   alias DOM.NodeData.IndexTable
 
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
+
   @enforce_keys [:nodes]
   defstruct [:nodes]
 
@@ -230,7 +234,7 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   """
   @spec bulk_load(t(), :ets.tid(), :ets.tid(), id) :: :ok
   def bulk_load(tree, tid, index, root_id) do
-    load_node(tree, tid, index, root_id, root_id, nil, <<0x00>>, <<0x80>>)
+    load_node(tree, tid, index, root_id, root_id, nil, @root_start, @root_stop)
     :ok
   end
 
@@ -250,7 +254,7 @@ defmodule DOM.HTML.TreeBuilder.Tree do
     end)
 
     if content = content(tree, id) do
-      load_node(tree, tid, index, content, content, nil, <<0x00>>, <<0x80>>)
+      load_node(tree, tid, index, content, content, nil, @root_start, @root_stop)
     end
   end
 
