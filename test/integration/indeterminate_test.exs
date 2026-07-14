@@ -55,18 +55,18 @@ defmodule Integration.IndeterminateTest do
         Node.dispatch_event(el, Event.new("click", bubbles: true, cancelable: true))
       end
 
-      out = %{"cb_default" => DOM.matches(q.("#c"), ":indeterminate")}
+      out = %{"cb_default" => DOM.Element.matches(q.("#c"), ":indeterminate")}
       DOM.set_indeterminate(q.("#c"), true)
-      out = Map.put(out, "cb_set", DOM.matches(q.("#c"), ":indeterminate"))
+      out = Map.put(out, "cb_set", DOM.Element.matches(q.("#c"), ":indeterminate"))
       click.(q.("#c"))
-      out = Map.put(out, "cb_after_click", DOM.matches(q.("#c"), ":indeterminate"))
+      out = Map.put(out, "cb_after_click", DOM.Element.matches(q.("#c"), ":indeterminate"))
 
-      out = Map.put(out, "radio_none", DOM.matches(q.("#r1"), ":indeterminate"))
+      out = Map.put(out, "radio_none", DOM.Element.matches(q.("#r1"), ":indeterminate"))
       click.(q.("#r1"))
-      out = Map.put(out, "radio_after", DOM.matches(q.("#r1"), ":indeterminate"))
+      out = Map.put(out, "radio_after", DOM.Element.matches(q.("#r1"), ":indeterminate"))
 
-      out = Map.put(out, "progress_novalue", DOM.matches(q.("#p"), ":indeterminate"))
-      out = Map.put(out, "progress_value", DOM.matches(q.("#p2"), ":indeterminate"))
+      out = Map.put(out, "progress_novalue", DOM.Element.matches(q.("#p"), ":indeterminate"))
+      out = Map.put(out, "progress_value", DOM.Element.matches(q.("#p2"), ":indeterminate"))
 
       assert out == expected
     end

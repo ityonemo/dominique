@@ -56,18 +56,18 @@ defmodule DOM.DetailsTest do
             "<dialog id='dlg' open>x</dialog><div id='plain'></div></body>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#d1"), ":open")
-      refute DOM.matches(DOM.query_selector(doc, "#d2"), ":open")
-      assert DOM.matches(DOM.query_selector(doc, "#dlg"), ":open")
-      refute DOM.matches(DOM.query_selector(doc, "#plain"), ":open")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#d1"), ":open")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#d2"), ":open")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#dlg"), ":open")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#plain"), ":open")
     end
 
     test "toggling via summary click updates :open" do
       doc = new_document("<body><details id='d'><summary id='s'>t</summary></details></body>")
       d = DOM.query_selector(doc, "#d")
-      refute DOM.matches(d, ":open")
+      refute DOM.Element.matches(d, ":open")
       click(DOM.query_selector(doc, "#s"))
-      assert DOM.matches(d, ":open")
+      assert DOM.Element.matches(d, ":open")
     end
   end
 end

@@ -94,7 +94,7 @@ defmodule DOM.CustomElementAdoptedTest do
 
     assert_received {:adopted, ^foo_id, _old, _new}
     # and it is still :defined in dst (carries a definition, though dst's registry lacks it)
-    assert DOM.matches(adopted, ":defined")
+    assert DOM.Element.matches(adopted, ":defined")
     # re-inserting into dst fires connectedCallback (still upgraded)
     d = DOM.query_selector(dst, "#d")
     Node.append_child(d, adopted)

@@ -67,7 +67,7 @@ defmodule Integration.CustomElementAdoptedTest do
 
       adopted = DOM.adopt_node(dst, foo)
       put.("--adopted--")
-      put.("defined:#{DOM.matches(adopted, ":defined")}")
+      put.("defined:#{DOM.Element.matches(adopted, ":defined")}")
       Node.append_child(d, adopted)
       put.("--reinserted--")
 

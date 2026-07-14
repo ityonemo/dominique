@@ -17,9 +17,9 @@ defmodule DOM.IndeterminateTest do
       doc = new_document("<body><input type='checkbox' id='c'></body>")
       c = DOM.query_selector(doc, "#c")
 
-      refute DOM.matches(c, ":indeterminate")
+      refute DOM.Element.matches(c, ":indeterminate")
       DOM.set_indeterminate(c, true)
-      assert DOM.matches(c, ":indeterminate")
+      assert DOM.Element.matches(c, ":indeterminate")
       refute DOM.Element.has_attribute(c, "indeterminate")
     end
 
@@ -29,7 +29,7 @@ defmodule DOM.IndeterminateTest do
       DOM.set_indeterminate(c, true)
 
       click(c)
-      refute DOM.matches(c, ":indeterminate")
+      refute DOM.Element.matches(c, ":indeterminate")
     end
   end
 
@@ -40,8 +40,8 @@ defmodule DOM.IndeterminateTest do
           "<body><input type='radio' name='g' id='r1'><input type='radio' name='g' id='r2'></body>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#r1"), ":indeterminate")
-      assert DOM.matches(DOM.query_selector(doc, "#r2"), ":indeterminate")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#r1"), ":indeterminate")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#r2"), ":indeterminate")
     end
 
     test "checking a group member clears :indeterminate for the whole group" do
@@ -53,8 +53,8 @@ defmodule DOM.IndeterminateTest do
       r1 = DOM.query_selector(doc, "#r1")
       click(r1)
 
-      refute DOM.matches(r1, ":indeterminate")
-      refute DOM.matches(DOM.query_selector(doc, "#r2"), ":indeterminate")
+      refute DOM.Element.matches(r1, ":indeterminate")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#r2"), ":indeterminate")
     end
   end
 
@@ -65,8 +65,8 @@ defmodule DOM.IndeterminateTest do
           "<body><progress id='p'></progress><progress id='p2' value='0.5'></progress></body>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#p"), ":indeterminate")
-      refute DOM.matches(DOM.query_selector(doc, "#p2"), ":indeterminate")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#p"), ":indeterminate")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#p2"), ":indeterminate")
     end
   end
 end

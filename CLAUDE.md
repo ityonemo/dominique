@@ -36,16 +36,29 @@ Partition by **scope** (Elixir "first argument owns the function"):
   `Node.clone_node/2`. Fail-fast `type`-guard clauses live here (e.g. appending
   to a `:text` node raises without a server round-trip).
 - **Element-intrinsic operations → `DOM.Element`.** Apply only to elements:
-  `Element.local_name/1` and the attribute API (`get_attribute`, `set_attribute`,
-  `has_attribute`, `remove_attribute`, `get_attribute_names`). Each is guarded on
+  `Element.local_name/1`, the attribute API (`get_attribute`, `set_attribute`,
+  `has_attribute`, `remove_attribute`, `get_attribute_names`, plus the Attr-node
+  variants `get_attribute_node`/`set_attribute_node`/`remove_attribute_node`), and
+  the Element-scoped query surface `Element.query_selector`/`query_selector_all` and
+  `Element.matches` (matches is Element-only in the DOM). Each is guarded on
   `%DOM.Node{type: :element}`, so calling it on a non-element fails fast.
-- **Whole-document / query operations → `DOM`.** `DOM` is the **context module**
-  and the GenServer. Node creation (`DOM.new`, `DOM.create_element(document,
-  "div")`, `create_*`) and tree queries that take any node as scope
-  (`get_element_by_id`, `get_elements_by_tag_name`, `query_selector`,
-  `query_selector_all`, `matches`) live here. Also **`DOM.create_tree_walker/3`** and
-  **`DOM.create_node_iterator/3`** (the DOM traversal objects) — see the TreeWalker /
-  NodeIterator note below.
+- **`querySelector` is a `ParentNode` method — one scope module per node kind.**
+  Because it sits on Document, Element, DocumentFragment, and ShadowRoot in the DOM,
+  each has its own `type`-guarded `query_selector`/`query_selector_all`:
+  `DOM.query_selector` (`:document`), `Element.query_selector` (`:element`),
+  `DOM.DocumentFragment.query_selector` (`:document_fragment`), and
+  `DOM.ShadowRoot.query_selector` (`:shadow_root`). All delegate to the shared,
+  scope-agnostic `DOM._query_selector`/`_query_selector_all`/`_matches` bridges
+  (selector parsed in the caller's process, then one server op). A mis-scoped call
+  fails fast on the guard. `Attr` is a real `%DOM.Node{type: :attr}` handle
+  (`node_id: {element_id, key}`, no `NodeData` record) — see the Attr note below.
+- **Whole-document operations → `DOM`.** `DOM` is the **context module** and the
+  GenServer. Node creation (`DOM.new`, `DOM.create_element(document, "div")`,
+  `create_*`, `DOM.create_attribute`), tree queries that take any node as scope
+  (`get_element_by_id`, `get_elements_by_tag_name`), and the document-scoped
+  `DOM.query_selector`/`query_selector_all` live here. Also
+  **`DOM.create_tree_walker/3`** and **`DOM.create_node_iterator/3`** (the DOM
+  traversal objects) — see the TreeWalker / NodeIterator note below.
 
 **TreeWalker / NodeIterator (implemented).** `DOM.create_tree_walker(root, what_to_show
 \\ :all, filter \\ nil)` / `create_node_iterator(...)` return `%DOM.TreeWalker{server,

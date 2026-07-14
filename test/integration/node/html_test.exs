@@ -105,7 +105,7 @@ defmodule Integration.Node.HTMLTest do
       root = DOM.create_element(document, "div")
       Element.set_inner_html(root, "a<span>t</span>b")
 
-      Element.set_outer_html(DOM.query_selector(root, "span"), "<p>x</p><em>y</em>")
+      Element.set_outer_html(DOM.Element.query_selector(root, "span"), "<p>x</p><em>y</em>")
 
       assert Element.inner_html(root) == expected
     end

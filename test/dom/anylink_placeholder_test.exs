@@ -12,9 +12,9 @@ defmodule DOM.AnylinkPlaceholderTest do
           "<body><a id='a1' href='#'>x</a><a id='a2'>x</a><area id='ar' href='#'></body>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#a1"), ":any-link")
-      refute DOM.matches(DOM.query_selector(doc, "#a2"), ":any-link")
-      assert DOM.matches(DOM.query_selector(doc, "#ar"), ":any-link")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#a1"), ":any-link")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#a2"), ":any-link")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#ar"), ":any-link")
     end
   end
 
@@ -26,11 +26,11 @@ defmodule DOM.AnylinkPlaceholderTest do
             "<input id='np'></body>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#e"), ":placeholder-shown")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#e"), ":placeholder-shown")
       # has a value -> placeholder not shown
-      refute DOM.matches(DOM.query_selector(doc, "#v"), ":placeholder-shown")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#v"), ":placeholder-shown")
       # no placeholder attribute
-      refute DOM.matches(DOM.query_selector(doc, "#np"), ":placeholder-shown")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#np"), ":placeholder-shown")
     end
 
     test "an empty textarea with a placeholder is :placeholder-shown; with content is not" do
@@ -40,8 +40,8 @@ defmodule DOM.AnylinkPlaceholderTest do
             "<textarea id='tav' placeholder='p'>content</textarea></body>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#ta"), ":placeholder-shown")
-      refute DOM.matches(DOM.query_selector(doc, "#tav"), ":placeholder-shown")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#ta"), ":placeholder-shown")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#tav"), ":placeholder-shown")
     end
   end
 end

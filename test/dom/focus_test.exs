@@ -100,15 +100,15 @@ defmodule DOM.FocusTest do
       i = DOM.query_selector(doc, "#i")
       Node.focus(i)
 
-      assert DOM.matches(i, ":focus")
-      refute DOM.matches(DOM.query_selector(doc, "#j"), ":focus")
+      assert DOM.Element.matches(i, ":focus")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#j"), ":focus")
     end
 
     test ":focus-visible matches the active element (aliases :focus here)" do
       doc = new_document("<body><input id='i'></body>")
       i = DOM.query_selector(doc, "#i")
       Node.focus(i)
-      assert DOM.matches(i, ":focus-visible")
+      assert DOM.Element.matches(i, ":focus-visible")
     end
 
     test ":focus-within matches the active element and its ancestors" do
@@ -118,17 +118,17 @@ defmodule DOM.FocusTest do
       inner = DOM.query_selector(doc, "#inner")
       Node.focus(inner)
 
-      assert DOM.matches(inner, ":focus-within")
-      assert DOM.matches(DOM.query_selector(doc, "#mid"), ":focus-within")
-      assert DOM.matches(DOM.query_selector(doc, "#outer"), ":focus-within")
+      assert DOM.Element.matches(inner, ":focus-within")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#mid"), ":focus-within")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#outer"), ":focus-within")
       # the focused element matches both :focus and :focus-within
-      assert DOM.matches(inner, ":focus")
+      assert DOM.Element.matches(inner, ":focus")
     end
 
     test ":focus-within does not match a sibling subtree" do
       doc = new_document("<body><div id='a'><input id='i'></div><div id='b'></div></body>")
       Node.focus(DOM.query_selector(doc, "#i"))
-      refute DOM.matches(DOM.query_selector(doc, "#b"), ":focus-within")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#b"), ":focus-within")
     end
   end
 end

@@ -44,7 +44,10 @@ defmodule DOM.Shadow.InnerHtmlTest do
                ["light"]
 
       # querying the shadow root finds only the shadow <em>
-      assert Enum.map(DOM.query_selector_all(shadow, "em"), &Element.get_attribute(&1, "id")) ==
+      assert Enum.map(
+               DOM.ShadowRoot.query_selector_all(shadow, "em"),
+               &Element.get_attribute(&1, "id")
+             ) ==
                ["shadow"]
     end
 

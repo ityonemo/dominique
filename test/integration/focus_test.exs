@@ -55,10 +55,10 @@ defmodule Integration.FocusTest do
 
       out = %{
         "active_after_focus" => DOM.Element.get_attribute(DOM.active_element(doc), "id"),
-        "inner_focus" => DOM.matches(q.("#inner"), ":focus"),
-        "outer_within" => DOM.matches(q.("#outer"), ":focus-within"),
-        "mid_within" => DOM.matches(q.("#mid"), ":focus-within"),
-        "sp_within" => DOM.matches(q.("#sp"), ":focus-within")
+        "inner_focus" => DOM.Element.matches(q.("#inner"), ":focus"),
+        "outer_within" => DOM.Element.matches(q.("#outer"), ":focus-within"),
+        "mid_within" => DOM.Element.matches(q.("#mid"), ":focus-within"),
+        "sp_within" => DOM.Element.matches(q.("#sp"), ":focus-within")
       }
 
       Node.focus(q.("#sp"))

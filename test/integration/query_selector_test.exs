@@ -134,8 +134,8 @@ defmodule Integration.QuerySelectorTest do
       result = %{
         "first" => document |> DOM.query_selector("a") |> local_name(),
         "missing" => DOM.query_selector(document, "nope"),
-        "matchesClass" => DOM.matches(a, ".box"),
-        "matchesType" => DOM.matches(a, "b")
+        "matchesClass" => DOM.Element.matches(a, ".box"),
+        "matchesType" => DOM.Element.matches(a, "b")
       }
 
       assert result == expected
@@ -266,14 +266,16 @@ defmodule Integration.QuerySelectorTest do
       root = DOM.query_selector(document, "#root")
 
       ids = fn selector ->
-        root |> DOM.query_selector_all(selector) |> Enum.map(&Element.get_attribute(&1, "id"))
+        root
+        |> DOM.Element.query_selector_all(selector)
+        |> Enum.map(&Element.get_attribute(&1, "id"))
       end
 
       result = %{
         "scope" => ids.(":scope"),
         "scopeChild" => ids.(":scope > p"),
         "plainP" => ids.("p"),
-        "rootMatchesScope" => DOM.matches(root, ":scope")
+        "rootMatchesScope" => DOM.Element.matches(root, ":scope")
       }
 
       assert result == expected

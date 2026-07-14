@@ -116,13 +116,13 @@ defmodule DOM.CustomElementTest do
       doc = new_document("<div id='p'><x-known></x-known><x-unknown></x-unknown></div>")
       DOM.define_element(doc, "x-known", %Def{})
 
-      assert DOM.matches(DOM.query_selector(doc, "x-known"), ":defined")
-      refute DOM.matches(DOM.query_selector(doc, "x-unknown"), ":defined")
+      assert DOM.Element.matches(DOM.query_selector(doc, "x-known"), ":defined")
+      refute DOM.Element.matches(DOM.query_selector(doc, "x-unknown"), ":defined")
     end
 
     test "a built-in element matches :defined" do
       doc = new_document("<div id='p'></div>")
-      assert DOM.matches(DOM.query_selector(doc, "#p"), ":defined")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#p"), ":defined")
     end
   end
 end

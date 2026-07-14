@@ -280,7 +280,7 @@ defmodule DOM.Element do
   @doc "The nearest inclusive ancestor of `element` matching `selector`, or `nil`."
   @spec closest(Node.t(), String.t()) :: Node.t() | nil
   def closest(%Node{type: :element} = element, selector) do
-    if DOM.matches(element, selector) do
+    if matches(element, selector) do
       element
     else
       case Node.parent_node(element) do
@@ -411,4 +411,24 @@ defmodule DOM.Element do
   def set_outer_html(%Node{type: :element} = element, html) do
     DOM._element_set_outer_html(element.server, element.node_id, html)
   end
+
+  @doc """
+  The first descendant of this element matching `selector` (`Element.querySelector`),
+  or `nil`. Scopes to the element's subtree.
+  """
+  @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
+  def query_selector(%Node{type: :element} = element, selector),
+    do: DOM._query_selector(element, selector)
+
+  @doc "All descendants of this element matching `selector`, in document order."
+  @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
+  def query_selector_all(%Node{type: :element} = element, selector),
+    do: DOM._query_selector_all(element, selector)
+
+  @doc """
+  Whether this element matches `selector` (`Element.matches`) — an Element-only
+  operation, evaluated with the element as `:scope`.
+  """
+  @spec matches(Node.t(), String.t()) :: boolean()
+  def matches(%Node{type: :element} = element, selector), do: DOM._matches(element, selector)
 end

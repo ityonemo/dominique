@@ -59,7 +59,7 @@ defmodule Integration.ValidityTest do
             "<input id='plain' value='x'></body>"
         )
 
-      m = fn s, p -> DOM.matches(DOM.query_selector(doc, s), p) end
+      m = fn s, p -> DOM.Element.matches(DOM.query_selector(doc, s), p) end
 
       out = %{
         "u_valid" => m.("#u", ":valid"),

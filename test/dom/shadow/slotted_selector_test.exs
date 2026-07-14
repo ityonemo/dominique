@@ -26,17 +26,17 @@ defmodule DOM.Shadow.SlottedSelectorTest do
     test "matches nothing in a shadow-scoped querySelectorAll" do
       {_doc, _host, s} = slotted_host()
 
-      assert DOM.query_selector_all(s, "::slotted(a)") == []
-      assert DOM.query_selector_all(s, "::slotted(*)") == []
-      assert DOM.query_selector_all(s, "::slotted(.x)") == []
+      assert DOM.ShadowRoot.query_selector_all(s, "::slotted(a)") == []
+      assert DOM.ShadowRoot.query_selector_all(s, "::slotted(*)") == []
+      assert DOM.ShadowRoot.query_selector_all(s, "::slotted(.x)") == []
     end
 
     test "matches nothing via matches/2 on an assigned element" do
       {doc, _host, _s} = slotted_host()
       a = DOM.query_selector(doc, "a")
 
-      refute DOM.matches(a, "::slotted(a)")
-      refute DOM.matches(a, "::slotted(*)")
+      refute DOM.Element.matches(a, "::slotted(a)")
+      refute DOM.Element.matches(a, "::slotted(*)")
     end
   end
 
@@ -45,14 +45,14 @@ defmodule DOM.Shadow.SlottedSelectorTest do
       {_doc, _host, s} = slotted_host()
 
       # only the <slot> lives in the shadow tree; the assigned <a>/<b> are light DOM
-      assert names(DOM.query_selector_all(s, "*")) == ["slot"]
+      assert names(DOM.ShadowRoot.query_selector_all(s, "*")) == ["slot"]
     end
 
     test "a type selector does not reach a slotted light-DOM element" do
       {_doc, _host, s} = slotted_host()
 
-      assert DOM.query_selector_all(s, "a") == []
-      assert DOM.query_selector_all(s, "b") == []
+      assert DOM.ShadowRoot.query_selector_all(s, "a") == []
+      assert DOM.ShadowRoot.query_selector_all(s, "b") == []
     end
   end
 end

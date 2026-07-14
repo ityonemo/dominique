@@ -19,7 +19,7 @@ defmodule DOM.Shadow.GetRootNodeTest do
       host = DOM.query_selector(doc, "#host")
       shadow = Element.attach_shadow(host, :open)
       ShadowRoot.set_inner_html(shadow, "<span id='inner'>x</span>")
-      inner = DOM.query_selector(shadow, "#inner")
+      inner = DOM.ShadowRoot.query_selector(shadow, "#inner")
 
       assert Node.get_root_node(inner).node_id == shadow.node_id
       assert Node.get_root_node(inner).type == :shadow_root
@@ -30,7 +30,7 @@ defmodule DOM.Shadow.GetRootNodeTest do
       host = DOM.query_selector(doc, "#host")
       shadow = Element.attach_shadow(host, :open)
       ShadowRoot.set_inner_html(shadow, "<span id='inner'>x</span>")
-      inner = DOM.query_selector(shadow, "#inner")
+      inner = DOM.ShadowRoot.query_selector(shadow, "#inner")
 
       assert Node.get_root_node(inner, true).node_id == doc.node_id
     end
@@ -49,10 +49,10 @@ defmodule DOM.Shadow.GetRootNodeTest do
       outer = DOM.query_selector(doc, "#outer")
       outer_shadow = Element.attach_shadow(outer, :open)
       ShadowRoot.set_inner_html(outer_shadow, "<div id='mid'></div>")
-      mid = DOM.query_selector(outer_shadow, "#mid")
+      mid = DOM.ShadowRoot.query_selector(outer_shadow, "#mid")
       mid_shadow = Element.attach_shadow(mid, :open)
       ShadowRoot.set_inner_html(mid_shadow, "<span id='deep'>x</span>")
-      deep = DOM.query_selector(mid_shadow, "#deep")
+      deep = DOM.ShadowRoot.query_selector(mid_shadow, "#deep")
 
       # non-composed stops at the innermost shadow root
       assert Node.get_root_node(deep).node_id == mid_shadow.node_id

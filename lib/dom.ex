@@ -121,7 +121,6 @@ defmodule DOM do
   @spec get_elements_by_class_name(Node.t(), String.t()) :: [Node.t()]
   @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
   @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
-  @spec matches(Node.t(), String.t()) :: boolean()
   @spec _select_nodes(GenServer.server(), :ets.match_spec()) :: [term()]
   @spec _select_index(GenServer.server(), :ets.match_spec()) :: [term()]
   @spec _select_replace_nodes(GenServer.server(), :ets.match_spec()) :: non_neg_integer()
@@ -407,7 +406,24 @@ defmodule DOM do
     _import_node(document.server, node.server, node.node_id, deep?)
   end
 
-  def query_selector(%Node{server: server, node_id: root_id}, selector) do
+  @doc """
+  The first descendant of `document` matching `selector`, or `nil`. The element-,
+  fragment-, and shadow-scoped forms live on `DOM.Element`, `DOM.DocumentFragment`,
+  and `DOM.ShadowRoot` (matching where `querySelector` sits in the DOM).
+  """
+  def query_selector(%Node{type: :document} = document, selector),
+    do: _query_selector(document, selector)
+
+  @doc "All descendants of `document` matching `selector`, in document order."
+  def query_selector_all(%Node{type: :document} = document, selector),
+    do: _query_selector_all(document, selector)
+
+  @doc false
+  # Shared scope-agnostic querySelector — the scoped public entries (DOM.Element,
+  # DocumentFragment, ShadowRoot, and DOM for :document) each guard their node kind
+  # and delegate here. `selector` is parsed in THIS (the caller's) process so a bad
+  # selector raises client-side, never in the document server.
+  def _query_selector(%Node{server: server, node_id: root_id}, selector) do
     selector = parse_selector!(selector)
 
     _atomic_ets_op(server, fn nodes, index ->
@@ -418,7 +434,8 @@ defmodule DOM do
     end)
   end
 
-  def query_selector_all(%Node{server: server, node_id: root_id}, selector) do
+  @doc false
+  def _query_selector_all(%Node{server: server, node_id: root_id}, selector) do
     selector = parse_selector!(selector)
 
     _atomic_ets_op(server, fn nodes, index ->
@@ -426,7 +443,9 @@ defmodule DOM do
     end)
   end
 
-  def matches(%Node{server: server, node_id: node_id}, selector) do
+  @doc false
+  # Shared `matches` for DOM.Element.matches (Element-only per the DOM).
+  def _matches(%Node{server: server, node_id: node_id}, selector) do
     selector = parse_selector!(selector)
     _atomic_ets_op(server, fn nodes, index -> matches?(nodes, index, node_id, selector) end)
   end

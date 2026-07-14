@@ -63,12 +63,12 @@ defmodule Integration.DefaultActionTest do
       click.(q.("#r2"))
 
       out = %{
-        "c_checked" => DOM.matches(q.("#c"), ":checked"),
+        "c_checked" => DOM.Element.matches(q.("#c"), ":checked"),
         "c_attr" => DOM.Element.has_attribute(q.("#c"), "checked"),
         "cp_ret" => cp_ret,
-        "cp_checked" => DOM.matches(q.("#cp"), ":checked"),
-        "r1" => DOM.matches(q.("#r1"), ":checked"),
-        "r2" => DOM.matches(q.("#r2"), ":checked")
+        "cp_checked" => DOM.Element.matches(q.("#cp"), ":checked"),
+        "r1" => DOM.Element.matches(q.("#r1"), ":checked"),
+        "r2" => DOM.Element.matches(q.("#r2"), ":checked")
       }
 
       assert out == expected

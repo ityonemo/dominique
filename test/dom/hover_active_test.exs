@@ -20,34 +20,34 @@ defmodule DOM.HoverActiveTest do
     end
 
     test "nothing hovered: nothing matches :hover", %{doc: doc} do
-      refute DOM.matches(q(doc, "#btn"), ":hover")
+      refute DOM.Element.matches(q(doc, "#btn"), ":hover")
     end
 
     test "set_hover matches the element and all its ancestors", %{doc: doc} do
       DOM.set_hover(q(doc, "#btn"))
 
-      assert DOM.matches(q(doc, "#btn"), ":hover")
-      assert DOM.matches(q(doc, "#mid"), ":hover")
-      assert DOM.matches(q(doc, "#outer"), ":hover")
-      assert DOM.matches(q(doc, "body"), ":hover")
+      assert DOM.Element.matches(q(doc, "#btn"), ":hover")
+      assert DOM.Element.matches(q(doc, "#mid"), ":hover")
+      assert DOM.Element.matches(q(doc, "#outer"), ":hover")
+      assert DOM.Element.matches(q(doc, "body"), ":hover")
       # not a sibling subtree
-      refute DOM.matches(q(doc, "#sib"), ":hover")
+      refute DOM.Element.matches(q(doc, "#sib"), ":hover")
     end
 
     test "clear_hover clears :hover", %{doc: doc} do
       DOM.set_hover(q(doc, "#btn"))
       DOM.clear_hover(doc)
-      refute DOM.matches(q(doc, "#btn"), ":hover")
+      refute DOM.Element.matches(q(doc, "#btn"), ":hover")
     end
 
     test "moving hover updates the chain", %{doc: doc} do
       DOM.set_hover(q(doc, "#btn"))
       DOM.set_hover(q(doc, "#sib"))
 
-      refute DOM.matches(q(doc, "#btn"), ":hover")
-      refute DOM.matches(q(doc, "#mid"), ":hover")
-      assert DOM.matches(q(doc, "#sib"), ":hover")
-      assert DOM.matches(q(doc, "#outer"), ":hover")
+      refute DOM.Element.matches(q(doc, "#btn"), ":hover")
+      refute DOM.Element.matches(q(doc, "#mid"), ":hover")
+      assert DOM.Element.matches(q(doc, "#sib"), ":hover")
+      assert DOM.Element.matches(q(doc, "#outer"), ":hover")
     end
   end
 
@@ -60,14 +60,14 @@ defmodule DOM.HoverActiveTest do
     test "set_active matches the element and its ancestors", %{doc: doc} do
       DOM.set_active(q(doc, "#btn"))
 
-      assert DOM.matches(q(doc, "#btn"), ":active")
-      assert DOM.matches(q(doc, "#outer"), ":active")
+      assert DOM.Element.matches(q(doc, "#btn"), ":active")
+      assert DOM.Element.matches(q(doc, "#outer"), ":active")
     end
 
     test "clear_active clears :active", %{doc: doc} do
       DOM.set_active(q(doc, "#btn"))
       DOM.clear_active(doc)
-      refute DOM.matches(q(doc, "#btn"), ":active")
+      refute DOM.Element.matches(q(doc, "#btn"), ":active")
     end
   end
 
@@ -76,7 +76,7 @@ defmodule DOM.HoverActiveTest do
     b = DOM.query_selector(doc, "#b")
     DOM.set_hover(b)
 
-    assert DOM.matches(b, ":hover")
-    refute DOM.matches(b, ":active")
+    assert DOM.Element.matches(b, ":hover")
+    refute DOM.Element.matches(b, ":active")
   end
 end

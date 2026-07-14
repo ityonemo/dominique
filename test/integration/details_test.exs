@@ -44,7 +44,7 @@ defmodule Integration.DetailsTest do
       out = %{"initial" => Element.has_attribute(d, "open")}
       click.()
       out = Map.put(out, "after1", Element.has_attribute(d, "open"))
-      out = Map.put(out, "open_pseudo", DOM.matches(d, ":open"))
+      out = Map.put(out, "open_pseudo", DOM.Element.matches(d, ":open"))
       click.()
       out = Map.put(out, "after2", Element.has_attribute(d, "open"))
 

@@ -109,7 +109,7 @@ defmodule Integration.ShadowTest do
       host = DOM.query_selector(doc, "#host")
       s = Element.attach_shadow(host, :open)
       DOM.ShadowRoot.set_inner_html(s, "<slot name='x'></slot><slot></slot>")
-      [named, def] = DOM.query_selector_all(s, "slot")
+      [named, def] = DOM.ShadowRoot.query_selector_all(s, "slot")
       a = DOM.query_selector(doc, "a")
 
       tags = fn ns -> Enum.map(ns, &String.downcase(DOM.Node.node_name(&1))) end
@@ -152,7 +152,7 @@ defmodule Integration.ShadowTest do
       host = DOM.query_selector(doc, "#host")
       s = Element.attach_shadow(host, :open)
       DOM.ShadowRoot.set_inner_html(s, "<span id='inner'>x</span>")
-      inner = DOM.query_selector(s, "#inner")
+      inner = DOM.ShadowRoot.query_selector(s, "#inner")
 
       result = %{
         "plain_is_shadow" => DOM.Node.get_root_node(inner).node_id == s.node_id,
@@ -196,7 +196,7 @@ defmodule Integration.ShadowTest do
       DOM.ShadowRoot.set_inner_html(s, "<p id='p'>x</p>")
 
       ids = fn sel ->
-        s |> DOM.query_selector_all(sel) |> Enum.map(&Element.get_attribute(&1, "id"))
+        s |> DOM.ShadowRoot.query_selector_all(sel) |> Enum.map(&Element.get_attribute(&1, "id"))
       end
 
       result = %{
@@ -240,7 +240,9 @@ defmodule Integration.ShadowTest do
       DOM.ShadowRoot.set_inner_html(s, "<slot></slot>")
 
       names = fn sel ->
-        s |> DOM.query_selector_all(sel) |> Enum.map(&String.downcase(DOM.Node.node_name(&1)))
+        s
+        |> DOM.ShadowRoot.query_selector_all(sel)
+        |> Enum.map(&String.downcase(DOM.Node.node_name(&1)))
       end
 
       result = %{

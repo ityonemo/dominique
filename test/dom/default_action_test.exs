@@ -18,18 +18,18 @@ defmodule DOM.DefaultActionTest do
       doc = new_document("<body><input type='checkbox' id='c'></body>")
       c = DOM.query_selector(doc, "#c")
 
-      refute DOM.matches(c, ":checked")
+      refute DOM.Element.matches(c, ":checked")
       click(c)
-      assert DOM.matches(c, ":checked")
+      assert DOM.Element.matches(c, ":checked")
     end
 
     test "a checkbox with the checked attribute toggles OFF on click" do
       doc = new_document("<body><input type='checkbox' id='c' checked></body>")
       c = DOM.query_selector(doc, "#c")
 
-      assert DOM.matches(c, ":checked")
+      assert DOM.Element.matches(c, ":checked")
       click(c)
-      refute DOM.matches(c, ":checked")
+      refute DOM.Element.matches(c, ":checked")
     end
 
     test "the checked ATTRIBUTE is unchanged by a click (property != attribute)" do
@@ -37,7 +37,7 @@ defmodule DOM.DefaultActionTest do
       c = DOM.query_selector(doc, "#c")
 
       click(c)
-      assert DOM.matches(c, ":checked")
+      assert DOM.Element.matches(c, ":checked")
       # the attribute did not appear — only the checkedness property changed
       refute Element.has_attribute(c, "checked")
     end
@@ -48,7 +48,7 @@ defmodule DOM.DefaultActionTest do
       Node.add_event_listener(c, "click", fn %Event{} = e -> Event.prevent_default(e) end)
 
       click(c)
-      refute DOM.matches(c, ":checked")
+      refute DOM.Element.matches(c, ":checked")
     end
 
     test "a non-cancelable click still toggles" do
@@ -56,7 +56,7 @@ defmodule DOM.DefaultActionTest do
       c = DOM.query_selector(doc, "#c")
 
       Node.dispatch_event(c, Event.new("click", cancelable: false))
-      assert DOM.matches(c, ":checked")
+      assert DOM.Element.matches(c, ":checked")
     end
 
     test "dispatchEvent returns false when default is prevented" do
@@ -81,13 +81,13 @@ defmodule DOM.DefaultActionTest do
       o = DOM.query_selector(doc, "#o")
 
       click(r1)
-      assert DOM.matches(r1, ":checked")
+      assert DOM.Element.matches(r1, ":checked")
 
       click(r2)
-      assert DOM.matches(r2, ":checked")
-      refute DOM.matches(r1, ":checked")
+      assert DOM.Element.matches(r2, ":checked")
+      refute DOM.Element.matches(r1, ":checked")
       # a different group is unaffected
-      refute DOM.matches(o, ":checked")
+      refute DOM.Element.matches(o, ":checked")
     end
 
     test "a radio does not toggle off when clicked again" do
@@ -97,7 +97,7 @@ defmodule DOM.DefaultActionTest do
       click(r)
       click(r)
       # radios stay checked once activated (no toggle-off)
-      assert DOM.matches(r, ":checked")
+      assert DOM.Element.matches(r, ":checked")
     end
   end
 
@@ -106,6 +106,6 @@ defmodule DOM.DefaultActionTest do
     btn = DOM.query_selector(doc, "#btn")
     # no crash, no checkedness
     click(btn)
-    refute DOM.matches(btn, ":checked")
+    refute DOM.Element.matches(btn, ":checked")
   end
 end
