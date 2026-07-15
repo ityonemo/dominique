@@ -467,25 +467,21 @@ defmodule DOM.NodeData.IndexTable do
   # ==========================================================================
   #
   # A node's listeners are `{{:listener, node_id, seq}, %DOM.Listener{}}` rows.
-  # `seq` is a per-node monotonic integer (next = current max + 1), so the
-  # ordered_set iterates a node's listeners in registration order — the DOM's
-  # listener fire order. The lambda lives in the value; never serialized/cloned.
+  # `seq` is a DOCUMENT-wide monotonically increasing integer from an atomic counter
+  # (`:counters`, stashed in the process dict at DOM.init as `:listener_seq`). The
+  # ordered_set iterates a node's listeners in `seq` order — and since seqs are globally
+  # monotonic, their restriction to one node is still registration order (the DOM fire
+  # order). O(1) allocation, never reused, no per-node scan. Lambda in the value; never
+  # serialized/cloned.
 
   @doc "Append `listener` to `node_id`'s listeners (registration order preserved)."
   @spec listener_put(tid, id, DOM.Listener.t()) :: :ok
   def listener_put(index, node_id, %DOM.Listener{} = listener) do
-    seq =
-      case :ets.select(index, listener_seq_spec(node_id)) do
-        [] -> 0
-        seqs -> Enum.max(seqs) + 1
-      end
-
+    counter = Process.get(:listener_seq)
+    :counters.add(counter, 1, 1)
+    seq = :counters.get(counter, 1)
     :ets.insert(index, {{:listener, node_id, seq}, listener})
     :ok
-  end
-
-  defmatchspecp listener_seq_spec(node_id) do
-    {{:listener, ^node_id, seq}, _listener} -> seq
   end
 
   @doc "A node's listeners, in registration (fire) order."

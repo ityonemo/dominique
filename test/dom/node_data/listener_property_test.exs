@@ -11,6 +11,9 @@ defmodule DOM.NodeData.ListenerPropertyTest do
 
   setup do
     index = :ets.new(:index, [:ordered_set, :private])
+    # listener_put allocates its seq from the `:listener_seq` atomic counter that
+    # DOM.init stashes in the process dict; provide one for these serverless tests.
+    Process.put(:listener_seq, :counters.new(1, []))
     %{index: index, node: make_ref()}
   end
 

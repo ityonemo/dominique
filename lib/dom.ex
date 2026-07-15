@@ -90,6 +90,11 @@ defmodule DOM do
     Process.put(:nodes, nodes)
     Process.put(:index, index)
     Process.put(:document_id, document_id)
+    # A single atomic counter for allocating monotonically-increasing event-listener seqs
+    # (definitive registration/fire order) in O(1) — no per-node scan-and-max. The ref is
+    # fixed; only its cell mutates, so it lives in the process dict beside the tids and is
+    # reachable on the re-entrant path (a listener added during dispatch). See IndexTable.
+    Process.put(:listener_seq, :counters.new(1, []))
     state = %__MODULE__{nodes: nodes, index: index, document_id: document_id}
 
     case build_continue(opts) do
