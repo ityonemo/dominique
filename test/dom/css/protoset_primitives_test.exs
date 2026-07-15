@@ -185,6 +185,41 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
     end
   end
 
+  describe "lift_to_prev_sibling (:next-sibling `+`)" do
+    test "lifts a subject to its IMMEDIATELY-preceding element sibling", %{
+      context: context,
+      ids: ids
+    } do
+      # order under root: a, b, c. c's immediate predecessor is b; b's is a.
+      assert Query.lift_to_prev_sibling(context, %{ids.c => [:lc]}) == %{ids.b => [:lc]}
+      assert Query.lift_to_prev_sibling(context, %{ids.b => [:lb]}) == %{ids.a => [:lb]}
+    end
+
+    test "a first child (no preceding sibling) drops out", %{context: context, ids: ids} do
+      assert Query.lift_to_prev_sibling(context, %{ids.a => [:la]}) == %{}
+    end
+
+    test "does NOT skip past to a non-adjacent sibling (adjacency)", %{context: context, ids: ids} do
+      # c lifts to b, never straight to a — the earlier Phase-1 sketch's bug.
+      refute Map.has_key?(Query.lift_to_prev_sibling(context, %{ids.c => [:lc]}), ids.a)
+    end
+  end
+
+  describe "lift_to_prev_siblings (:subsequent-sibling `~`)" do
+    test "lifts a subject to ALL its preceding element siblings", %{context: context, ids: ids} do
+      lifted = Query.lift_to_prev_siblings(context, %{ids.c => [:lc]})
+      assert Map.keys(lifted) |> Enum.sort() == Enum.sort([ids.a, ids.b])
+      assert lifted[ids.a] == [:lc] and lifted[ids.b] == [:lc]
+    end
+
+    test "merges leaves when siblings share a preceding sibling", %{context: context, ids: ids} do
+      # both b and c have `a` as a preceding sibling -> a accumulates both leaves.
+      a_id = ids.a
+      %{^a_id => leaves} = Query.lift_to_prev_siblings(context, %{ids.b => [:lb], ids.c => [:lc]})
+      assert Enum.sort(leaves) == Enum.sort([:lb, :lc])
+    end
+  end
+
   describe "resolve_child (parent hash-join)" do
     test "aa's parent is a -> matches", %{context: context, ids: ids, aa: aa} do
       left = Query.resolve_extents(context, %{ids.a => [:la]})

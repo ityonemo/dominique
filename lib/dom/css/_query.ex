@@ -105,6 +105,36 @@ defmodule DOM.CSS.Query do
   end
 
   @doc """
+  Lift a protoset to each subject's IMMEDIATELY-preceding element sibling — `%{prev_sib_id =>
+  leaves}` — backing the CSS `+` combinator. One element-span scan yields each subject's
+  `{root, parent, start}`; per subject a single bounded (`limit 1`) reverse index probe finds its
+  one preceding element sibling. Subjects with none drop out.
+  """
+  @spec lift_to_prev_sibling(DOM.CSS.context(), protoset()) :: protoset()
+  def lift_to_prev_sibling(%{index: index}, protoset) do
+    for {start, root, parent, _id, leaves} <- IndexTable.span_starts(index, protoset, true),
+        sib = IndexTable.span_prev_element_sibling(index, root, parent, start),
+        sib != nil do
+      {sib, leaves}
+    end
+    |> merge_pairs()
+  end
+
+  @doc """
+  Lift a protoset to ALL of each subject's preceding element siblings — `%{prev_sib_id => leaves}`
+  — backing the CSS `~` combinator. One element-span scan for the subjects, then per subject a
+  bounded reverse index range scan of its preceding element siblings.
+  """
+  @spec lift_to_prev_siblings(DOM.CSS.context(), protoset()) :: protoset()
+  def lift_to_prev_siblings(%{index: index}, protoset) do
+    for {start, root, parent, _id, leaves} <- IndexTable.span_starts(index, protoset, true),
+        sib <- IndexTable.span_prev_element_siblings(index, root, parent, start) do
+      {sib, leaves}
+    end
+    |> merge_pairs()
+  end
+
+  @doc """
   Containment join over start-sorted extents: a subject matches when some LEFT window (same
   `root`) strictly contains it (`left.start < subject.start and subject.stop < left.stop`).
   `projection` is `:subject` (key = subject id, the final step) or `:current` (key = the

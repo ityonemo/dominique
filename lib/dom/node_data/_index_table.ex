@@ -315,6 +315,35 @@ defmodule DOM.NodeData.IndexTable do
       {parent, :erlang.map_get(node_id, protoset)}
   end
 
+  @doc """
+  The IMMEDIATELY-preceding element sibling id of the node at `{root, parent, before}` — the
+  element `:start` row with the greatest key strictly `< before`, same `root`/`parent`. A single
+  bounded `select_reverse` (limit 1) on the `:ordered_set`, so it reads ONE row, not the whole
+  preceding-sibling run. `nil` when there is none. Backs the CSS `+` combinator.
+  """
+  @spec span_prev_element_sibling(tid, id, id | nil, Extent.t()) :: id | nil
+  def span_prev_element_sibling(index, root, parent, before) do
+    case :ets.select_reverse(index, prev_element_sibling_spec(root, parent, before), 1) do
+      {[node_id], _cont} -> node_id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  ALL preceding element sibling ids of the node at `{root, parent, before}` — element `:start`
+  rows with key `< before`, same `root`/`parent`, nearest first (`select_reverse`). Backs the
+  CSS `~` combinator.
+  """
+  @spec span_prev_element_siblings(tid, id, id | nil, Extent.t()) :: [id]
+  def span_prev_element_siblings(index, root, parent, before) do
+    :ets.select_reverse(index, prev_element_sibling_spec(root, parent, before))
+  end
+
+  defmatchspecp prev_element_sibling_spec(root, parent, before) do
+    {{:span, ^root, s, :start, ^parent}, {node_id, :element}} when s < before ->
+      node_id
+  end
+
   @doc false
   # Every span row as `{root, key, kind, parent, node_id, type}` — used by the consistency
   # checker (in DOM.NodeData).

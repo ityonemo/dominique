@@ -63,10 +63,19 @@ defmodule DOM.CSS.Complex do
     chain_fast(rest, next_ps, context)
   end
 
-  # Combinators not yet on the fast path (siblings — Phase 5): fall back to the per-candidate
-  # walk for the remaining chain from here. Keyed by the current protoset's keys, values preserved.
-  defp chain_fast([_combinator | _] = remaining, protoset, context) do
-    Query.filter_protoset(protoset, &chain?(remaining, &1, context))
+  # `A + B`: lift each subject B to its immediately-preceding element sibling (one bounded
+  # reverse probe per subject), then the left compound A filters those. `A ~ B`: same, but lift
+  # to ALL preceding element siblings. Both then continue leftward.
+  defp chain_fast([:next_sibling, compound | rest], subject_ps, context) do
+    sib_ps = Query.lift_to_prev_sibling(context, subject_ps)
+    next_ps = DOM.CSS.match(compound, context, sib_ps)
+    chain_fast(rest, next_ps, context)
+  end
+
+  defp chain_fast([:subsequent_sibling, compound | rest], subject_ps, context) do
+    sib_ps = Query.lift_to_prev_siblings(context, subject_ps)
+    next_ps = DOM.CSS.match(compound, context, sib_ps)
+    chain_fast(rest, next_ps, context)
   end
 
   # leftward is [combinator, compound, combinator, compound, ...] read right to
