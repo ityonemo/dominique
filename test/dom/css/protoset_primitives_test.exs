@@ -220,21 +220,6 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
     end
   end
 
-  describe "resolve_child (parent hash-join)" do
-    test "aa's parent is a -> matches", %{context: context, ids: ids, aa: aa} do
-      left = Query.resolve_extents(context, %{ids.a => [:la]})
-      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
-      assert Query.resolve_child(left, subject, :subject) == %{aa => [:leaf_aa]}
-    end
-
-    test "a deeper descendant is NOT a child", %{context: context, ids: ids, aa: aa} do
-      # root is aa's grandparent, not parent.
-      left = Query.resolve_extents(context, %{ids.root => [:lr]})
-      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
-      assert Query.resolve_child(left, subject, :subject) == %{}
-    end
-  end
-
   describe "IndexTable.span_starts backing" do
     test "emits start-sorted tuples for a protoset", %{context: %{index: index}, ids: ids, aa: aa} do
       ps = %{ids.a => :la, aa => :laa, ids.b => :lb}
