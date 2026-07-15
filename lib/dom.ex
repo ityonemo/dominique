@@ -20,6 +20,7 @@ defmodule DOM do
   use GenServer
   use MatchSpec
 
+  alias DOM.CSS.Query
   alias DOM.Event
   alias DOM.Events
   alias DOM.HTML.TreeBuilder
@@ -3344,8 +3345,9 @@ defmodule DOM do
     # shadow tree — matches(node, ":host") on a shadow host is true.
     scoped = DOM.CSS.bind_scope(selector, node_id)
     context = css_context(nodes, index, shadow_scope_host(nodes, node_id))
+    protoset = Query.seed([node_id])
 
-    Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, [node_id]) != [] end)
+    Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, protoset) != %{} end)
   end
 
   # The tables a CSS match runs against (see DOM.CSS.context/0), plus the shadow
@@ -3385,10 +3387,13 @@ defmodule DOM do
     # the shadow-crossing combinator walk (Complex.related), not the candidate set.
     scope_host = shadow_query_host(nodes, root_id)
     context = css_context(nodes, index, scope_host)
+    protoset = Query.seed(candidates)
 
+    # Each complex returns a protoset whose VALUES are the matching subject (leaf) ids;
+    # union those across the selector list, then order-filter to document order.
     matched =
       scoped
-      |> Enum.flat_map(fn complex -> DOM.CSS.match(complex, context, candidates) end)
+      |> Enum.flat_map(fn complex -> Map.values(DOM.CSS.match(complex, context, protoset)) end)
       |> MapSet.new()
 
     Enum.filter(candidates, &MapSet.member?(matched, &1))

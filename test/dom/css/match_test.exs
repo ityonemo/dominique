@@ -12,9 +12,13 @@ defmodule DOM.CSS.MatchTest do
   # match/3 is unit-tested directly against a hand-built ETS table of NodeData,
   # without a DOM GenServer. Leaf simple selectors are tested by constructing
   # the struct directly (not through parse, which wraps them in a Compound).
+  #
+  # match/3 threads a protoset (`%{id => leaf_ref}`); we seed the candidate ids and
+  # take the result's VALUES (the matching leaf/subject ids) as the id set.
 
   defp matched(table, selector, candidate_ids) do
-    DOM.CSS.match(selector, table, candidate_ids) |> MapSet.new()
+    protoset = DOM.CSS.Query.seed(candidate_ids)
+    selector |> DOM.CSS.match(table, protoset) |> Map.values() |> MapSet.new()
   end
 
   describe "type selector" do
@@ -718,7 +722,7 @@ defmodule DOM.CSS.MatchTest do
   describe "pseudo-element" do
     test "never matches an element" do
       {table, ids} = build(element("p", [], [], as: :p))
-      assert DOM.CSS.match(pc("p::before"), table, [ids[:p]]) == []
+      assert DOM.CSS.match(pc("p::before"), table, DOM.CSS.Query.seed([ids[:p]])) == %{}
     end
   end
 end

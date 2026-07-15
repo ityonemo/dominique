@@ -15,10 +15,10 @@ defmodule DOM.CSS.Type do
   # `|div` (`:none`) targets the null namespace, which no parsed element carries
   # (every element is :html/:svg/:mathml) — so it matches nothing. `*|div`/`div`
   # (`:any`/`nil`) match any namespace.
-  def match(%{namespace: :none}, _context, _candidate_ids), do: []
+  def match(%{namespace: :none}, _context, _protoset), do: %{}
 
-  def match(%{name: name}, %{index: index}, candidate_ids) do
-    Query.type(index, candidate_ids, name)
+  def match(%{name: name}, %{index: index}, protoset) do
+    Query.type(index, protoset, name)
   end
 
   defimpl String.Chars do

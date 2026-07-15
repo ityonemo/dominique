@@ -185,75 +185,54 @@ defmodule DOM.CSS.Query do
   end
 
   @doc """
-  Element ids in `candidates` whose local name is `name` — read from the tag
-  index (a bounded prefix scan of the `:ordered_set`; namespace-agnostic, as CSS
-  type selectors are), then intersected with the candidate scope.
+  The protoset entries whose element has local name `name` — the tag index scan fused
+  with the protoset (`compound_lookup`), leaf_refs preserved. (Namespace-agnostic, as CSS
+  type selectors are.)
   """
-  @spec type(:ets.tid(), [reference()], String.t()) :: [reference()]
-  def type(index, candidates, name) do
-    index |> IndexTable.index_lookup(:tag, name) |> intersect(candidates)
-  end
+  @spec type(:ets.tid(), protoset(), String.t()) :: protoset()
+  def type(index, protoset, name), do: compound_lookup(index, protoset, :tag, name)
 
-  @doc "Element ids in `candidates` (the universal selector)."
-  @spec elements(:ets.tid(), [reference()]) :: [reference()]
-  def elements(nodes, candidates) do
-    nodes |> select(element_spec()) |> intersect(candidates)
-  end
+  @doc "The protoset entries that are elements (the universal selector `*`)."
+  @spec elements(:ets.tid(), protoset()) :: protoset()
+  def elements(nodes, protoset), do: compound_element(nodes, protoset)
+
+  @doc "The protoset entries whose element carries `id` — id index fused with the protoset."
+  @spec id(:ets.tid(), protoset(), String.t()) :: protoset()
+  def id(index, protoset, id), do: compound_lookup(index, protoset, :id, id)
+
+  @doc "The protoset entries whose element carries class `token` — class index fused with the protoset."
+  @spec class(:ets.tid(), protoset(), String.t()) :: protoset()
+  def class(index, protoset, token), do: compound_lookup(index, protoset, :class, token)
 
   @doc """
-  Element ids in `candidates` carrying `id` — read from the id index (a bounded
-  prefix scan of the `:ordered_set`), then intersected with the candidate scope.
-  """
-  @spec id(:ets.tid(), [reference()], String.t()) :: [reference()]
-  def id(index, candidates, id) do
-    index |> IndexTable.index_lookup(:id, id) |> intersect(candidates)
-  end
-
-  @doc """
-  Element ids in `candidates` carrying class `token` — read from the class index
-  (a bounded prefix scan of the `:ordered_set`), then intersected with the
-  candidate scope.
-  """
-  @spec class(:ets.tid(), [reference()], String.t()) :: [reference()]
-  def class(index, candidates, token) do
-    index |> IndexTable.index_lookup(:class, token) |> intersect(candidates)
-  end
-
-  @doc """
-  Element ids in `candidates` matching an attribute selector, read from the attr
-  index. With `op` nil this is a presence test; otherwise the value is matched
-  per `op` (`:eq`, `:includes`, `:dash`, `:prefix`, `:suffix`, `:substring`),
-  case-insensitively when `flag` is `:i`.
-
-  Exact `[name=value]` (case-sensitive) is a point lookup on the
-  `{:attr, name, value, _}` prefix; presence and every other operator (and any
-  `i`-flagged compare) read all `{value, node_id}` under the name (a bounded
-  by-name prefix scan) and filter the values here.
+  The protoset entries whose element matches an attribute selector (leaf_refs preserved).
+  `[name=value]` (case-sensitive) is a fused point lookup; presence and every other operator
+  (and any `i`-flag) read `{value, id, leaf_ref}` under the name (fused by-name scan) and filter
+  the values here.
   """
   @spec attribute(
           :ets.tid(),
-          [reference()],
+          protoset(),
           String.t(),
           DOM.CSS.attr_op() | nil,
           String.t() | nil,
           :i | :s | nil
-        ) :: [reference()]
-  def attribute(index, candidates, name, :eq, value, flag) when flag != :i do
-    index |> IndexTable.index_lookup(:attr, name, value) |> intersect(candidates)
+        ) :: protoset()
+  def attribute(index, protoset, name, :eq, value, flag) when flag != :i do
+    compound_lookup(index, protoset, :attr, name, value)
   end
 
-  def attribute(index, candidates, name, nil, _value, _flag) do
-    matched = for {_value, node_id} <- IndexTable.index_lookup_attr_name(index, name), do: node_id
-    intersect(matched, candidates)
+  def attribute(index, protoset, name, nil, _value, _flag) do
+    for {_value, id, leaf} <- IndexTable.compound_attr_name(index, protoset, name),
+        into: %{},
+        do: {id, leaf}
   end
 
-  def attribute(index, candidates, name, op, value, flag) do
-    matched =
-      for {actual, node_id} <- IndexTable.index_lookup_attr_name(index, name),
-          value_match?(op, fold(actual, flag), fold(value, flag)),
-          do: node_id
-
-    intersect(matched, candidates)
+  def attribute(index, protoset, name, op, value, flag) do
+    for {actual, id, leaf} <- IndexTable.compound_attr_name(index, protoset, name),
+        value_match?(op, fold(actual, flag), fold(value, flag)),
+        into: %{},
+        do: {id, leaf}
   end
 
   @doc "The parent id of `node_id`, or `nil`."
@@ -537,13 +516,15 @@ defmodule DOM.CSS.Query do
     end
   end
 
-  # `rest` is [compound (comb compound)*] to match over `scope`.
+  # `rest` is [compound (comb compound)*] to match over `scope` (an id list; the leaf_ref
+  # is irrelevant for :has, which only asks whether ANYTHING matches — so `seed/1` it and
+  # test for a non-empty protoset).
   defp remainder_matches?([compound], context, scope) do
-    DOM.CSS.match(compound, context, scope) != []
+    DOM.CSS.match(compound, context, seed(scope)) != %{}
   end
 
   defp remainder_matches?(parts, context, scope) do
-    DOM.CSS.match(%DOM.CSS.Complex{parts: parts}, context, scope) != []
+    DOM.CSS.match(%DOM.CSS.Complex{parts: parts}, context, seed(scope)) != %{}
   end
 
   # ==========================================================================
@@ -556,10 +537,6 @@ defmodule DOM.CSS.Query do
   defmatchspecp element_type_spec(node_id) do
     {^node_id, %{__struct__: NodeData.Element, local_name: name, namespace: namespace}} ->
       {name, namespace}
-  end
-
-  defmatchspecp element_spec() do
-    {id, %{__struct__: NodeData.Element}} -> id
   end
 
   defmatchspecp attributes_of_spec(node_id) do
@@ -589,12 +566,6 @@ defmodule DOM.CSS.Query do
 
   # A node that counts as content for :empty — an element or a text node.
   defp content?(nodes, node_id), do: select(nodes, content_spec(node_id)) == [true]
-
-  # Keep only candidates that the spec matched, preserving candidate order.
-  defp intersect(matched, candidates) do
-    set = MapSet.new(matched)
-    Enum.filter(candidates, &MapSet.member?(set, &1))
-  end
 
   defp fold(string, :i), do: String.downcase(string)
   defp fold(string, _flag), do: string

@@ -14,15 +14,16 @@ defmodule DOM.CSS.Complex do
 
   @type t :: %__MODULE__{parts: [DOM.CSS.Compound.t() | DOM.CSS.combinator()]}
 
-  # Right-to-left: the last compound is the subject; candidates that match it are
-  # kept only when the leftward combinator chain is satisfiable from that node.
+  # Right-to-left: the last compound is the subject; protoset entries that match it are
+  # kept only when the leftward combinator chain is satisfiable from that node. (Phase 2:
+  # still the per-candidate walk, now protoset-shaped; Phase 3+ swaps in the extent sweep.)
   @impl DOM.CSS
-  def match(%{parts: parts}, context, candidate_ids) do
+  def match(%{parts: parts}, context, protoset) do
     [subject | leftward] = Enum.reverse(parts)
 
     subject
-    |> DOM.CSS.match(context, candidate_ids)
-    |> Enum.filter(&chain?(leftward, &1, context))
+    |> DOM.CSS.match(context, protoset)
+    |> Query.filter_protoset(&chain?(leftward, &1, context))
   end
 
   # leftward is [combinator, compound, combinator, compound, ...] read right to
@@ -34,7 +35,8 @@ defmodule DOM.CSS.Complex do
     context
     |> related(combinator, node_id)
     |> Enum.any?(fn related_id ->
-      DOM.CSS.match(compound, context, [related_id]) != [] and chain?(rest, related_id, context)
+      DOM.CSS.match(compound, context, Query.seed([related_id])) != %{} and
+        chain?(rest, related_id, context)
     end)
   end
 
