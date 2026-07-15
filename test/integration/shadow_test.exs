@@ -182,7 +182,8 @@ defmodule Integration.ShadowTest do
         host: ids(":host"),
         host_match: ids(":host(.themed)"),
         host_nomatch: ids(":host(.nope)"),
-        host_desc: ids(":host p")
+        host_desc: ids(":host p"),
+        host_child: ids(":host > p")
       };
     });
     """
@@ -203,7 +204,8 @@ defmodule Integration.ShadowTest do
         "host" => ids.(":host"),
         "host_match" => ids.(":host(.themed)"),
         "host_nomatch" => ids.(":host(.nope)"),
-        "host_desc" => ids.(":host p")
+        "host_desc" => ids.(":host p"),
+        "host_child" => ids.(":host > p")
       }
 
       assert result == expected

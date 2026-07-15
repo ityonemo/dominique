@@ -23,6 +23,11 @@ defmodule Integration.QuerySelectorTest do
     "a.box",
     "ul > li",
     "section li",
+    "section ul a",
+    "ul li a",
+    "section li.box a",
+    "section div p",
+    "ul .box a",
     "h1 + p",
     "h1 ~ p",
     "li:first-child",
@@ -72,7 +77,9 @@ defmodule Integration.QuerySelectorTest do
 
       const selectors = [
         "a", "*", ".box", "#target", "[data-role]", "[data-role=nav]",
-        "[class~=highlight]", "a.box", "ul > li", "section li", "h1 + p",
+        "[class~=highlight]", "a.box", "ul > li", "section li",
+        "section ul a", "ul li a", "section li.box a", "section div p", "ul .box a",
+        "h1 + p",
         "h1 ~ p", "li:first-child", "li:last-child", "li:nth-child(2n)",
         "li:nth-child(odd)", ":root", "li:not(.box)",
         "li:is(.box, :last-child)", "div:has(> p)", "section a, ul li",
