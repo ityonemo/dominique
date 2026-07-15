@@ -17,8 +17,9 @@ defmodule DOM.CSS.MatchTest do
   # take the result's VALUES (the matching leaf/subject ids) as the id set.
 
   defp matched(table, selector, candidate_ids) do
+    context = Map.merge(table, %{scope_host: nil, scope_candidates: candidate_ids})
     protoset = DOM.CSS.Query.seed(candidate_ids)
-    selector |> DOM.CSS.match(table, protoset) |> Map.values() |> MapSet.new()
+    selector |> DOM.CSS.match(context, protoset) |> Map.values() |> List.flatten() |> MapSet.new()
   end
 
   describe "type selector" do

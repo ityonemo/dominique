@@ -48,7 +48,8 @@ defprotocol DOM.CSS do
   @type context :: %{
           nodes: :ets.tid(),
           index: :ets.tid(),
-          scope_host: reference() | nil
+          scope_host: reference() | nil,
+          scope_candidates: [reference()]
         }
 
   @doc """

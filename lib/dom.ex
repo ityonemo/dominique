@@ -3344,16 +3344,27 @@ defmodule DOM do
     # The scope for :host is the node's own shadow root's host, if the node is in a
     # shadow tree — matches(node, ":host") on a shadow host is true.
     scoped = DOM.CSS.bind_scope(selector, node_id)
-    context = css_context(nodes, index, shadow_scope_host(nodes, node_id))
+    # The leftward-compound resolution scope: the node's whole tree, so a combinator
+    # (`.foo .bar`) can reach any ancestor of the node.
+    scope = [node_id | ancestors_and_descendants(nodes, node_id)]
+    context = css_context(nodes, index, shadow_scope_host(nodes, node_id), scope)
     protoset = Query.seed([node_id])
 
     Enum.any?(scoped, fn complex -> DOM.CSS.match(complex, context, protoset) != %{} end)
   end
 
+  # The node's whole tree minus itself (ancestors + the root's descendants), for the
+  # matches?/4 leftward-compound scope.
+  defp ancestors_and_descendants(nodes, node_id) do
+    root = root_node(nodes, node_id, false)
+    Enum.uniq([root | descendant_ids(nodes, root)]) -- [node_id]
+  end
+
   # The tables a CSS match runs against (see DOM.CSS.context/0), plus the shadow
-  # scope host (nil outside a shadow scope) for :host/:host-context/::slotted.
-  defp css_context(nodes, index, scope_host) do
-    %{nodes: nodes, index: index, scope_host: scope_host}
+  # scope host (nil outside a shadow scope) for :host/:host-context/::slotted, and
+  # `scope_candidates` — the id set a leftward combinator resolves its compound over.
+  defp css_context(nodes, index, scope_host, scope_candidates) do
+    %{nodes: nodes, index: index, scope_host: scope_host, scope_candidates: scope_candidates}
   end
 
   # The :host scope for matches(node): the node itself when it is a shadow host
@@ -3386,17 +3397,19 @@ defmodule DOM do
     # interrogable via matches/2, and `:host x` reaches the shadow tree through
     # the shadow-crossing combinator walk (Complex.related), not the candidate set.
     scope_host = shadow_query_host(nodes, root_id)
-    context = css_context(nodes, index, scope_host)
+    context = css_context(nodes, index, scope_host, candidates)
     protoset = Query.seed(candidates)
 
-    # Each complex returns a protoset whose VALUES are the matching subject (leaf) ids;
-    # union those across the selector list, then order-filter to document order.
+    # Each complex returns a protoset whose VALUES are lists of matching subject (leaf) ids;
+    # flatten across the selector list into a membership set, then order-filter to document order.
     matched =
       scoped
-      |> Enum.flat_map(fn complex -> Map.values(DOM.CSS.match(complex, context, protoset)) end)
-      |> MapSet.new()
+      |> Enum.flat_map(fn complex ->
+        DOM.CSS.match(complex, context, protoset) |> Map.values() |> List.flatten()
+      end)
+      |> Map.new(&{&1, []})
 
-    Enum.filter(candidates, &MapSet.member?(matched, &1))
+    Enum.filter(candidates, &Map.has_key?(matched, &1))
   end
 
   # The host of the query root, when the root is a shadow root; else nil. Sets the

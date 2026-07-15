@@ -31,8 +31,8 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
   end
 
   describe "seed / filter_protoset" do
-    test "seed maps each id to itself" do
-      assert Query.seed([:x, :y]) == %{x: :x, y: :y}
+    test "seed maps each id to a singleton leaf list" do
+      assert Query.seed([:x, :y]) == %{x: [:x], y: [:y]}
     end
 
     test "filter_protoset keeps entries whose key passes, preserving the value" do
@@ -49,7 +49,7 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
       a = ids.a
       c = ids.c
       # protoset carries a distinct leaf_ref per key to prove projection.
-      protoset = %{a => :leaf_a, c => :leaf_c, ids.b => :leaf_b}
+      protoset = %{a => :leaf_a, c => :leaf_c, ids.b => [:leaf_b]}
 
       # .box matches a and c (not b); leaf_refs preserved from the protoset.
       assert Query.compound_lookup(index, protoset, :class, "box") == %{
@@ -61,8 +61,8 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
     test "id lookup fused", %{context: %{index: index}, ids: ids} do
       b = ids.b
 
-      assert Query.compound_lookup(index, %{b => :leaf_b, ids.a => :leaf_a}, :id, "target") ==
-               %{b => :leaf_b}
+      assert Query.compound_lookup(index, %{b => [:leaf_b], ids.a => [:leaf_a]}, :id, "target") ==
+               %{b => [:leaf_b]}
     end
 
     test "a key absent from the index yields nothing", %{context: %{index: index}, ids: ids} do
@@ -106,11 +106,11 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
       ids: ids,
       aa: aa
     } do
-      left = Query.resolve_extents(context, %{ids.a => :la})
-      subject = Query.resolve_extents(context, %{aa => :leaf_aa})
+      left = Query.resolve_extents(context, %{ids.a => [:la]})
+      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
 
       # aa is contained by a -> matches, keyed by aa, valued by its leaf_ref.
-      assert Query.resolve_descendants(left, subject, :subject) == %{aa => :leaf_aa}
+      assert Query.resolve_descendants(left, subject, :subject) == %{aa => [:leaf_aa]}
     end
 
     test ":current projection keys by the containing left id", %{
@@ -118,15 +118,35 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
       ids: ids,
       aa: aa
     } do
-      left = Query.resolve_extents(context, %{ids.a => :la})
-      subject = Query.resolve_extents(context, %{aa => :leaf_aa})
+      left = Query.resolve_extents(context, %{ids.a => [:la]})
+      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
 
-      assert Query.resolve_descendants(left, subject, :current) == %{ids.a => :leaf_aa}
+      assert Query.resolve_descendants(left, subject, :current) == %{ids.a => [:leaf_aa]}
+    end
+
+    test ":current with MULTIPLE subjects under one left keeps ALL leaves (no collapse)", %{
+      context: context,
+      ids: ids,
+      root: root
+    } do
+      # root contains a, b, c — the `section li` case. :current keys by root, but all three
+      # subject leaves must survive (the bug was overwrite → only one).
+      left = Query.resolve_extents(context, %{root => [:l_root]})
+
+      subject =
+        Query.resolve_extents(context, %{
+          ids.a => [:leaf_a],
+          ids.b => [:leaf_b],
+          ids.c => [:leaf_c]
+        })
+
+      %{^root => leaves} = Query.resolve_descendants(left, subject, :current)
+      assert Enum.sort(leaves) == Enum.sort([:leaf_a, :leaf_b, :leaf_c])
     end
 
     test "a non-descendant (sibling) does NOT match", %{context: context, ids: ids} do
-      left = Query.resolve_extents(context, %{ids.a => :la})
-      subject = Query.resolve_extents(context, %{ids.b => :leaf_b})
+      left = Query.resolve_extents(context, %{ids.a => [:la]})
+      subject = Query.resolve_extents(context, %{ids.b => [:leaf_b]})
       # b is a sibling of a, not contained by it.
       assert Query.resolve_descendants(left, subject, :subject) == %{}
     end
@@ -137,24 +157,24 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
       aa: aa
     } do
       # Build a fake left ext with a bogus root so nesting is impossible.
-      [{s, id, stop, p, _root, l}] = Query.resolve_extents(context, %{ids.a => :la})
+      [{s, id, stop, p, _root, l}] = Query.resolve_extents(context, %{ids.a => [:la]})
       left_other_root = [{s, id, stop, p, make_ref(), l}]
-      subject = Query.resolve_extents(context, %{aa => :leaf_aa})
+      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
       assert Query.resolve_descendants(left_other_root, subject, :subject) == %{}
     end
   end
 
   describe "resolve_child (parent hash-join)" do
     test "aa's parent is a -> matches", %{context: context, ids: ids, aa: aa} do
-      left = Query.resolve_extents(context, %{ids.a => :la})
-      subject = Query.resolve_extents(context, %{aa => :leaf_aa})
-      assert Query.resolve_child(left, subject, :subject) == %{aa => :leaf_aa}
+      left = Query.resolve_extents(context, %{ids.a => [:la]})
+      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
+      assert Query.resolve_child(left, subject, :subject) == %{aa => [:leaf_aa]}
     end
 
     test "a deeper descendant is NOT a child", %{context: context, ids: ids, aa: aa} do
       # root is aa's grandparent, not parent.
-      left = Query.resolve_extents(context, %{ids.root => :lr})
-      subject = Query.resolve_extents(context, %{aa => :leaf_aa})
+      left = Query.resolve_extents(context, %{ids.root => [:lr]})
+      subject = Query.resolve_extents(context, %{aa => [:leaf_aa]})
       assert Query.resolve_child(left, subject, :subject) == %{}
     end
   end

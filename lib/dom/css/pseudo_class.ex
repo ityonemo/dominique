@@ -669,11 +669,12 @@ defmodule DOM.CSS.PseudoClass do
   defp anb?(position, 0, b), do: position == b
   defp anb?(position, a, b), do: rem(position - b, a) == 0 and div(position - b, a) >= 0
 
-  # Match each complex in `list` over the SAME protoset and union the results (map merge,
-  # leaf_refs preserved). Backs :is/:where/:not/:has/:host()/:nth-of.
+  # Match each complex in `list` over the SAME protoset and union the results — merging leaf
+  # LISTS on key collision (a key reachable via two complexes keeps both). Backs
+  # :is/:where/:not/:has/:host()/:nth-of.
   defp match_list(list, context, protoset) do
     Enum.reduce(list, %{}, fn complex, acc ->
-      Map.merge(acc, DOM.CSS.match(complex, context, protoset))
+      Map.merge(acc, DOM.CSS.match(complex, context, protoset), fn _k, a, b -> a ++ b end)
     end)
   end
 

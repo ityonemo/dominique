@@ -17,18 +17,19 @@ defmodule DOM.CSS.Query do
   # Protoset engine primitives (CSS combinator matching)
   # ==========================================================================
   #
-  # A `protoset` is `%{ref => leaf_ref}`: key = the element currently being matched at this
-  # stage of the right-to-left walk; value `leaf_ref` = the reference of the CSS selector LEAF
-  # (the subject element the query emits). The leaf_ref is invariant as the walk moves leftward
-  # through combinators — the key changes, the value follows the subject. These primitives thread
-  # protosets; index/nodes membership is fused into ETS match specs (see IndexTable.compound_*).
+  # A `protoset` is `%{ref => [leaf_ref]}`: key = the element currently being matched at this
+  # stage of the right-to-left walk; value = the LEAF refs (the subject elements the query emits)
+  # reachable through this current element. It is a LIST, not one ref, because a combinator is
+  # one-to-many — one ancestor contains many subject leaves — so re-keying to the ancestor must
+  # accumulate their leaves, not collapse them. Compounds are 1:1 (singleton lists). The fused ETS
+  # specs guard/carry the value opaquely (never inspect it), so the list rides through untouched.
 
-  @typedoc "A CSS-match protoset: current-element ref → the selector leaf's ref."
-  @type protoset :: %{optional(reference()) => reference()}
+  @typedoc "A CSS-match protoset: current-element ref → the leaf refs reachable through it."
+  @type protoset :: %{optional(reference()) => [reference()]}
 
-  @doc "Seed a protoset from ids: `%{ref => ref}` (at the subject stage, current == leaf)."
+  @doc "Seed a protoset from ids: `%{ref => [ref]}` (at the subject stage, current == its own leaf)."
   @spec seed([reference()]) :: protoset()
-  def seed(ids), do: Map.new(ids, &{&1, &1})
+  def seed(ids), do: Map.new(ids, &{&1, [&1]})
 
   @doc "Keep the protoset entries whose KEY satisfies `fun` (value preserved)."
   @spec filter_protoset(protoset(), (reference() -> boolean())) :: protoset()
@@ -62,12 +63,12 @@ defmodule DOM.CSS.Query do
 
   @typep ext ::
            {start :: binary(), id :: reference(), stop :: binary(), parent :: reference() | nil,
-            root :: reference(), leaf_ref :: reference()}
+            root :: reference(), leaves :: [reference()]}
 
   @doc """
-  Resolve a protoset to `{start, id, stop, parent, root, leaf_ref}` tuples in **start-key
+  Resolve a protoset to `{start, id, stop, parent, root, leaves}` tuples in **start-key
   (document) order**: one ordered `:start`-span scan (start/root/parent free from the row key,
-  leaf_ref from the protoset value), then `stop` joined from the records in one bulk select.
+  the leaf LIST from the protoset value), then `stop` joined from the records in one bulk select.
   `elements_only?` restricts to element rows (sibling combinators).
   """
   @spec resolve_extents(DOM.CSS.context(), protoset(), boolean()) :: [ext()]
@@ -77,33 +78,42 @@ defmodule DOM.CSS.Query do
       |> NodesTable.records_of(protoset)
       |> Map.new(fn {id, record} -> {id, record.stop} end)
 
-    for {start, root, parent, id, leaf_ref} <-
+    for {start, root, parent, id, leaves} <-
           IndexTable.span_starts(index, protoset, elements_only?) do
-      {start, id, Map.fetch!(stops, id), parent, root, leaf_ref}
+      {start, id, Map.fetch!(stops, id), parent, root, leaves}
     end
+  end
+
+  # Fold `{key, leaves}` pairs into `%{key => concatenated_leaves}` — the one-to-many merge
+  # that makes a combinator join keep ALL leaves reaching a shared current element (`into: %{}`
+  # would overwrite). Leaf-list dupes are harmless (the final result is order-filtered).
+  defp merge_pairs(pairs) do
+    Enum.reduce(pairs, %{}, fn {key, leaves}, acc ->
+      Map.update(acc, key, leaves, &(leaves ++ &1))
+    end)
   end
 
   @doc """
   Containment join over start-sorted extents: a subject matches when some LEFT window (same
   `root`) strictly contains it (`left.start < subject.start and subject.stop < left.stop`).
   `projection` is `:subject` (key = subject id, the final step) or `:current` (key = the
-  containing left id, feeding the next leftward step). The value is always the subject's leaf_ref.
+  containing left id, feeding the next leftward step). The value is always the subject's leaves.
   """
   @spec resolve_descendants([ext()], [ext()], :subject | :current) :: protoset()
   def resolve_descendants(left_ext, subject_ext, projection) do
     # left windows grouped by root; sorted by start so the containment test is a scan.
     left_by_root = Enum.group_by(left_ext, fn {_s, _id, _stop, _p, root, _l} -> root end)
 
-    for {s_start, s_id, s_stop, _s_parent, s_root, leaf} <- subject_ext,
+    for {s_start, s_id, s_stop, _s_parent, s_root, leaves} <- subject_ext,
         {l_start, l_id, l_stop, _l_parent, _l_root, _l_leaf} <-
           Map.get(left_by_root, s_root, []),
-        l_start < s_start and s_stop < l_stop,
-        into: %{} do
+        l_start < s_start and s_stop < l_stop do
       case projection do
-        :subject -> {s_id, leaf}
-        :current -> {l_id, leaf}
+        :subject -> {s_id, leaves}
+        :current -> {l_id, leaves}
       end
     end
+    |> merge_pairs()
   end
 
   @doc """
@@ -114,14 +124,14 @@ defmodule DOM.CSS.Query do
   def resolve_child(left_ext, subject_ext, projection) do
     left_ids = MapSet.new(left_ext, fn {_s, id, _stop, _p, _r, _l} -> id end)
 
-    for {_s_start, s_id, _s_stop, s_parent, _s_root, leaf} <- subject_ext,
-        s_parent != nil and MapSet.member?(left_ids, s_parent),
-        into: %{} do
+    for {_s_start, s_id, _s_stop, s_parent, _s_root, leaves} <- subject_ext,
+        s_parent != nil and MapSet.member?(left_ids, s_parent) do
       case projection do
-        :subject -> {s_id, leaf}
-        :current -> {s_parent, leaf}
+        :subject -> {s_id, leaves}
+        :current -> {s_parent, leaves}
       end
     end
+    |> merge_pairs()
   end
 
   @doc """
@@ -136,15 +146,15 @@ defmodule DOM.CSS.Query do
         Map.update(acc, l_parent, {l_start, l_id}, &min(&1, {l_start, l_id}))
       end)
 
-    for {s_start, s_id, _s_stop, s_parent, _s_root, leaf} <- subject_ext,
+    for {s_start, s_id, _s_stop, s_parent, _s_root, leaves} <- subject_ext,
         {l_start, l_id} = Map.get(min_left, s_parent, {nil, nil}),
-        l_start != nil and l_start < s_start,
-        into: %{} do
+        l_start != nil and l_start < s_start do
       case projection do
-        :subject -> {s_id, leaf}
-        :current -> {l_id, leaf}
+        :subject -> {s_id, leaves}
+        :current -> {l_id, leaves}
       end
     end
+    |> merge_pairs()
   end
 
   @doc """
@@ -161,15 +171,15 @@ defmodule DOM.CSS.Query do
         {parent, Enum.sort_by(exts, fn {start, _id, _stop, _p, _r, _l} -> start end)}
       end)
 
-    for {s_start, s_id, _s_stop, s_parent, _s_root, leaf} <- subject_ext,
+    for {s_start, s_id, _s_stop, s_parent, _s_root, leaves} <- subject_ext,
         pred = preceding_element(Map.get(left_by_parent, s_parent, []), s_start),
-        pred != nil,
-        into: %{} do
+        pred != nil do
       case projection do
-        :subject -> {s_id, leaf}
-        :current -> {pred, leaf}
+        :subject -> {s_id, leaves}
+        :current -> {pred, leaves}
       end
     end
+    |> merge_pairs()
   end
 
   # The id of the left element with the greatest start strictly < `s_start` (the immediately
