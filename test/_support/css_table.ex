@@ -19,7 +19,12 @@ defmodule CSSTable do
   """
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
+  alias DOM.NodeData.IndexTable
+
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
 
   @doc """
   Describes an element node. `attributes` is a list of `{name, value}` tuples.
@@ -55,9 +60,22 @@ defmodule CSSTable do
     {_next, ids, kids} = insert(table, root, nil, 0, %{}, %{})
     # Carve nested-set extents over the built tree (adjacency the matcher reads
     # comes from these + their span rows) — the shape DOM.CSS.match/3 expects.
-    carve_extents(table, kids, Map.fetch!(ids, 0), Map.fetch!(ids, 0), nil, <<0x00>>, <<0x80>>)
-    Table.reindex(table, index)
-    Table.span_index_all(table, index)
+    carve_extents(
+      table,
+      kids,
+      Map.fetch!(ids, 0),
+      Map.fetch!(ids, 0),
+      nil,
+      @root_start,
+      @root_stop
+    )
+
+    # mirror span rows (from extents) and membership rows (tag/id/class) for every element.
+    DOM.NodeData.span_index_all(table, index)
+
+    for {id, %NodeData.Element{} = element} <- :ets.tab2list(table),
+        do: IndexTable.index_put(index, id, element)
+
     {%{nodes: table, index: index}, ids}
   end
 
@@ -72,13 +90,19 @@ defmodule CSSTable do
 
     :ets.insert(
       table,
-      {id,
-       %NodeData.Element{
-         local_name: node.local_name,
-         namespace: node.namespace,
-         attributes: node.attributes,
-         parent: parent_id
-       }}
+      {
+        id,
+        # extent is placeholder (root: id, root window) — carve_extents overwrites it.
+        %NodeData.Element{
+          local_name: node.local_name,
+          namespace: node.namespace,
+          attributes: node.attributes,
+          parent: parent_id,
+          root: id,
+          start: @root_start,
+          stop: @root_stop
+        }
+      }
     )
 
     ids = Map.put(ids, index, id)
@@ -88,7 +112,19 @@ defmodule CSSTable do
 
   defp insert(table, %{kind: :text} = node, parent_id, index, ids, kids) do
     id = make_ref()
-    :ets.insert(table, {id, %NodeData.Text{value: node.value, parent: parent_id}})
+    # extent is placeholder (root: id, root window) — carve_extents overwrites it.
+    :ets.insert(
+      table,
+      {id,
+       %NodeData.Text{
+         value: node.value,
+         parent: parent_id,
+         root: id,
+         start: @root_start,
+         stop: @root_stop
+       }}
+    )
+
     {index + 1, Map.put(ids, index, id), kids}
   end
 
@@ -112,7 +148,7 @@ defmodule CSSTable do
     kids
     |> Map.get(id, [])
     |> Enum.reduce(start, fn child, prev ->
-      {cstart, cstop} = Table.interval(prev, stop)
+      {cstart, cstop} = Extent.interval(prev, stop)
       carve_extents(table, kids, child, root, id, cstart, cstop)
       cstop
     end)

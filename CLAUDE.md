@@ -36,14 +36,42 @@ Partition by **scope** (Elixir "first argument owns the function"):
   `Node.clone_node/2`. Fail-fast `type`-guard clauses live here (e.g. appending
   to a `:text` node raises without a server round-trip).
 - **Element-intrinsic operations → `DOM.Element`.** Apply only to elements:
-  `Element.local_name/1` and the attribute API (`get_attribute`, `set_attribute`,
-  `has_attribute`, `remove_attribute`, `get_attribute_names`). Each is guarded on
+  `Element.local_name/1`, the attribute API (`get_attribute`, `set_attribute`,
+  `has_attribute`, `remove_attribute`, `get_attribute_names`, plus the Attr-node
+  variants `get_attribute_node`/`set_attribute_node`/`remove_attribute_node`), and
+  the Element-scoped query surface `Element.query_selector`/`query_selector_all` and
+  `Element.matches` (matches is Element-only in the DOM). Each is guarded on
   `%DOM.Node{type: :element}`, so calling it on a non-element fails fast.
-- **Whole-document / query operations → `DOM`.** `DOM` is the **context module**
-  and the GenServer. Node creation (`DOM.new`, `DOM.create_element(document,
-  "div")`, `create_*`) and tree queries that take any node as scope
-  (`get_element_by_id`, `get_elements_by_tag_name`, `query_selector`,
-  `query_selector_all`, `matches`) live here.
+- **`querySelector` is a `ParentNode` method — one scope module per node kind.**
+  Because it sits on Document, Element, DocumentFragment, and ShadowRoot in the DOM,
+  each has its own `type`-guarded `query_selector`/`query_selector_all`:
+  `DOM.query_selector` (`:document`), `Element.query_selector` (`:element`),
+  `DOM.DocumentFragment.query_selector` (`:document_fragment`), and
+  `DOM.ShadowRoot.query_selector` (`:shadow_root`). All delegate to the shared,
+  scope-agnostic `DOM._query_selector`/`_query_selector_all`/`_matches` bridges
+  (selector parsed in the caller's process, then one server op). A mis-scoped call
+  fails fast on the guard. `Attr` is a real `%DOM.Node{type: :attr}` handle
+  (`node_id: {element_id, key}`, no `NodeData` record) — see the Attr note below.
+- **Whole-document operations → `DOM`.** `DOM` is the **context module** and the
+  GenServer. Node creation (`DOM.new`, `DOM.create_element(document, "div")`,
+  `create_*`, `DOM.create_attribute`), tree queries that take any node as scope
+  (`get_element_by_id`, `get_elements_by_tag_name`), and the document-scoped
+  `DOM.query_selector`/`query_selector_all` live here. Also
+  **`DOM.create_tree_walker/3`** and **`DOM.create_node_iterator/3`** (the DOM
+  traversal objects) — see the TreeWalker / NodeIterator note below.
+
+**TreeWalker / NodeIterator (implemented).** `DOM.create_tree_walker(root, what_to_show
+\\ :all, filter \\ nil)` / `create_node_iterator(...)` return `%DOM.TreeWalker{server,
+ref}` / `%DOM.NodeIterator{server, ref}` handles whose mutable state lives server-side in
+`{:traversal, ref}` index rows (so the handle stays valid as the cursor advances, like a
+Range). `what_to_show` is `:all` (default), a node-type atom (`:element`/`:text`/…), a
+list, or a raw bitmask; `filter` is a `(DOM.Node.t() -> :accept | :skip | :reject)` run
+in-server (re-entrant). The shared **`DOM.Traversal`** engine (`lib/dom/_traversal.ex`)
+does the document-order stepping: TreeWalker's `next_node` **excludes the root** and
+`:reject` **prunes the whole subtree**; NodeIterator **includes the root**, has no subtree
+pruning, and its reference node is **live-adjusted on node removal** (`adjust_node_iterators`
+hooked in `remove_child_op`, like `adjust_ranges`) so iteration survives removals.
+Browser-verified (`test/integration/traversal_test.exs`).
 
 **Three call layers (the `_` prefix).** A handle is opaque data; `DOM.Node` /
 `DOM.Element` forward through the `DOM` server. Every operation flows:
@@ -238,21 +266,34 @@ with `href`), `:read-write`/`:read-only` (**contenteditable inherited via the
 ancestor walk**, honoring `contenteditable=false`). Verified against the
 Chromium+Firefox oracle (`query_selector_test.exs`, `derivable_pseudo_test.exs`).
 
-**Deferred — intended to be implemented:**
+**Interaction / form-state pseudo-classes — IMPLEMENTED** (see the interaction-state
+sections below and near the events docs): `:focus`/`:focus-visible`/`:focus-within`,
+`:hover`/`:active`, `:target`, user-toggled `:checked` (checkedness property),
+`:indeterminate` (checkbox property / radio group / progress), `:open`
+(`details`/`dialog`), `:any-link`, `:placeholder-shown`, and the constraint-validation
+set `:valid`/`:invalid`/`:in-range`/`:out-of-range`. Each reads a document/element state
+singleton or is attribute-derivable; all browser-verified.
 
-- **`:dir(auto)`** — needs bidi resolution of element text, which `NodeData` does
-  not model; stays match-nothing.
-- **Interaction/navigation-state pseudo-classes** — `:hover`, `:focus`, `:active`,
-  `:focus-visible`, `:focus-within`, user-toggled `:checked`, `:indeterminate`,
-  `:valid`, `:visited`, `:target`, `:current`, … These depend on input/focus
-  state, HTML element state machines, or navigation/history — **none of which
-  `NodeData` models today**. **We DO want to support these**, which will require
-  modeling that state (an input/focus model, HTML element interfaces, a
-  navigation/URL model — downstream of Events / a state layer). Until then they
-  are unmatchable.
-- **Policy for unmodelable pseudo-classes** (decide when building `match/3`):
-  prefer **match-nothing** over raising — that mirrors browser `querySelector`,
-  where e.g. `:hover` simply returns no elements rather than erroring.
+**Out of scope — need a whole subsystem a DOM library doesn't have** (these stay
+**match-nothing**, mirroring browser `querySelector` which returns no elements rather
+than erroring):
+
+- **`:visited`** / **`:current`** / **`:local-link`** — navigation/history/URL state
+  (Dominique has a fragment model for `:target` but no visited-history or live URL).
+- **`:playing`** / **`:paused`** / **`:seeking`** / **`:muted`** / **`:volume-locked`** —
+  `HTMLMediaElement` playback state (no media engine).
+- **`:modal`** / **`:fullscreen`** / **`:picture-in-picture`** / **`:popover-open`** —
+  rendering/presentation state (no layout/rendering engine or top-layer model).
+- **`:autofill`** / **`:user-invalid`** / **`:user-valid`** / **`:blank`** — user-agent
+  interaction state (autofill; user-has-edited-and-blurred) not modeled.
+- **`:dir(auto)`** — needs bidi resolution of element text, which `NodeData` does not
+  model (`:dir(ltr|rtl)` from the inherited attribute IS implemented).
+- **Finer constraint validation** — `step` mismatch, `minlength`/`maxlength` under live
+  editing, `type=number` `badInput`. The common constraints (required/type/pattern/range)
+  are implemented; these edge constraints need a live-value/editing model.
+
+**Policy for unmodelable pseudo-classes:** prefer **match-nothing** over raising (a
+`querySelector(":playing")` returns `[]`, it does not error).
 
 ## Shadow DOM (structural, Event-free)
 
@@ -303,14 +344,138 @@ fork); an in-flight event's mutable state lives in a ref-keyed `:active_event` r
 (`lib/dom/_events.ex`). Verified against the Chromium+Firefox oracle
 (`test/integration/event_test.exs`).
 
-**Deferred (need a microtask/event-loop model):** `slotchange` is dispatched
-**asynchronously as a microtask** (verified against both browsers — it fires *after*
-the mutation, not during), so it is blocked on a scheduling layer Dominique does not
-model yet. The same layer is the natural home for `MutationObserver` and
-custom-element reactions. Also still deferred: imperative `slot.assign()`
-(manual slotting), and default actions / interaction & navigation state (`:hover`,
-`:focus`, form submission, checkbox toggle, `preventDefault` actually suppressing
-anything — `preventDefault` currently only sets the flag `dispatchEvent` returns).
+**Microtasks (implemented):** the microtask/event-loop layer is built. A one-shot
+FIFO `{:microtask, seq}` index-row queue; `DOM._enqueue_microtask/2` is dual (like
+`_atomic_ets_op`). The checkpoint is `handle_continue(:drain_microtasks)` — it runs
+before the mailbox is read, so it is **uninterruptible** (a timer/UI task cannot
+preempt it; an infinite microtask loop freezes the "tab", matching WHATWG). A DOM
+mutation marks its op `_atomic_ets_op(server, op, :mutates)` so the outer call
+attaches the checkpoint; a re-entrant (`server == self()`) frame never drains — it
+enqueues and inherits the outer frame's checkpoint. `check_consistency!` asserts the
+queue is empty outside a drain. A raising microtask crashes the document server, by
+design (see `README.md`). Two customers are built on it:
+
+- **`slotchange`** — `Slots.recompute` diffs each slot's assigned nodes and returns the
+  changed slots; a slotchange microtask is enqueued once per slot per task (guarded by
+  a `{:signaled_slot, slot_id}` row), dispatched `bubbles:true composed:false` at the
+  slot. Browser-verified (`test/integration/slotchange_test.exs`).
+- **`MutationObserver`** (`DOM.MutationObserver` / `DOM.MutationRecord`) — registry +
+  per-observer record queue as index rows; records are emitted at each `:mutates` site
+  (childList with prev/next siblings, attributes with oldValue by before/after diff,
+  characterData with oldValue). One "notify mutation observers" microtask per task
+  batches each observer's records into a single callback. `observe`/`disconnect`/
+  `take_records`; `subtree`/`attributeFilter`/`*OldValue` options. Browser-verified
+  (`test/integration/mutation_observer_test.exs`).
+
+**Timer tasks (implemented — the task half of the event loop):** `DOM.set_timeout/3`,
+`clear_timeout/2`, `set_interval/3`, `clear_interval/2`, `queue_microtask/2` (the public
+HTML `queueMicrotask`). These are HTML `WindowOrWorkerGlobalScope` methods, NOT DOM
+proper — Dominique has no `Window`, so they live on `DOM` as a documented convenience
+(the document server already owns the event loop). A timer is a `{:timer, ref}` index
+row `{kind, callback, tref}` (`kind` = `:timeout | :interval`). `set_timeout` uses
+`Process.send_after(server, {:run_timer, ref}, delay)`; `set_interval` uses
+`:timer.send_interval` (self-repeating). `handle_info({:run_timer, ref})` runs the
+callback if the row is still present (the row is the source of truth — a cleared/outraced
+timer is a no-op); a `:timeout` deletes its row, an `:interval` keeps it; both then
+return `{:continue, :drain_microtasks}` (the timer's trailing checkpoint). `clear_*`
+deletes the row + cancels (`Process.cancel_timer` / `:timer.cancel`). A `:timer` row
+legitimately persists across `check_consistency!` (a scheduled timer lives in the BEAM
+timer wheel — unlike a `:microtask` row, whose presence means a skipped checkpoint).
+Browser-verified task-vs-microtask ordering + interval repeat/clear
+(`test/integration/timer_test.exs`).
+
+**Custom elements (implemented):** `DOM.define_element/3` (`customElements.define`) +
+`DOM.custom_element_get/2`; a definition is a `DOM.CustomElementDefinition` struct of
+callbacks (`constructed`/`connected`/`disconnected`/`attribute_changed`/`adopted`) +
+`observed_attributes`. The registry (`{:custom_element_def, name}` index row) is used
+only to *find* a definition at `create`/`define`; **an UPGRADED element carries its
+definition on its own record** (the `definition` field on `DOM.NodeData.Element`, nil =
+undefined). This is the browser's model — the definition rides the element, so it
+survives cross-document adoption. `:defined` = a built-in name OR `definition != nil`.
+
+**Reactions run SYNCHRONOUSLY** — unlike slotchange/MutationObserver, the browser runs
+`connectedCallback` DURING `appendChild`, so the callbacks are invoked INLINE at the end
+of each triggering op (`create` → `constructed`, `append`/`insert` → `connected` in tree
+order if the parent is connected, `remove` → `disconnected`, `set_attribute` →
+`attribute_changed` for observed attrs, fired on **every** set even to the same value —
+via the `changed_name` threaded into `Element.update_attributes`). Reactions read the
+element's carried `definition`, not a registry lookup. `define_element` upgrades existing
+matching elements whose `definition` is still nil (`constructed` → `attribute_changed`
+per existing observed attr → `connected`); a later `define` never re-upgrades an
+already-upgraded element. Redefining a name raises `DOM.NotSupportedError` (error tuple
+raised caller-side, per the in-server convention).
+
+**`adoptedCallback`** fires on cross-document `adopt_node/2`: the source server fires
+`disconnected` for the (formerly connected) subtree before removing it, then the
+destination fires `adopted(element, old_document, new_document)`. Because the definition
+rides the element record through `_export_subtree`/`materialize_subtree`, this is
+fully browser-faithful — an element adopted into a document that never registered its
+name still fires `adopted`/`connected` and stays `:defined` (a same-document adopt fires
+nothing). Browser-verified lifecycle + upgrade
+(`test/integration/custom_element_test.exs`) AND the adopt-into-undefined-destination
+case (`test/integration/custom_element_adopted_test.exs`).
+
+**Imperative slotting (implemented):** `DOM.Slot.assign(slot, nodes)` (the HTML
+`slot.assign(...)`) for a shadow root in **manual** slot-assignment mode. Mode is set at
+`Element.attach_shadow(el, mode, slot_assignment: :manual)` (default `:named`), stored on
+the `ShadowRoot` record. A `<slot>`'s manual assignment is the `manual_assigned` field on
+its `NodeData.Element` (an ordered node-id list — the only thing ever queried is the id,
+so a field beats an index row). `Slots.recompute` branches on the host shadow's mode:
+`:named` = attribute matching (`assign_named`, unchanged); `:manual` = each slot's
+`manual_assigned` ∩ host children, in order (`assign_manual`). `Slot.assign` rewrites the
+field, recomputes, and signals `slotchange`. Browser-verified
+(`test/integration/slot_assign_test.exs`).
+
+**Focus (implemented — the first interaction-state piece):** a document-level active
+element. `DOM.Node.focus/1` / `blur/1` (HTML `element.focus()`/`blur()`) and
+`DOM.active_element/1` (`document.activeElement`, defaulting to `<body>` /
+documentElement). Stored as a single `{:active_element} → node_id` index row. `focus`
+sets it only when the target is **focusable** (`a[href]`/`area[href]`/`button`/`select`/
+`textarea`/`input`-except-`type=hidden`, or any element with `tabindex`; none disabled)
+AND **connected** (`.root == document_id`); otherwise it is a no-op. `blur` clears it
+only if the element is the active one. The `:focus` / `:focus-visible` (aliased — no
+keyboard/mouse distinction modeled) and `:focus-within` (active element or any ancestor)
+pseudo-classes read the row. **Focus events fire** on a focus move: `focus`/`focusin` on
+the new element and `blur`/`focusout` on the old, in the order blur-pair-then-focus-pair
+(`blur@old`, `focusout@old`, `focus@new`, `focusin@new`); `focus`/`blur` are
+`bubbles:false composed:true`, `focusin`/`focusout` `bubbles:true composed:true`, all
+non-cancelable. `relatedTarget` is the other element (`DOM.Event` gained a
+`related_target` field). Dispatched synchronously via the existing `Events.dispatch`.
+Re-focusing the active element fires nothing. Browser-verified
+(`test/integration/focus_test.exs`, `test/integration/focus_event_test.exs`).
+
+**`:target` / `:hover` / `:active` (implemented):** more matchable interaction state,
+each a document-level singleton index row read by its pseudo-class. `:target` = the
+"indicated part": `DOM.set_fragment(doc, "foo")` (nil/"" clears) sets a `{:fragment}`
+row; `:target` matches the element whose `id == fragment` (resolved document-wide, id
+index first) or an `<a name=…>` when no id matches (case-sensitive, id precedence).
+`:hover`/`:active` = pointer state: `DOM.set_hover(el)`/`set_active(el)` +
+`clear_hover/1`/`clear_active/1` set `{:hover}`/`{:active}` rows; both match the target
+**and all its ancestors** (the "hover chain"), sharing `ancestor_chain_match` with
+`:focus-within`. These are convenience setters (Dominique has no URL/pointer input). No
+oracle tests — the browser drives them from navigation / real pointer input (headless
+does not even reflect `:hover` via synthetic mouse moves), and the semantics are
+spec-unambiguous; unit-tested instead.
+
+**Default actions (implemented — `preventDefault` now suppresses):** dispatching an
+event runs its **default action** after the phases, gated on `not default_prevented` —
+so `preventDefault` in a listener actually cancels the action (both dispatch paths funnel
+through `dispatch_with_default`). The first action: a **`click` on a checkbox/radio
+toggles its checkedness**. Checkedness is a **property distinct from the `checked`
+attribute** (WHATWG's checkedness + dirty-flag, compressed into the `checked` override
+field on `NodeData.Element`: `nil` = clean, use the attribute; `true`/`false` = dirty,
+user-toggled — the attribute is left untouched). `:checked` reads override-else-attribute
+(`input_checkedness`), so it is now user-toggleable. A checkbox toggles; a radio sets true
+and clears the rest of its `name` group. Non-cancelable clicks still toggle;
+`dispatch_event` returns `false` when prevented. Browser-verified
+(`test/integration/default_action_test.exs`). (Broader activation behavior — links
+navigate, forms submit, `<details>` toggles — is not modeled yet.)
+
+Also implemented as activation behaviors: a **`<summary>` click toggles its parent
+`<details>`'s `open` attribute** (with the `:open` pseudo for `details`/`dialog`), and a
+**checkbox click clears its `indeterminate`**. **Deferred activation:** link navigation
+and form submission (both need a navigation/submission model), and other element
+activations.
 
 ## Before finishing any change
 

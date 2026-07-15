@@ -6,7 +6,7 @@ defmodule DOM.Case do
   Use `new_document/0,1` instead of `DOM.new/0,1`: it starts the document server
   UNLINKED (so it outlives the test process and is still alive in `on_exit`,
   unlike a linked or `start_supervised!` server, which is torn down first) and
-  registers an `on_exit` hook that asserts `DOM.NodeData.Table.check_consistency!/2`
+  registers an `on_exit` hook that asserts `DOM.NodeData.check_consistency!/2`
   then stops the server — every id-index and adjacency invariant holds at the end
   of the test. A violation fails the test that caused it, turning any missed
   index-maintenance path or dangling tree pointer into a loud, local failure.

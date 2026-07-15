@@ -19,20 +19,20 @@ defmodule DOM.CSS.DerivablePseudoTest do
     end
 
     test "an element inside a contenteditable=true ancestor is :read-write", %{doc: doc} do
-      assert DOM.matches(DOM.query_selector(doc, "#inherit"), ":read-write")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#inherit"), ":read-write")
     end
 
     test "a contenteditable=false ancestor blocks inheritance", %{doc: doc} do
-      refute DOM.matches(DOM.query_selector(doc, "#blocked"), ":read-write")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#blocked"), ":read-write")
     end
 
     test "an element with no contenteditable ancestor is not :read-write", %{doc: doc} do
-      refute DOM.matches(DOM.query_selector(doc, "#outside"), ":read-write")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#outside"), ":read-write")
     end
 
     test "the contenteditable host itself is :read-write", %{doc: doc} do
       host = DOM.query_selector(doc, "div[contenteditable='true']")
-      assert DOM.matches(host, ":read-write")
+      assert DOM.Element.matches(host, ":read-write")
     end
   end
 
@@ -51,18 +51,18 @@ defmodule DOM.CSS.DerivablePseudoTest do
     end
 
     test "the first submit-capable control in the form is :default", %{doc: doc} do
-      assert DOM.matches(DOM.query_selector(doc, "#b1"), ":default")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#b1"), ":default")
     end
 
     test "later submit controls are not :default", %{doc: doc} do
-      refute DOM.matches(DOM.query_selector(doc, "#b2"), ":default")
-      refute DOM.matches(DOM.query_selector(doc, "#i1"), ":default")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#b2"), ":default")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#i1"), ":default")
     end
 
     test "an input[type=submit] is the default when it is first" do
       doc = new_document("<form><input id='s' type='submit'><button id='b'>x</button></form>")
-      assert DOM.matches(DOM.query_selector(doc, "#s"), ":default")
-      refute DOM.matches(DOM.query_selector(doc, "#b"), ":default")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#s"), ":default")
+      refute DOM.Element.matches(DOM.query_selector(doc, "#b"), ":default")
     end
 
     test "the already-handled checked-input / selected-option cases still match" do
@@ -71,8 +71,8 @@ defmodule DOM.CSS.DerivablePseudoTest do
           "<input type='checkbox' id='c' checked><select><option id='o' selected></option></select>"
         )
 
-      assert DOM.matches(DOM.query_selector(doc, "#c"), ":default")
-      assert DOM.matches(DOM.query_selector(doc, "#o"), ":default")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#c"), ":default")
+      assert DOM.Element.matches(DOM.query_selector(doc, "#o"), ":default")
     end
   end
 end

@@ -11,7 +11,7 @@ defmodule DOM.Element do
 
   alias DOM.Node
   alias DOM.NodeData.Element
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
 
   @doc "The element's local name, or `nil` for a non-element node."
   @spec local_name(Node.t()) :: String.t() | nil
@@ -49,9 +49,11 @@ defmodule DOM.Element do
   `:closed`. Raises `DOM.NotSupportedError` if the element already has a shadow
   root or is not a valid shadow host.
   """
-  @spec attach_shadow(Node.t(), :open | :closed) :: Node.t()
-  def attach_shadow(%Node{type: :element} = element, mode) when mode in [:open, :closed] do
-    DOM._element_attach_shadow(element.server, element.node_id, mode)
+  @spec attach_shadow(Node.t(), :open | :closed, keyword()) :: Node.t()
+  def attach_shadow(%Node{type: :element} = element, mode, opts \\ [])
+      when mode in [:open, :closed] do
+    slot_assignment = Keyword.get(opts, :slot_assignment, :named)
+    DOM._element_attach_shadow(element.server, element.node_id, mode, slot_assignment)
   end
 
   @doc """
@@ -79,6 +81,19 @@ defmodule DOM.Element do
     Enum.any?(attributes(element), fn {key, _v} -> Element.matches_key?(key, name) end)
   end
 
+  @doc """
+  The attribute (by qualified name) as an `Attr` node handle (`%DOM.Node{type: :attr}`),
+  or `nil` when absent. The handle references `{element_id, key}` and resolves live — its
+  `attr_value` reflects later `set_attribute` calls on this element.
+  """
+  @spec get_attribute_node(Node.t(), String.t()) :: Node.t() | nil
+  def get_attribute_node(%Node{type: :element} = element, name) do
+    case Enum.find(attributes(element), fn {key, _v} -> Element.matches_key?(key, name) end) do
+      {key, _value} -> %Node{server: element.server, node_id: {element.node_id, key}, type: :attr}
+      nil -> nil
+    end
+  end
+
   @doc "The element's attribute qualified names, in insertion order."
   @spec get_attribute_names(Node.t()) :: [String.t()]
   def get_attribute_names(%Node{type: :element} = element) do
@@ -93,15 +108,67 @@ defmodule DOM.Element do
   """
   @spec set_attribute(Node.t(), String.t(), String.t()) :: :ok
   def set_attribute(%Node{type: :element} = element, name, value) do
-    update_attributes(element, &put_by_qualified_name(&1, name, value))
+    update_attributes(element, &put_by_qualified_name(&1, name, value), name)
   end
 
   @doc "Removes an attribute by qualified name (a no-op when absent)."
   @spec remove_attribute(Node.t(), String.t()) :: :ok
   def remove_attribute(%Node{type: :element} = element, name) do
-    update_attributes(element, fn attrs ->
-      Enum.reject(attrs, fn {key, _v} -> Element.matches_key?(key, name) end)
-    end)
+    update_attributes(
+      element,
+      fn attrs -> Enum.reject(attrs, fn {key, _v} -> Element.matches_key?(key, name) end) end,
+      name
+    )
+  end
+
+  @doc false
+  # Set the value of an attribute by its VERBATIM key (a plain string or a
+  # {prefix, local, url} triple), updating in place if present, else appending. Backs
+  # the Attr-node value write-through (`DOM.Node.set_attr_value/2`), which already
+  # holds the exact key — so no qualified-name reparse.
+  @spec set_attribute_by_key(Node.t(), Element.attr_key(), String.t()) :: :ok
+  def set_attribute_by_key(%Node{type: :element} = element, key, value) do
+    changed = if is_binary(key), do: key, else: Element.qualified_name(key)
+    update_attributes(element, &put_by_key(&1, key, value), changed)
+  end
+
+  # Update the value under the exact `key`, or append `{key, value}` when absent.
+  defp put_by_key(attrs, key, value) do
+    if List.keymember?(attrs, key, 0) do
+      List.keyreplace(attrs, key, 0, {key, value})
+    else
+      attrs ++ [{key, value}]
+    end
+  end
+
+  @doc """
+  Attach an `Attr` node (`DOM.Node.attr`) to this element (HTML `setAttributeNode`) — its
+  key/value are written onto the element (replacing any attribute with the same key).
+  """
+  @spec set_attribute_node(Node.t(), Node.attr()) :: :ok
+  def set_attribute_node(%Node{type: :element} = element, %Node{type: :attr} = attr) do
+    set_attribute_by_key(element, Node.attr_key(attr), Node.attr_value(attr))
+  end
+
+  @doc """
+  Detach an `Attr` node from this element (HTML `removeAttributeNode`) — returns the
+  attr as an UNOWNED handle carrying its (last) value, so it stays readable after removal.
+  """
+  @spec remove_attribute_node(Node.t(), Node.attr()) :: Node.attr()
+  def remove_attribute_node(%Node{type: :element} = element, %Node{type: :attr} = attr) do
+    key = Node.attr_key(attr)
+    value = Node.attr_value(attr)
+    changed = if is_binary(key), do: key, else: Element.qualified_name(key)
+    update_attributes(element, fn attrs -> List.keydelete(attrs, key, 0) end, changed)
+    %Node{server: element.server, node_id: {nil, key, value}, type: :attr}
+  end
+
+  # The plain-string-keyed value for `name` in an attribute list, or nil.
+  defp attr_value(attrs, name) do
+    case Enum.find(attrs, fn {key, _v} -> key == name end) do
+      {_key, value} -> value
+      nil -> nil
+    end
   end
 
   # Update the value of the attribute whose key matches `name` (preserving that
@@ -126,6 +193,18 @@ defmodule DOM.Element do
   def get_attribute_ns(%Node{type: :element} = element, url, local) do
     case Enum.find(attributes(element), &ns_key_matches?(&1, url, local)) do
       {_key, value} -> value
+      nil -> nil
+    end
+  end
+
+  @doc """
+  The attribute with namespace `url` and local name `local` as an `Attr` node handle
+  (`%DOM.Node{type: :attr}`), or `nil`. The namespaced counterpart of `get_attribute_node/2`.
+  """
+  @spec get_attribute_node_ns(Node.t(), String.t() | nil, String.t()) :: Node.t() | nil
+  def get_attribute_node_ns(%Node{type: :element} = element, url, local) do
+    case Enum.find(attributes(element), &ns_key_matches?(&1, url, local)) do
+      {key, _value} -> %Node{server: element.server, node_id: {element.node_id, key}, type: :attr}
       nil -> nil
     end
   end
@@ -201,7 +280,7 @@ defmodule DOM.Element do
   @doc "The nearest inclusive ancestor of `element` matching `selector`, or `nil`."
   @spec closest(Node.t(), String.t()) :: Node.t() | nil
   def closest(%Node{type: :element} = element, selector) do
-    if DOM.matches(element, selector) do
+    if matches(element, selector) do
       element
     else
       case Node.parent_node(element) do
@@ -261,20 +340,41 @@ defmodule DOM.Element do
 
   # Atomically reads the record, applies `fun` to its attribute list, and writes
   # the updated record back — a single server hop so no operation interleaves.
-  defp update_attributes(%Node{node_id: node_id} = element, fun) do
-    DOM._atomic_ets_op(element.server, fn nodes, index ->
-      [{^node_id, record}] = :ets.lookup(nodes, node_id)
-      updated = %{record | attributes: fun.(record.attributes)}
-      :ets.insert(nodes, {node_id, updated})
-      Table.index_put(index, node_id, updated)
-      # A slot= (light child) or name= (a <slot>) change re-slots — recompute the
-      # affected shadow host's assignment.
-      if host = DOM.NodeData.Slots.affected_host(nodes, node_id) do
-        DOM.NodeData.Slots.recompute(nodes, index, host)
-      end
+  # `changed_name` (a plain qualified name, or nil for the namespaced paths) is the
+  # attribute the caller set/removed — passed so the custom-element attributeChanged
+  # reaction can fire for exactly that name (it fires on every observed set, even to
+  # the same value, unlike the MutationObserver record which only logs real changes).
+  defp update_attributes(%Node{node_id: node_id} = element, fun, changed_name \\ nil) do
+    DOM._atomic_ets_op(
+      element.server,
+      fn nodes, index ->
+        [{^node_id, record}] = :ets.lookup(nodes, node_id)
+        before = record.attributes
+        after_attrs = fun.(before)
+        updated = %{record | attributes: after_attrs}
+        :ets.insert(nodes, {node_id, updated})
+        IndexTable.index_put(index, node_id, updated)
+        # A slot= (light child) or name= (a <slot>) change re-slots the affected
+        # shadow host and signals slotchange on any slot whose assignment changed.
+        DOM._recompute_slots(nodes, index, node_id)
+        # MutationObserver: one attributes record per changed attribute name.
+        DOM._queue_attribute_records(nodes, index, node_id, before, after_attrs)
+        # Custom element: attributeChanged for the set/removed name (if observed).
+        if changed_name do
+          DOM._custom_element_attribute_changed(
+            nodes,
+            index,
+            node_id,
+            changed_name,
+            attr_value(before, changed_name),
+            attr_value(after_attrs, changed_name)
+          )
+        end
 
-      :ok
-    end)
+        :ok
+      end,
+      :mutates
+    )
   end
 
   defmatchspecp attributes_spec(node_id) do
@@ -311,4 +411,24 @@ defmodule DOM.Element do
   def set_outer_html(%Node{type: :element} = element, html) do
     DOM._element_set_outer_html(element.server, element.node_id, html)
   end
+
+  @doc """
+  The first descendant of this element matching `selector` (`Element.querySelector`),
+  or `nil`. Scopes to the element's subtree.
+  """
+  @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
+  def query_selector(%Node{type: :element} = element, selector),
+    do: DOM._query_selector(element, selector)
+
+  @doc "All descendants of this element matching `selector`, in document order."
+  @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
+  def query_selector_all(%Node{type: :element} = element, selector),
+    do: DOM._query_selector_all(element, selector)
+
+  @doc """
+  Whether this element matches `selector` (`Element.matches`) — an Element-only
+  operation, evaluated with the element as `:scope`.
+  """
+  @spec matches(Node.t(), String.t()) :: boolean()
+  def matches(%Node{type: :element} = element, selector), do: DOM._matches(element, selector)
 end

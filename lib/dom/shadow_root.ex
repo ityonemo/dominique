@@ -7,7 +7,7 @@ defmodule DOM.ShadowRoot do
   """
 
   alias DOM.Node
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.NodesTable
 
   @doc "The shadow tree serialized as HTML (its children)."
   @spec inner_html(Node.t()) :: String.t()
@@ -29,7 +29,17 @@ defmodule DOM.ShadowRoot do
   @spec mode(Node.t()) :: :open | :closed
   def mode(%Node{type: :shadow_root} = shadow) do
     DOM._atomic_ets_op(shadow.server, fn nodes, _index ->
-      Table.shadow_mode(nodes, shadow.node_id)
+      NodesTable.shadow_mode(nodes, shadow.node_id)
     end)
   end
+
+  @doc "The first node in the shadow subtree matching `selector`, or `nil`."
+  @spec query_selector(Node.t(), String.t()) :: Node.t() | nil
+  def query_selector(%Node{type: :shadow_root} = shadow, selector),
+    do: DOM._query_selector(shadow, selector)
+
+  @doc "All nodes in the shadow subtree matching `selector`, in document order."
+  @spec query_selector_all(Node.t(), String.t()) :: [Node.t()]
+  def query_selector_all(%Node{type: :shadow_root} = shadow, selector),
+    do: DOM._query_selector_all(shadow, selector)
 end

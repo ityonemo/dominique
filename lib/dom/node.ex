@@ -31,9 +31,33 @@ defmodule DOM.Node do
           | :document_type
           | :shadow_root
 
-  @type t :: %__MODULE__{server: GenServer.server(), node_id: reference(), type: node_type()}
+  @type t :: basic() | attr()
+  @type basic :: %__MODULE__{server: GenServer.server(), node_id: reference(), type: node_type()}
+  @type attr_key :: NodeData.Element.attr_key()
+  @type attr :: %__MODULE__{
+          server: GenServer.server(),
+          # OWNED {element_id, key} | UNOWNED {nil, key, value} (createAttribute).
+          node_id: {reference(), attr_key()} | {nil, attr_key(), String.t()},
+          type: :attr
+        }
 
-  @leaf [:text, :comment, :document_type]
+  # Node kinds that never have children: appending/inserting under them raises
+  # HierarchyRequestError, and their child_nodes/children are always []. An Attr
+  # (nodeType 2) is childless too, so it joins the leaf kinds for those guards.
+  @leaf [:text, :comment, :document_type, :attr]
+
+  # DOM `nodeType` numeric constant per handle kind. nodeType is fixed by the node
+  # kind, so it is answered from the handle's `type` with no ETS lookup.
+  @type_numbers %{
+    element: 1,
+    attr: 2,
+    text: 3,
+    comment: 8,
+    document: 9,
+    document_type: 10,
+    document_fragment: 11,
+    shadow_root: 11
+  }
 
   # ==========================================================================
   # Tree mutation
@@ -118,7 +142,7 @@ defmodule DOM.Node do
 
     DOM._atomic_ets_op(server, fn nodes, index ->
       nodes
-      |> DOM.NodeData.Table.span_children_of(index, node.node_id)
+      |> DOM.NodeData.span_children_of(index, node.node_id)
       |> Enum.map(fn child_id ->
         [handle] = :ets.select(nodes, handle_spec(server, child_id))
         handle
@@ -128,6 +152,9 @@ defmodule DOM.Node do
 
   @doc "The node's parent, or `nil`."
   @spec parent_node(t()) :: t() | nil
+  # An Attr is not a child of anything (its owner is `owner_element/1`, not a parent).
+  def parent_node(%__MODULE__{type: :attr}), do: nil
+
   def parent_node(%__MODULE__{} = node) do
     # Two dependent reads (parent id, then that id's handle) run in one atomic op
     # so the tree can't be mutated between them.
@@ -221,8 +248,18 @@ defmodule DOM.Node do
 
   @doc "The node's ELEMENT children, in document order (ParentNode.children)."
   @spec children(t()) :: [t()]
+  def children(%__MODULE__{type: type}) when type in @leaf, do: []
+
   def children(%__MODULE__{} = node) do
-    node |> child_nodes() |> Enum.filter(&(&1.type == :element))
+    # The span row carries node type, so element children are one filtered range scan —
+    # no per-node record fetch (unlike child_nodes |> filter). Only element handles built.
+    server = node.server
+
+    DOM._atomic_ets_op(server, fn nodes, index ->
+      nodes
+      |> DOM.NodeData.span_element_children_of(index, node.node_id)
+      |> Enum.map(&%DOM.Node{server: server, node_id: &1, type: :element})
+    end)
   end
 
   @doc "The first element child, or `nil`."
@@ -383,6 +420,20 @@ defmodule DOM.Node do
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_equal_node(%__MODULE__{}, nil), do: false
 
+  # Two Attrs are equal iff same namespace, local name, and value (WHATWG). Resolved
+  # locally — attr handles have no ETS row for _node_is_equal to read.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{type: :attr} = attr, %__MODULE__{type: :attr} = other) do
+    attr_namespace_uri(attr) == attr_namespace_uri(other) and
+      attr_local_name(attr) == attr_local_name(other) and
+      attr_value(attr) == attr_value(other)
+  end
+
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{type: :attr}, %__MODULE__{}), do: false
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_equal_node(%__MODULE__{}, %__MODULE__{type: :attr}), do: false
+
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_equal_node(%__MODULE__{} = node, %__MODULE__{} = other) do
     DOM._node_is_equal(node.server, node.node_id, other.server, other.node_id)
@@ -405,23 +456,24 @@ defmodule DOM.Node do
 
   @doc "The DOM `nodeType` numeric constant."
   @spec node_type(t()) :: pos_integer()
-  def node_type(%__MODULE__{} = node) do
-    [node_type] = DOM._select_nodes(node.server, node_type_spec(node.node_id))
-    node_type
-  end
-
-  defmatchspecp node_type_spec(node_id) do
-    {^node_id, %{__struct__: NodeData.Element}} -> 1
-    {^node_id, %{__struct__: NodeData.Text}} -> 3
-    {^node_id, %{__struct__: NodeData.Comment}} -> 8
-    {^node_id, %{__struct__: NodeData.Document}} -> 9
-    {^node_id, %{__struct__: NodeData.DocumentType}} -> 10
-    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> 11
-    {^node_id, %{__struct__: NodeData.ShadowRoot}} -> 11
-  end
+  # nodeType is fixed by the node kind — the handle already carries it, so no ETS
+  # lookup is needed (and an :attr handle has no backing row to look up).
+  def node_type(%__MODULE__{type: type}), do: Map.fetch!(@type_numbers, type)
 
   @doc "The DOM `nodeName`."
   @spec node_name(t()) :: String.t()
+  # Dispatch locally when the name is fixed by the kind; only :element and
+  # :document_type carry a data-dependent name that must be read from the record.
+  def node_name(%__MODULE__{type: :text}), do: "#text"
+  def node_name(%__MODULE__{type: :comment}), do: "#comment"
+  def node_name(%__MODULE__{type: :document}), do: "#document"
+
+  def node_name(%__MODULE__{type: type}) when type in [:document_fragment, :shadow_root],
+    do: "#document-fragment"
+
+  # An Attr's nodeName is its qualified name — derivable from the key in the handle.
+  def node_name(%__MODULE__{type: :attr} = attr), do: attr_name(attr)
+
   def node_name(%__MODULE__{} = node) do
     [node_name] = DOM._select_nodes(node.server, node_name_spec(node.node_id))
     node_name
@@ -429,12 +481,7 @@ defmodule DOM.Node do
 
   defmatchspecp node_name_spec(node_id) do
     {^node_id, %{__struct__: NodeData.Element, local_name: local_name}} -> local_name
-    {^node_id, %{__struct__: NodeData.Text}} -> "#text"
-    {^node_id, %{__struct__: NodeData.Comment}} -> "#comment"
-    {^node_id, %{__struct__: NodeData.Document}} -> "#document"
     {^node_id, %{__struct__: NodeData.DocumentType, name: name}} -> name
-    {^node_id, %{__struct__: NodeData.DocumentFragment}} -> "#document-fragment"
-    {^node_id, %{__struct__: NodeData.ShadowRoot}} -> "#document-fragment"
   end
 
   @doc "A DocumentType's `{public_id, system_id}` (each `nil` when absent)."
@@ -491,7 +538,19 @@ defmodule DOM.Node do
 
   @doc "Clones `node` (deep when `deep?`), returning a fresh detached handle."
   @spec clone_node(t(), boolean()) :: t()
-  def clone_node(%__MODULE__{} = node, deep? \\ false) do
+  def clone_node(node, deep? \\ false)
+
+  # An Attr clones to a fresh UNOWNED attr with the same key and current value; `deep?`
+  # is irrelevant (Attrs have no children). Resolved locally — no ETS row to clone.
+  def clone_node(%__MODULE__{type: :attr} = attr, _deep?) do
+    %__MODULE__{
+      server: attr.server,
+      node_id: {nil, attr_key(attr), attr_value(attr)},
+      type: :attr
+    }
+  end
+
+  def clone_node(%__MODULE__{} = node, deep?) do
     DOM._node_clone_node(node.server, node.node_id, deep?)
   end
 
@@ -508,15 +567,23 @@ defmodule DOM.Node do
   @spec add_event_listener(t(), String.t(), (DOM.Event.t() -> any()), keyword()) :: :ok
   def add_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
       when is_binary(type) and is_function(fun, 1) do
-    listener = %DOM.Listener{
-      type: type,
-      fn: fun,
-      capture: Keyword.get(opts, :capture, false),
-      once: Keyword.get(opts, :once, false),
-      passive: Keyword.get(opts, :passive, false)
-    }
+    signal = Keyword.get(opts, :signal)
 
-    DOM._node_add_event_listener(node.server, node.node_id, listener)
+    # A listener registered with an already-aborted signal is never added (per spec).
+    if signal && DOM.AbortSignal.aborted?(signal) do
+      :ok
+    else
+      listener = %DOM.Listener{
+        type: type,
+        fn: fun,
+        capture: Keyword.get(opts, :capture, false),
+        once: Keyword.get(opts, :once, false),
+        passive: Keyword.get(opts, :passive, false),
+        signal_ref: signal && signal.ref
+      }
+
+      DOM._node_add_event_listener(node.server, node.node_id, listener)
+    end
   end
 
   @doc """
@@ -541,6 +608,21 @@ defmodule DOM.Node do
   end
 
   @doc """
+  Focus this element (HTML `element.focus()`) — make it the document's active element.
+  A no-op if the element is not focusable or not connected to the document. (No focus
+  event is fired yet.)
+  """
+  @spec focus(t()) :: :ok
+  def focus(%__MODULE__{} = node), do: DOM._node_focus(node.server, node.node_id)
+
+  @doc """
+  Blur this element (HTML `element.blur()`) — if it is the active element, return focus
+  to the document body. A no-op otherwise.
+  """
+  @spec blur(t()) :: :ok
+  def blur(%__MODULE__{} = node), do: DOM._node_blur(node.server, node.node_id)
+
+  @doc """
   The composed path an `event` would traverse if dispatched at `node` — the nodes
   from `node` outward to the root, crossing shadow boundaries only when the event
   is `composed`. Mirrors `Event.composedPath()` (computed for a given target).
@@ -555,4 +637,100 @@ defmodule DOM.Node do
   def __listeners(%__MODULE__{} = node) do
     DOM._node_listeners(node.server, node.node_id)
   end
+
+  ## Attr node-only accessor API (these are ~obsolete, but we include them for compat reasons.)
+  #
+  # An Attr handle is `%DOM.Node{type: :attr, node_id: {element_id, key}}` — no backing
+  # NodeData record. Every accessor resolves through the OWNER element's attribute tuple
+  # (so the handle stays live: a later set_attribute is reflected here), or is derived
+  # purely from `key`. `key` is a plain qualified-name string OR a `{prefix, local, url}`
+  # namespace triple (`DOM.NodeData.Element.attr_key`).
+
+  # An Attr's `node_id` has two shapes:
+  #   {element_id, key}   — OWNED: value lives on the element, read/written through.
+  #   {nil, key, value}   — UNOWNED (createAttribute / removeAttributeNode result): no
+  #                         owner element, so the value rides in the handle.
+  # `attr_key/1` / `attr_owner/1` normalize the two shapes.
+  @doc "The verbatim attribute key (string or `{prefix, local, url}` triple) an Attr references."
+  @spec attr_key(attr()) :: attr_key()
+  def attr_key(%__MODULE__{type: :attr, node_id: {_el, key}}), do: key
+  def attr_key(%__MODULE__{type: :attr, node_id: {nil, key, _value}}), do: key
+  defp attr_owner(%__MODULE__{node_id: {el, _key}}), do: el
+  defp attr_owner(%__MODULE__{node_id: {nil, _key, _value}}), do: nil
+
+  @doc "An Attr's qualified name (HTML colon form) — `nodeName`/`name`."
+  @spec attr_name(attr()) :: String.t()
+  def attr_name(%__MODULE__{type: :attr} = attr),
+    do: NodeData.Element.qualified_name(attr_key(attr))
+
+  @doc "An Attr's local name (the part after any prefix)."
+  @spec attr_local_name(attr()) :: String.t()
+  def attr_local_name(%__MODULE__{type: :attr} = attr), do: attr_local(attr_key(attr))
+
+  @doc "An Attr's namespace prefix, or `nil` (always `nil` for a plain attribute)."
+  @spec attr_prefix(attr()) :: String.t() | nil
+  def attr_prefix(%__MODULE__{type: :attr} = attr), do: attr_prefix_of(attr_key(attr))
+
+  @doc "An Attr's namespace URI, or `nil` (always `nil` for a plain attribute)."
+  @spec attr_namespace_uri(attr()) :: String.t() | nil
+  def attr_namespace_uri(%__MODULE__{type: :attr} = attr), do: attr_url(attr_key(attr))
+
+  @doc """
+  An Attr's value. OWNED: read live from the owner element (`nil` if since removed).
+  UNOWNED (`createAttribute`): the value carried in the handle.
+  """
+  @spec attr_value(attr()) :: String.t() | nil
+  def attr_value(%__MODULE__{type: :attr, node_id: {nil, _key, value}}), do: value
+
+  def attr_value(%__MODULE__{type: :attr, server: server, node_id: {el, key}}) do
+    case DOM._select_nodes(server, attr_value_spec(el)) do
+      [attributes] -> attr_value_for(attributes, key)
+      [] -> nil
+    end
+  end
+
+  @doc """
+  Set an Attr's value. OWNED: writes through to the owner element (returns the handle
+  unchanged). UNOWNED: returns a new handle carrying the value (the handle is immutable,
+  so callers rebind).
+  """
+  @spec set_attr_value(attr(), String.t()) :: attr()
+  def set_attr_value(%__MODULE__{type: :attr, node_id: {nil, key, _old}} = attr, value) do
+    %{attr | node_id: {nil, key, value}}
+  end
+
+  def set_attr_value(%__MODULE__{type: :attr, node_id: {el, key}} = attr, value) do
+    element = %__MODULE__{server: attr.server, node_id: el, type: :element}
+    DOM.Element.set_attribute_by_key(element, key, value)
+    attr
+  end
+
+  @doc "The element that owns this Attr (its `ownerElement`), or `nil` when unowned."
+  @spec owner_element(attr()) :: t() | nil
+  def owner_element(%__MODULE__{type: :attr} = attr) do
+    if el = attr_owner(attr), do: %__MODULE__{server: attr.server, node_id: el, type: :element}
+  end
+
+  defmatchspecp attr_value_spec(element_id) do
+    {^element_id, %{__struct__: NodeData.Element, attributes: attributes}} -> attributes
+  end
+
+  # The value in `attributes` under the exact `key`, or nil. The Attr handle carries the
+  # verbatim key, so this is an identity match (not the qualified-name lookup getAttribute uses).
+  defp attr_value_for(attributes, key) do
+    case List.keyfind(attributes, key, 0) do
+      {^key, value} -> value
+      nil -> nil
+    end
+  end
+
+  # Key-part extractors: a plain string key is an unprefixed, null-namespace attribute.
+  defp attr_local(key) when is_binary(key), do: key
+  defp attr_local({_prefix, local, _url}), do: local
+
+  defp attr_prefix_of(key) when is_binary(key), do: nil
+  defp attr_prefix_of({prefix, _local, _url}), do: prefix
+
+  defp attr_url(key) when is_binary(key), do: nil
+  defp attr_url({_prefix, _local, url}), do: url
 end

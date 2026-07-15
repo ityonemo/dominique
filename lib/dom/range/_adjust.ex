@@ -18,17 +18,18 @@ defmodule DOM.Range.Adjust do
   # These run in the server process (both tids in scope), after the structural
   # mutation. The caller passes the pre-mutation facts each rule needs.
 
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
+  alias DOM.NodeData.IndexTable
 
   @doc """
   A node (or `count` nodes) was inserted at child index `at` under `parent_id`.
   Bump the offset of every child-index boundary in `parent_id` whose offset is
   strictly greater than `at`. `parent_key` is `parent_id`'s (unchanged) start key.
   """
-  @spec on_insert(:ets.tid(), :ets.tid(), binary(), non_neg_integer(), pos_integer()) :: :ok
+  @spec on_insert(:ets.tid(), :ets.tid(), Extent.t(), non_neg_integer(), pos_integer()) :: :ok
   def on_insert(_nodes, index, parent_key, at, count) do
     for {kind, key, ref, offset} <- boundaries_in(index, parent_key), offset > at do
-      Table.range_set_boundary(index, kind, ref, key, offset + count)
+      IndexTable.range_set_boundary(index, kind, ref, key, offset + count)
     end
 
     :ok
@@ -41,15 +42,15 @@ defmodule DOM.Range.Adjust do
   container was in the removed subtree relocate to `(parent, at)`; boundaries in
   `parent` past `at` decrement.
   """
-  @spec on_remove(:ets.tid(), :ets.tid(), binary(), non_neg_integer(), MapSet.t()) :: :ok
+  @spec on_remove(:ets.tid(), :ets.tid(), Extent.t(), non_neg_integer(), MapSet.t()) :: :ok
   def on_remove(_nodes, index, parent_key, at, removed_keys) do
-    for {kind, key, ref, offset} <- Table.range_all_rows(index) do
+    for {kind, key, ref, offset} <- IndexTable.range_all_rows(index) do
       cond do
         MapSet.member?(removed_keys, key) ->
-          Table.range_set_boundary(index, kind, ref, parent_key, at)
+          IndexTable.range_set_boundary(index, kind, ref, parent_key, at)
 
         key == parent_key and offset > at ->
-          Table.range_set_boundary(index, kind, ref, key, offset - 1)
+          IndexTable.range_set_boundary(index, kind, ref, key, offset - 1)
 
         :else ->
           :ok
@@ -64,10 +65,10 @@ defmodule DOM.Range.Adjust do
   and/or its subtree). Remap every boundary sitting on any old key to its new key,
   given the `remap` map `%{old_key => new_key}`.
   """
-  @spec on_remap(:ets.tid(), :ets.tid(), %{binary() => binary()}) :: :ok
+  @spec on_remap(:ets.tid(), :ets.tid(), %{Extent.t() => Extent.t()}) :: :ok
   def on_remap(_nodes, index, remap) do
-    for {kind, key, ref, offset} <- Table.range_all_rows(index), new = Map.get(remap, key) do
-      Table.range_set_boundary(index, kind, ref, new, offset)
+    for {kind, key, ref, offset} <- IndexTable.range_all_rows(index), new = Map.get(remap, key) do
+      IndexTable.range_set_boundary(index, kind, ref, new, offset)
     end
 
     :ok
@@ -78,10 +79,10 @@ defmodule DOM.Range.Adjust do
   new node with start key `new_key`. Boundaries in the original text with offset
   greater than `offset` move into the new node (offset - split point).
   """
-  @spec on_split(:ets.tid(), :ets.tid(), binary(), binary(), non_neg_integer()) :: :ok
+  @spec on_split(:ets.tid(), :ets.tid(), Extent.t(), Extent.t(), non_neg_integer()) :: :ok
   def on_split(_nodes, index, orig_key, new_key, offset) do
     for {kind, _key, ref, off} <- boundaries_in(index, orig_key), off > offset do
-      Table.range_set_boundary(index, kind, ref, new_key, off - offset)
+      IndexTable.range_set_boundary(index, kind, ref, new_key, off - offset)
     end
 
     :ok
@@ -101,7 +102,7 @@ defmodule DOM.Range.Adjust do
   @spec on_replace_data(
           :ets.tid(),
           :ets.tid(),
-          binary(),
+          Extent.t(),
           non_neg_integer(),
           non_neg_integer(),
           non_neg_integer()
@@ -110,10 +111,10 @@ defmodule DOM.Range.Adjust do
     for {kind, _key, ref, boffset} <- boundaries_in(index, key) do
       cond do
         boffset > offset + count ->
-          Table.range_set_boundary(index, kind, ref, key, boffset + newlen - count)
+          IndexTable.range_set_boundary(index, kind, ref, key, boffset + newlen - count)
 
         boffset > offset ->
-          Table.range_set_boundary(index, kind, ref, key, offset)
+          IndexTable.range_set_boundary(index, kind, ref, key, offset)
 
         :else ->
           :ok
@@ -125,6 +126,6 @@ defmodule DOM.Range.Adjust do
 
   # All range boundary rows whose container key is `key`.
   defp boundaries_in(index, key) do
-    Enum.filter(Table.range_all_rows(index), fn {_kind, k, _ref, _off} -> k == key end)
+    Enum.filter(IndexTable.range_all_rows(index), fn {_kind, k, _ref, _off} -> k == key end)
   end
 end

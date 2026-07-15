@@ -21,7 +21,7 @@ defmodule DOM.Shadow.HostSelectorTest do
     test "does not appear in a shadow-scoped querySelectorAll (host is not searched)" do
       {_doc, _host, s} = shadow("<div id='host' class='k'></div>", "<p id='p'>x</p>")
 
-      assert DOM.query_selector_all(s, ":host") == []
+      assert DOM.ShadowRoot.query_selector_all(s, ":host") == []
     end
 
     test "matches nothing in a document-scoped (light) query" do
@@ -31,7 +31,7 @@ defmodule DOM.Shadow.HostSelectorTest do
 
     test "matches on the host itself via matches/2" do
       {_doc, host, _s} = shadow("<div id='host'></div>", "<p>x</p>")
-      assert DOM.matches(host, ":host")
+      assert DOM.Element.matches(host, ":host")
     end
   end
 
@@ -40,8 +40,8 @@ defmodule DOM.Shadow.HostSelectorTest do
     test "matches the host via matches/2 only when the host matches sel" do
       {_doc, host, _s} = shadow("<div id='host' class='themed'></div>", "<p>x</p>")
 
-      assert DOM.matches(host, ":host(.themed)")
-      refute DOM.matches(host, ":host(.other)")
+      assert DOM.Element.matches(host, ":host(.themed)")
+      refute DOM.Element.matches(host, ":host(.other)")
     end
   end
 
@@ -53,14 +53,14 @@ defmodule DOM.Shadow.HostSelectorTest do
         shadow("<section class='dark'><div id='host'></div></section>", "<p>x</p>")
 
       # the host's ancestor <section class=dark> satisfies the context
-      assert DOM.matches(host, ":host-context(.dark)")
+      assert DOM.Element.matches(host, ":host-context(.dark)")
     end
 
     test "does not match when no ancestor matches sel" do
       {_doc, host, _s} =
         shadow("<section class='light'><div id='host'></div></section>", "<p>x</p>")
 
-      refute DOM.matches(host, ":host-context(.dark)")
+      refute DOM.Element.matches(host, ":host-context(.dark)")
     end
   end
 
@@ -68,7 +68,7 @@ defmodule DOM.Shadow.HostSelectorTest do
     test ":host p matches a shadow descendant of the host" do
       {_doc, _host, s} = shadow("<div id='host'></div>", "<p id='p'>x</p>")
       # :host <descendant> — the shadow <p> is a descendant of the host
-      assert ids(DOM.query_selector_all(s, ":host p")) == ["p"]
+      assert ids(DOM.ShadowRoot.query_selector_all(s, ":host p")) == ["p"]
     end
   end
 end

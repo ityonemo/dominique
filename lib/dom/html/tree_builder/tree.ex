@@ -29,7 +29,12 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   """
 
   alias DOM.NodeData
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.Extent
+  alias DOM.NodeData.IndexTable
+
+  require Extent
+  @root_start Extent.root_start()
+  @root_stop Extent.root_stop()
 
   @enforce_keys [:nodes]
   defstruct [:nodes]
@@ -229,7 +234,7 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   """
   @spec bulk_load(t(), :ets.tid(), :ets.tid(), id) :: :ok
   def bulk_load(tree, tid, index, root_id) do
-    load_node(tree, tid, index, root_id, root_id, nil, <<0x00>>, <<0x80>>)
+    load_node(tree, tid, index, root_id, root_id, nil, @root_start, @root_stop)
     :ok
   end
 
@@ -249,7 +254,7 @@ defmodule DOM.HTML.TreeBuilder.Tree do
     end)
 
     if content = content(tree, id) do
-      load_node(tree, tid, index, content, content, nil, <<0x00>>, <<0x80>>)
+      load_node(tree, tid, index, content, content, nil, @root_start, @root_stop)
     end
   end
 
@@ -257,19 +262,20 @@ defmodule DOM.HTML.TreeBuilder.Tree do
   # single interval for one child, a multispan partition for many.
   defp carve_children([], _start, _stop), do: []
 
-  defp carve_children([only], start, stop), do: [{only, Table.interval(start, stop)}]
+  defp carve_children([only], start, stop), do: [{only, Extent.interval(start, stop)}]
 
   defp carve_children(kids, start, stop) do
-    Enum.zip(kids, Table.multispan(start, stop, length(kids)))
+    Enum.zip(kids, Extent.multispan(start, stop, length(kids)))
   end
 
-  # Build the DOM.NodeData.* record for `id`, insert it, and index it if element.
+  # Build the DOM.NodeData.* record for `id`, index it if element, then insert it —
+  # index-first, like every other both-tables write. (Span rows are mirrored in bulk by
+  # the caller's `span_index_all` after the whole tree is loaded.)
   defp write_record(tree, tid, index, id, root, parent, start, stop) do
     data = fetch(tree, id)
     record = to_record(data, parent, root, start, stop)
+    if data.kind == :element, do: IndexTable.index_put(index, id, record)
     :ets.insert(tid, {id, record})
-
-    if data.kind == :element, do: Table.index_put(index, id, record)
     :ok
   end
 

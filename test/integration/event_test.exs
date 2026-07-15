@@ -48,7 +48,7 @@ defmodule Integration.EventTest do
         sec = DOM.query_selector(doc, "#sec")
         s = Element.attach_shadow(host, :open)
         DOM.ShadowRoot.set_inner_html(s, "<span id='inner'>x</span>")
-        inner = DOM.query_selector(s, "#inner")
+        inner = DOM.ShadowRoot.query_selector(s, "#inner")
         me = self()
 
         # ev.target is always an ELEMENT here (inner or the retargeted host), so it

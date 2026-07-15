@@ -17,7 +17,7 @@ defmodule DOM.Event.ShadowDispatchTest do
     host = DOM.query_selector(doc, "#host")
     s = Element.attach_shadow(host, :open)
     DOM.ShadowRoot.set_inner_html(s, "<span id='inner'>x</span>")
-    inner = DOM.query_selector(s, "#inner")
+    inner = DOM.ShadowRoot.query_selector(s, "#inner")
     %{doc: doc, sec: sec, host: host, shadow: s, inner: inner}
   end
 

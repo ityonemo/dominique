@@ -26,6 +26,9 @@ defmodule DOM.Event do
     :ref,
     :target,
     :current_target,
+    # The FocusEvent/MouseEvent relatedTarget (the other node in a focus move / pointer
+    # transition), or nil. A plain Event has none.
+    :related_target,
     bubbles: false,
     cancelable: false,
     composed: false,
@@ -37,6 +40,7 @@ defmodule DOM.Event do
           ref: reference() | nil,
           target: Node.t() | nil,
           current_target: Node.t() | nil,
+          related_target: Node.t() | nil,
           bubbles: boolean(),
           cancelable: boolean(),
           composed: boolean(),
@@ -45,7 +49,8 @@ defmodule DOM.Event do
 
   @doc """
   Build an event of `type`. Options: `:bubbles`, `:cancelable`, `:composed` (all
-  default `false`, matching `new Event(type)`).
+  default `false`, matching `new Event(type)`), and `:related_target` (a
+  FocusEvent/MouseEvent field, default `nil`).
   """
   @spec new(String.t(), keyword()) :: t()
   def new(type, opts \\ []) when is_binary(type) do
@@ -53,7 +58,8 @@ defmodule DOM.Event do
       type: type,
       bubbles: Keyword.get(opts, :bubbles, false),
       cancelable: Keyword.get(opts, :cancelable, false),
-      composed: Keyword.get(opts, :composed, false)
+      composed: Keyword.get(opts, :composed, false),
+      related_target: Keyword.get(opts, :related_target)
     }
   end
 

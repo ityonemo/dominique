@@ -22,7 +22,7 @@ defmodule DOM.CSS.PseudoElement do
   # Chromium and Firefox (verified against the oracle). It still must PARSE (S5a)
   # so the selector is valid rather than raising.
   @impl DOM.CSS
-  def match(_selector, _context, _candidate_ids), do: []
+  def match(_selector, _context, _protoset), do: %{}
 
   defimpl String.Chars do
     alias DOM.CSS.Serialize

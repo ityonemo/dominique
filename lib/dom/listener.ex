@@ -9,13 +9,16 @@ defmodule DOM.Listener do
   # reference, matching the DOM's identity semantics.
 
   @enforce_keys [:type, :fn]
-  defstruct [:type, :fn, capture: false, once: false, passive: false]
+  defstruct [:type, :fn, capture: false, once: false, passive: false, signal_ref: nil]
 
   @type t :: %__MODULE__{
           type: String.t(),
           fn: (DOM.Event.t() -> any()),
           capture: boolean(),
           once: boolean(),
-          passive: boolean()
+          passive: boolean(),
+          # The AbortSignal ref this listener was registered with (`{signal}` option),
+          # or nil. When that signal aborts, every listener carrying its ref is swept.
+          signal_ref: reference() | nil
         }
 end

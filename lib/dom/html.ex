@@ -16,7 +16,7 @@ defprotocol DOM.HTML do
   @doc """
   Serializes a node and its subtree (its `outerHTML`) as **iodata**. `node_id` is
   the node's own id, so container kinds can read their ordered children from the
-  record extents (`DOM.NodeData.Table.children_by_extent/2`) rather than an inline
+  record extents (`NodesTable.children_by_extent/2`) rather than an inline
   field. The caller materializes it once with `IO.iodata_to_binary/1` at the
   GenServer boundary.
   """

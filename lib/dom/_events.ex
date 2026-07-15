@@ -11,7 +11,8 @@ defmodule DOM.Events do
   # closed on exit (try/after, so a raising listener still cleans up).
 
   alias DOM.Event
-  alias DOM.NodeData.Table
+  alias DOM.NodeData.IndexTable
+  alias DOM.NodeData.NodesTable
 
   # Dispatch `event` at `target_id`. Returns `not default_prevented` (the DOM's
   # dispatchEvent boolean). Runs in-server: `nodes`/`index` are the live tids,
@@ -29,7 +30,7 @@ defmodule DOM.Events do
   @spec dispatch(:ets.tid(), :ets.tid(), GenServer.server(), reference(), Event.t()) :: boolean()
   def dispatch(nodes, index, server, target_id, %Event{} = event) do
     ref = make_ref()
-    Table.active_event_open(index, ref)
+    IndexTable.active_event_open(index, ref)
     event = %{event | ref: ref}
 
     # path = [{node_id, retarget_id}, ...] from target outward; the target entry
@@ -44,9 +45,9 @@ defmodule DOM.Events do
         run_phase(nodes, index, server, ancestors, :bubbling, event)
       end
 
-      not Table.active_event_flags(index, ref).default_prevented
+      not IndexTable.active_event_flags(index, ref).default_prevented
     after
-      Table.active_event_close(index, ref)
+      IndexTable.active_event_close(index, ref)
     end
   end
 
@@ -68,7 +69,7 @@ defmodule DOM.Events do
   defp build_path(nodes, node_id, retarget, composed?, acc) do
     acc = [{node_id, retarget} | acc]
 
-    case Table.parent(nodes, node_id) do
+    case NodesTable.parent(nodes, node_id) do
       nil ->
         host = shadow_host_of(nodes, node_id)
 
@@ -86,7 +87,7 @@ defmodule DOM.Events do
 
   # The host of `node_id` when it is a shadow root, else nil (marks a boundary).
   defp shadow_host_of(nodes, node_id) do
-    if Table.type(nodes, node_id) == :shadow_root, do: Table.shadow_host(nodes, node_id)
+    if NodesTable.type(nodes, node_id) == :shadow_root, do: NodesTable.shadow_host(nodes, node_id)
   end
 
   # Walk `path` (entries `{node_id, retarget_id}`) firing each node's
@@ -97,7 +98,7 @@ defmodule DOM.Events do
     event = %{event | event_phase: Event.phase(phase)}
 
     Enum.reduce_while(path, :ok, fn {node_id, retarget_id}, _ ->
-      if Table.active_event_flags(index, event.ref).propagation_stopped do
+      if IndexTable.active_event_flags(index, event.ref).propagation_stopped do
         {:halt, :ok}
       else
         current = %{
@@ -126,16 +127,16 @@ defmodule DOM.Events do
   # removed before firing.
   defp fire_listeners(index, node_id, phase, event) do
     index
-    |> Table.listeners_of(node_id)
+    |> IndexTable.listeners_of(node_id)
     |> Enum.filter(&(&1.type == event.type and fires_in_phase?(&1, phase)))
     |> Enum.reduce_while(:ok, fn listener, _ ->
       if listener.once do
-        Table.listener_delete(index, node_id, listener.type, listener.fn, listener.capture)
+        IndexTable.listener_delete(index, node_id, listener.type, listener.fn, listener.capture)
       end
 
       call_listener(listener, event)
 
-      if Table.active_event_flags(index, event.ref).immediate_stopped,
+      if IndexTable.active_event_flags(index, event.ref).immediate_stopped,
         do: {:halt, :ok},
         else: {:cont, :ok}
     end)
@@ -143,11 +144,29 @@ defmodule DOM.Events do
     :ok
   end
 
+  @doc """
+  Fire `target_ref`'s listeners for `event` target-only — no capture/bubble, no tree
+  walk. For an `EventTarget` that is not in the node tree (an `AbortSignal`): its
+  listeners live in `:listener` rows keyed by `target_ref`, dispatched at-target.
+  """
+  @spec dispatch_to_target(:ets.tid(), reference(), Event.t()) :: :ok
+  def dispatch_to_target(index, target_ref, %Event{} = event) do
+    ref = make_ref()
+    IndexTable.active_event_open(index, ref)
+    event = %{event | ref: ref, target: target_ref}
+
+    try do
+      fire_listeners(index, target_ref, :at_target, event)
+    after
+      IndexTable.active_event_close(index, ref)
+    end
+  end
+
   # Run one listener's lambda with the event. Listener exceptions currently
   # propagate (crashing the server) — event-loop isolation is a later concern.
   defp call_listener(listener, event), do: listener.fn.(event)
 
   defp handle(nodes, server, node_id) do
-    %DOM.Node{server: server, node_id: node_id, type: Table.type(nodes, node_id)}
+    %DOM.Node{server: server, node_id: node_id, type: NodesTable.type(nodes, node_id)}
   end
 end

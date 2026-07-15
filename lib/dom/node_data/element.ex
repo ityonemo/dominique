@@ -1,28 +1,27 @@
 defmodule DOM.NodeData.Element do
   @moduledoc "ETS record for an element node."
 
-  @enforce_keys [:local_name]
-  defstruct [
-    :local_name,
-    :content,
-    # The element's shadow root id (a DOM.NodeData.ShadowRoot, a detached root
-    # tree), or nil. Parallel to `content` (template contents); the serializer
-    # never reads it, so the shadow tree is invisible to the host's outerHTML.
-    :shadow_root,
-    namespace: :html,
-    parent: nil,
-    attributes: [],
-    # Nested-set extent: `root` is the tree root's id; `{start, stop}` are binary
-    # order-keys containing all descendants' extents. This IS the child adjacency —
-    # a node's ordered children are the rows whose `parent` is it, by `start` key
-    # (DOM.NodeData.Table.children_by_extent/2). See DOM.NodeData.Table.
-    root: nil,
-    start: nil,
-    stop: nil
-  ]
-
   use DOM.NodeData
   use DOM.HTML
+  alias DOM.NodeData.NodesTable
+
+  # `@enforce_keys` from DOM.NodeData is `[:root, :start, :stop]` (the nested-set extent:
+  # `root` is the tree root's id, `{start, stop}` the binary order-keys containing all
+  # descendants — this IS the child adjacency; see DOM.NodeData.NodesTable). `:local_name` is
+  # enforced too. `content`/`shadow_root`/`definition`/`checked`/`parent` default nil.
+  @enforce_keys @enforce_keys ++ [:local_name]
+  defstruct @enforce_keys ++
+              [
+                :content,
+                :shadow_root,
+                :definition,
+                :checked,
+                :parent,
+                manual_assigned: [],
+                indeterminate: false,
+                namespace: :html,
+                attributes: []
+              ]
 
   @type namespace :: :html | :svg | :mathml
 
@@ -37,11 +36,15 @@ defmodule DOM.NodeData.Element do
           namespace: namespace(),
           content: reference() | nil,
           shadow_root: reference() | nil,
+          definition: DOM.CustomElementDefinition.t() | nil,
+          manual_assigned: [reference()],
+          checked: boolean() | nil,
+          indeterminate: boolean(),
           parent: reference() | nil,
           attributes: [{attr_key(), String.t()}],
-          root: reference() | nil,
-          start: binary() | nil,
-          stop: binary() | nil
+          root: reference(),
+          start: binary(),
+          stop: binary()
         }
 
   @doc "The DOM qualified name of an attribute key (`prefix:local`, or the bare name)."
@@ -87,7 +90,7 @@ defmodule DOM.NodeData.Element do
     if DOM.HTML.void?(name) do
       start_tag
     else
-      child_ids = DOM.NodeData.Table.children_by_extent(nodes, node_id)
+      child_ids = NodesTable.children_by_extent(nodes, node_id)
       [start_tag, DOM.HTML.children(name, child_ids, nodes), "</", name | ">"]
     end
   end

@@ -1,22 +1,22 @@
 defmodule DOM.NodeData.DocumentType do
   @moduledoc "ETS record for a document type (doctype) node."
 
-  @enforce_keys [:name]
   # `root`/`start`/`stop`: a doctype is a positioned leaf, so it carries an extent
-  # under its parent. Dual-maintained with the parent's `children`.
-  defstruct [:name, :public_id, :system_id, parent: nil, root: nil, start: nil, stop: nil]
-
+  # under its parent (enforced via DOM.NodeData); `:name` is enforced too.
   use DOM.NodeData
   use DOM.HTML
+
+  @enforce_keys @enforce_keys ++ [:name]
+  defstruct @enforce_keys ++ [:public_id, :system_id, :parent]
 
   @type t :: %__MODULE__{
           name: String.t(),
           public_id: String.t() | nil,
           system_id: String.t() | nil,
           parent: reference() | nil,
-          root: reference() | nil,
-          start: binary() | nil,
-          stop: binary() | nil
+          root: reference(),
+          start: binary(),
+          stop: binary()
         }
 
   @impl DOM.NodeData

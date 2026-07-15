@@ -40,7 +40,7 @@ defmodule Integration.DerivablePseudoTest do
             "<div contenteditable='false'><p id='blocked'>y</p></div></div><p id='outside'>z</p>"
         )
 
-      rw = fn id -> DOM.matches(DOM.query_selector(rw_doc, "##{id}"), ":read-write") end
+      rw = fn id -> DOM.Element.matches(DOM.query_selector(rw_doc, "##{id}"), ":read-write") end
 
       f_doc =
         DOM.new(
@@ -48,7 +48,7 @@ defmodule Integration.DerivablePseudoTest do
             "<input id='i1' type='submit'></form>"
         )
 
-      def_ = fn id -> DOM.matches(DOM.query_selector(f_doc, "##{id}"), ":default") end
+      def_ = fn id -> DOM.Element.matches(DOM.query_selector(f_doc, "##{id}"), ":default") end
 
       result = %{
         "rw_inherit" => rw.("inherit"),

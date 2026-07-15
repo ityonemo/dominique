@@ -7,20 +7,23 @@ defmodule DOM.NodeData.ShadowRoot do
   other detached roots in the nodes table.
   """
 
-  defstruct host: nil, mode: :open, parent: nil, root: nil, start: nil, stop: nil
-
   use DOM.NodeData
   use DOM.HTML
+  alias DOM.NodeData.NodesTable
+
+  defstruct @enforce_keys ++ [:host, :parent, mode: :open, slot_assignment: :named]
 
   @type mode :: :open | :closed
+  @type slot_assignment :: :named | :manual
 
   @type t :: %__MODULE__{
           host: reference() | nil,
           mode: mode(),
+          slot_assignment: slot_assignment(),
           parent: reference() | nil,
-          root: reference() | nil,
-          start: binary() | nil,
-          stop: binary() | nil
+          root: reference(),
+          start: binary(),
+          stop: binary()
         }
 
   @impl DOM.NodeData
@@ -38,6 +41,6 @@ defmodule DOM.NodeData.ShadowRoot do
   # outerHTML never reaches here, since it reads the host's own children).
   @impl DOM.HTML
   def serialize(%__MODULE__{}, node_id, nodes) do
-    DOM.HTML.children("", DOM.NodeData.Table.children_by_extent(nodes, node_id), nodes)
+    DOM.HTML.children("", NodesTable.children_by_extent(nodes, node_id), nodes)
   end
 end

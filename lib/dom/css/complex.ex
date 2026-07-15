@@ -14,15 +14,68 @@ defmodule DOM.CSS.Complex do
 
   @type t :: %__MODULE__{parts: [DOM.CSS.Compound.t() | DOM.CSS.combinator()]}
 
-  # Right-to-left: the last compound is the subject; candidates that match it are
-  # kept only when the leftward combinator chain is satisfiable from that node.
+  # Right-to-left: the last compound is the subject; the leftward combinator chain must be
+  # satisfiable from each subject match. Two strategies:
+  #   * FAST (same-tree): resolve each leftward compound over the whole scope by index lookup,
+  #     then answer the combinator by an extent-containment / parent / sibling join — no
+  #     per-candidate re-query (kills the N+1). Used when the query can't cross a shadow boundary.
+  #   * WALK (shadow-crossing): the per-candidate ancestor/sibling walk via `related`, which
+  #     crosses shadow boundaries (`:host p`). The containment model is per-tree, so it can't
+  #     express host→shadow nesting; this path preserves it.
   @impl DOM.CSS
-  def match(%{parts: parts}, context, candidate_ids) do
+  def match(%{parts: parts}, context, protoset) do
     [subject | leftward] = Enum.reverse(parts)
+    subject_ps = DOM.CSS.match(subject, context, protoset)
 
-    subject
-    |> DOM.CSS.match(context, candidate_ids)
-    |> Enum.filter(&chain?(leftward, &1, context))
+    if shadow_crossing?(context) do
+      Query.filter_protoset(subject_ps, &chain?(leftward, &1, context))
+    else
+      chain_fast(leftward, subject_ps, context)
+    end
+  end
+
+  # A query crosses a shadow boundary only when it is scoped INSIDE a shadow tree (its
+  # `:host`/host lives in the light tree, a different extent root) — exactly `scope_host != nil`.
+  # A plain light-tree query never reaches shadow content (it isn't in the candidate set).
+  defp shadow_crossing?(%{scope_host: host}), do: host != nil
+
+  # FAST path: fold the leftward [combinator, compound, ...] chain, re-seating the protoset at
+  # each step to be keyed by the newly-matched (left) element, value = the subject leaves.
+  # Returns a protoset keyed by the leftmost compound's matches; `query_ids` reads its values.
+  defp chain_fast([], protoset, _context), do: protoset
+
+  # :descendant — resolve the left compound over the whole scope, then a start-sorted extent
+  # containment sweep (`:current` re-keys to the containing ancestor, threading the leaves).
+  defp chain_fast([:descendant, compound | rest], subject_ps, context) do
+    left_ps = DOM.CSS.match(compound, context, Query.seed(context.scope_candidates))
+    subject_ext = Query.resolve_extents(context, subject_ps)
+    left_ext = Query.resolve_extents(context, left_ps)
+    next_ps = Query.resolve_descendants(left_ext, subject_ext, :current)
+    chain_fast(rest, next_ps, context)
+  end
+
+  # :child — the parent id is IN the subject's span row, so one scan lifts each subject to its
+  # PARENT (`lift_to_parent`, merge-appending leaves for shared parents), then the left compound
+  # is an ordinary fused match over that parent-keyed protoset. No two-sided join needed.
+  defp chain_fast([:child, compound | rest], subject_ps, context) do
+    parent_ps = Query.lift_to_parent(context, subject_ps)
+    next_ps = DOM.CSS.match(compound, context, parent_ps)
+    chain_fast(rest, next_ps, context)
+  end
+
+  # `A + B`: lift each subject B to its immediately-preceding element sibling (one bounded
+  # reverse probe per subject), then the left compound A filters those. `A ~ B`: same, but lift
+  # to ALL preceding element siblings. Both then continue leftward.
+  defp chain_fast([:next_sibling, compound | rest], subject_ps, context) do
+    sib_ps = Query.lift_to_prev_sibling(context, subject_ps)
+    next_ps = DOM.CSS.match(compound, context, sib_ps)
+    chain_fast(rest, next_ps, context)
+  end
+
+  defp chain_fast([:subsequent_sibling, compound | rest], subject_ps, context) do
+    sib_ps = Query.lift_to_prev_siblings(context, subject_ps)
+    next_ps = DOM.CSS.match(compound, context, sib_ps)
+    chain_fast(rest, next_ps, context)
   end
 
   # leftward is [combinator, compound, combinator, compound, ...] read right to
@@ -34,7 +87,8 @@ defmodule DOM.CSS.Complex do
     context
     |> related(combinator, node_id)
     |> Enum.any?(fn related_id ->
-      DOM.CSS.match(compound, context, [related_id]) != [] and chain?(rest, related_id, context)
+      DOM.CSS.match(compound, context, Query.seed([related_id])) != %{} and
+        chain?(rest, related_id, context)
     end)
   end
 

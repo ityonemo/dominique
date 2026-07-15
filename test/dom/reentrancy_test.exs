@@ -80,8 +80,8 @@ defmodule DOM.ReentrancyTest do
 
     test "matches", %{doc: doc} do
       a = DOM.get_element_by_id(doc, "a")
-      assert inside(a, fn -> DOM.matches(a, "div.k") end)
-      refute inside(a, fn -> DOM.matches(a, "span") end)
+      assert inside(a, fn -> DOM.Element.matches(a, "div.k") end)
+      refute inside(a, fn -> DOM.Element.matches(a, "span") end)
     end
   end
 
@@ -154,7 +154,7 @@ defmodule DOM.ReentrancyTest do
         Node.insert_before(u, c, b)
       end)
 
-      assert Enum.map(DOM.query_selector_all(u, "li"), &Element.get_attribute(&1, "id")) ==
+      assert Enum.map(DOM.Element.query_selector_all(u, "li"), &Element.get_attribute(&1, "id")) ==
                ["a", "c", "b"]
 
       a = DOM.query_selector(doc, "#a")
@@ -267,7 +267,7 @@ defmodule DOM.ReentrancyTest do
       host = DOM.query_selector(doc, "#h")
       s = Element.attach_shadow(host, :open)
       DOM.ShadowRoot.set_inner_html(s, "<slot name='x'></slot>")
-      [slot] = DOM.query_selector_all(s, "slot")
+      [slot] = DOM.ShadowRoot.query_selector_all(s, "slot")
       a = DOM.query_selector(doc, "a")
 
       assigned = inside(slot, fn -> DOM.Slot.assigned_nodes(slot) end)
