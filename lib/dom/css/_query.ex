@@ -13,6 +13,177 @@ defmodule DOM.CSS.Query do
   alias DOM.NodeData.IndexTable
   alias DOM.NodeData.NodesTable
 
+  # ==========================================================================
+  # Protoset engine primitives (CSS combinator matching)
+  # ==========================================================================
+  #
+  # A `protoset` is `%{ref => leaf_ref}`: key = the element currently being matched at this
+  # stage of the right-to-left walk; value `leaf_ref` = the reference of the CSS selector LEAF
+  # (the subject element the query emits). The leaf_ref is invariant as the walk moves leftward
+  # through combinators — the key changes, the value follows the subject. These primitives thread
+  # protosets; index/nodes membership is fused into ETS match specs (see IndexTable.compound_*).
+
+  @typedoc "A CSS-match protoset: current-element ref → the selector leaf's ref."
+  @type protoset :: %{optional(reference()) => reference()}
+
+  @doc "Seed a protoset from ids: `%{ref => ref}` (at the subject stage, current == leaf)."
+  @spec seed([reference()]) :: protoset()
+  def seed(ids), do: Map.new(ids, &{&1, &1})
+
+  @doc "Keep the protoset entries whose KEY satisfies `fun` (value preserved)."
+  @spec filter_protoset(protoset(), (reference() -> boolean())) :: protoset()
+  def filter_protoset(protoset, fun), do: :maps.filter(fn id, _leaf -> fun.(id) end, protoset)
+
+  @doc """
+  Compound lookup fused with the protoset: the index scan's `is_map_key` guard IS the
+  same-element intersection, and each surviving id keeps its leaf_ref. `kind` is
+  `:id`/`:class`/`:tag`, or `:attr` with a `value2` for `[name=value]`.
+  """
+  @spec compound_lookup(:ets.tid(), protoset(), :id | :class | :tag, String.t()) :: protoset()
+  def compound_lookup(index, protoset, kind, value) do
+    index |> IndexTable.compound_lookup(protoset, kind, value) |> Map.new()
+  end
+
+  @spec compound_lookup(:ets.tid(), protoset(), :attr, String.t(), String.t()) :: protoset()
+  def compound_lookup(index, protoset, :attr, name, value) do
+    index |> IndexTable.compound_lookup(protoset, :attr, name, value) |> Map.new()
+  end
+
+  @doc "Universal (`*`) fused with the protoset: element rows whose id is in the protoset."
+  @spec compound_element(:ets.tid(), protoset()) :: protoset()
+  def compound_element(nodes, protoset) do
+    nodes |> select(compound_element_spec(protoset)) |> Map.new()
+  end
+
+  defmatchspec compound_element_spec(protoset) do
+    {id, %{__struct__: NodeData.Element}} when is_map_key(protoset, id) ->
+      {id, :erlang.map_get(id, protoset)}
+  end
+
+  @typep ext ::
+           {start :: binary(), id :: reference(), stop :: binary(), parent :: reference() | nil,
+            root :: reference(), leaf_ref :: reference()}
+
+  @doc """
+  Resolve a protoset to `{start, id, stop, parent, root, leaf_ref}` tuples in **start-key
+  (document) order**: one ordered `:start`-span scan (start/root/parent free from the row key,
+  leaf_ref from the protoset value), then `stop` joined from the records in one bulk select.
+  `elements_only?` restricts to element rows (sibling combinators).
+  """
+  @spec resolve_extents(DOM.CSS.context(), protoset(), boolean()) :: [ext()]
+  def resolve_extents(%{nodes: nodes, index: index}, protoset, elements_only? \\ false) do
+    stops =
+      nodes
+      |> NodesTable.records_of(protoset)
+      |> Map.new(fn {id, record} -> {id, record.stop} end)
+
+    for {start, root, parent, id, leaf_ref} <-
+          IndexTable.span_starts(index, protoset, elements_only?) do
+      {start, id, Map.fetch!(stops, id), parent, root, leaf_ref}
+    end
+  end
+
+  @doc """
+  Containment join over start-sorted extents: a subject matches when some LEFT window (same
+  `root`) strictly contains it (`left.start < subject.start and subject.stop < left.stop`).
+  `projection` is `:subject` (key = subject id, the final step) or `:current` (key = the
+  containing left id, feeding the next leftward step). The value is always the subject's leaf_ref.
+  """
+  @spec resolve_descendants([ext()], [ext()], :subject | :current) :: protoset()
+  def resolve_descendants(left_ext, subject_ext, projection) do
+    # left windows grouped by root; sorted by start so the containment test is a scan.
+    left_by_root = Enum.group_by(left_ext, fn {_s, _id, _stop, _p, root, _l} -> root end)
+
+    for {s_start, s_id, s_stop, _s_parent, s_root, leaf} <- subject_ext,
+        {l_start, l_id, l_stop, _l_parent, _l_root, _l_leaf} <-
+          Map.get(left_by_root, s_root, []),
+        l_start < s_start and s_stop < l_stop,
+        into: %{} do
+      case projection do
+        :subject -> {s_id, leaf}
+        :current -> {l_id, leaf}
+      end
+    end
+  end
+
+  @doc """
+  Child join: a subject matches when some LEFT element is its parent (`subject.parent == left.id`).
+  `projection` as in `resolve_descendants/3`.
+  """
+  @spec resolve_child([ext()], [ext()], :subject | :current) :: protoset()
+  def resolve_child(left_ext, subject_ext, projection) do
+    left_ids = MapSet.new(left_ext, fn {_s, id, _stop, _p, _r, _l} -> id end)
+
+    for {_s_start, s_id, _s_stop, s_parent, _s_root, leaf} <- subject_ext,
+        s_parent != nil and MapSet.member?(left_ids, s_parent),
+        into: %{} do
+      case projection do
+        :subject -> {s_id, leaf}
+        :current -> {s_parent, leaf}
+      end
+    end
+  end
+
+  @doc """
+  Subsequent-sibling join (`~`): a subject matches when some LEFT element shares its parent and
+  precedes it in document order (`left.start < subject.start`, same parent). Uses element-only extents.
+  """
+  @spec resolve_subsequent_sibling([ext()], [ext()], :subject | :current) :: protoset()
+  def resolve_subsequent_sibling(left_ext, subject_ext, projection) do
+    # min left.start per parent — a subject matches if it starts after the earliest left sibling.
+    min_left =
+      Enum.reduce(left_ext, %{}, fn {l_start, l_id, _stop, l_parent, _r, _l}, acc ->
+        Map.update(acc, l_parent, {l_start, l_id}, &min(&1, {l_start, l_id}))
+      end)
+
+    for {s_start, s_id, _s_stop, s_parent, _s_root, leaf} <- subject_ext,
+        {l_start, l_id} = Map.get(min_left, s_parent, {nil, nil}),
+        l_start != nil and l_start < s_start,
+        into: %{} do
+      case projection do
+        :subject -> {s_id, leaf}
+        :current -> {l_id, leaf}
+      end
+    end
+  end
+
+  @doc """
+  Next-sibling join (`+`): a subject matches when some LEFT element is the immediately preceding
+  ELEMENT sibling (same parent, adjacent in element order). Uses element-only start-sorted extents.
+  """
+  @spec resolve_next_sibling([ext()], [ext()], :subject | :current) :: protoset()
+  def resolve_next_sibling(left_ext, subject_ext, projection) do
+    # last left.start strictly before each subject, per parent (the immediately-preceding element).
+    left_by_parent =
+      left_ext
+      |> Enum.group_by(fn {_s, _id, _stop, parent, _r, _l} -> parent end)
+      |> Map.new(fn {parent, exts} ->
+        {parent, Enum.sort_by(exts, fn {start, _id, _stop, _p, _r, _l} -> start end)}
+      end)
+
+    for {s_start, s_id, _s_stop, s_parent, _s_root, leaf} <- subject_ext,
+        pred = preceding_element(Map.get(left_by_parent, s_parent, []), s_start),
+        pred != nil,
+        into: %{} do
+      case projection do
+        :subject -> {s_id, leaf}
+        :current -> {pred, leaf}
+      end
+    end
+  end
+
+  # The id of the left element with the greatest start strictly < `s_start` (the immediately
+  # preceding element sibling), or nil. `exts` is start-sorted.
+  defp preceding_element(exts, s_start) do
+    exts
+    |> Enum.take_while(fn {start, _id, _stop, _p, _r, _l} -> start < s_start end)
+    |> List.last()
+    |> case do
+      nil -> nil
+      {_start, id, _stop, _p, _r, _l} -> id
+    end
+  end
+
   @doc """
   Element ids in `candidates` whose local name is `name` — read from the tag
   index (a bounded prefix scan of the `:ordered_set`; namespace-agnostic, as CSS

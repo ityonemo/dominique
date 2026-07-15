@@ -142,6 +142,70 @@ defmodule DOM.NodeData.IndexTable do
   end
 
   # ==========================================================================
+  # Protoset-fused index lookups (CSS compound intersection)
+  # ==========================================================================
+  #
+  # `compound_lookup` narrows an index lookup to a protoset (`%{ref => leaf_ref}`) in ONE
+  # scan: the `is_map_key` guard is the intersection (no post-filter list walk) and the body
+  # projects the protoset VALUE (the CSS leaf ref) so a chained compound preserves it. Closes
+  # over the runtime map, so these are `defmatchspec` (like `records_of_spec`), not `defmatchspecp`.
+
+  @doc """
+  Node ids in `protoset` carrying `value` for the given index kind, as
+  `{node_id, leaf_ref}` pairs (leaf_ref = the protoset value). Fused intersection.
+  """
+  @spec compound_lookup(tid, protoset, :tag | :id | :class, String.t()) :: [{id, term()}]
+  def compound_lookup(index, protoset, :tag, value),
+    do: :ets.select(index, compound_tag_spec(protoset, value))
+
+  def compound_lookup(index, protoset, :id, value),
+    do: :ets.select(index, compound_id_spec(protoset, value))
+
+  def compound_lookup(index, protoset, :class, value),
+    do: :ets.select(index, compound_class_spec(protoset, value))
+
+  @doc "Node ids in `protoset` with attribute `name == value`, as `{node_id, leaf_ref}` pairs."
+  @spec compound_lookup(tid, protoset, :attr, String.t(), String.t()) :: [{id, term()}]
+  def compound_lookup(index, protoset, :attr, name, value),
+    do: :ets.select(index, compound_attr_spec(protoset, name, value))
+
+  @typep protoset :: %{optional(id) => term()}
+
+  defmatchspec compound_tag_spec(protoset, value) do
+    {{:tag, ^value, _ref}, node_id} when is_map_key(protoset, node_id) ->
+      {node_id, :erlang.map_get(node_id, protoset)}
+  end
+
+  defmatchspec compound_id_spec(protoset, value) do
+    {{:id, ^value, _ref}, node_id} when is_map_key(protoset, node_id) ->
+      {node_id, :erlang.map_get(node_id, protoset)}
+  end
+
+  defmatchspec compound_class_spec(protoset, value) do
+    {{:class, ^value, _ref}, node_id} when is_map_key(protoset, node_id) ->
+      {node_id, :erlang.map_get(node_id, protoset)}
+  end
+
+  defmatchspec compound_attr_spec(protoset, name, value) do
+    {{:attr, ^name, ^value, _ref}, node_id} when is_map_key(protoset, node_id) ->
+      {node_id, :erlang.map_get(node_id, protoset)}
+  end
+
+  @doc """
+  `{value, node_id, leaf_ref}` triples for every attribute `name` on a node in `protoset`
+  — the fused by-name scan backing `[name]` presence and the operator / `i`-flag paths
+  (the caller filters `value`). Membership fused in; leaf_ref projected from the protoset.
+  """
+  @spec compound_attr_name(tid, protoset, String.t()) :: [{String.t(), id, term()}]
+  def compound_attr_name(index, protoset, name),
+    do: :ets.select(index, compound_attr_name_spec(protoset, name))
+
+  defmatchspec compound_attr_name_spec(protoset, name) do
+    {{:attr, ^name, value, _ref}, node_id} when is_map_key(protoset, node_id) ->
+      {value, node_id, :erlang.map_get(node_id, protoset)}
+  end
+
+  # ==========================================================================
   # Span rows (nested-set adjacency, in the index tid)
   # ==========================================================================
   #
@@ -209,6 +273,32 @@ defmodule DOM.NodeData.IndexTable do
   defmatchspecp span_element_children_spec(root, parent_id, pstart, pstop) do
     {{:span, ^root, s, :start, ^parent_id}, {node_id, :element}} when s > pstart and s < pstop ->
       node_id
+  end
+
+  @doc """
+  The `:start` span rows of the nodes in `protoset`, as `{start, root, parent, node_id, leaf_ref}`
+  tuples in **start-key (document) order** (the `:ordered_set` scans keys ascending). Backs the CSS
+  combinator extent resolver: `start`/`root`/`parent` come free from the row key, `leaf_ref` is
+  projected from the protoset value; the caller joins `stop` from the records. `elements_only?`
+  restricts to element rows (for sibling combinators).
+  """
+  @spec span_starts(tid, protoset, boolean()) :: [{Extent.t(), id, id | nil, id, term()}]
+  def span_starts(index, protoset, elements_only? \\ false)
+
+  def span_starts(index, protoset, false),
+    do: :ets.select(index, span_starts_spec(protoset))
+
+  def span_starts(index, protoset, true),
+    do: :ets.select(index, span_starts_element_spec(protoset))
+
+  defmatchspec span_starts_spec(protoset) do
+    {{:span, root, s, :start, parent}, {node_id, _type}} when is_map_key(protoset, node_id) ->
+      {s, root, parent, node_id, :erlang.map_get(node_id, protoset)}
+  end
+
+  defmatchspec span_starts_element_spec(protoset) do
+    {{:span, root, s, :start, parent}, {node_id, :element}} when is_map_key(protoset, node_id) ->
+      {s, root, parent, node_id, :erlang.map_get(node_id, protoset)}
   end
 
   @doc false
