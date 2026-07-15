@@ -40,10 +40,12 @@ defmodule DOM.CSS.Complex do
   defp shadow_crossing?(%{scope_host: host}), do: host != nil
 
   # FAST path: fold the leftward [combinator, compound, ...] chain, re-seating the protoset at
-  # each step to be keyed by the newly-matched (left) element, value = the subject leaf_ref.
+  # each step to be keyed by the newly-matched (left) element, value = the subject leaves.
   # Returns a protoset keyed by the leftmost compound's matches; `query_ids` reads its values.
   defp chain_fast([], protoset, _context), do: protoset
 
+  # :descendant — resolve the left compound over the whole scope, then a start-sorted extent
+  # containment sweep (`:current` re-keys to the containing ancestor, threading the leaves).
   defp chain_fast([:descendant, compound | rest], subject_ps, context) do
     left_ps = DOM.CSS.match(compound, context, Query.seed(context.scope_candidates))
     subject_ext = Query.resolve_extents(context, subject_ps)
@@ -52,9 +54,17 @@ defmodule DOM.CSS.Complex do
     chain_fast(rest, next_ps, context)
   end
 
-  # Combinators not yet on the fast path (:child, siblings — Phases 4/5): fall back to the
-  # per-candidate walk for the remaining chain from here. Keyed by the current protoset's
-  # keys, values preserved.
+  # :child — the parent id is IN the subject's span row, so one scan lifts each subject to its
+  # PARENT (`lift_to_parent`, merge-appending leaves for shared parents), then the left compound
+  # is an ordinary fused match over that parent-keyed protoset. No two-sided join needed.
+  defp chain_fast([:child, compound | rest], subject_ps, context) do
+    parent_ps = Query.lift_to_parent(context, subject_ps)
+    next_ps = DOM.CSS.match(compound, context, parent_ps)
+    chain_fast(rest, next_ps, context)
+  end
+
+  # Combinators not yet on the fast path (siblings — Phase 5): fall back to the per-candidate
+  # walk for the remaining chain from here. Keyed by the current protoset's keys, values preserved.
   defp chain_fast([_combinator | _] = remaining, protoset, context) do
     Query.filter_protoset(protoset, &chain?(remaining, &1, context))
   end

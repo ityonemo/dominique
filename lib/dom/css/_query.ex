@@ -94,6 +94,17 @@ defmodule DOM.CSS.Query do
   end
 
   @doc """
+  Lift a protoset to its PARENTS: `%{parent_id => leaves}`, where each surviving subject's leaves
+  are carried onto its parent (merge-appended for a shared parent). One span scan — the parent id
+  is in the `:start` row. Backs the CSS `:child` combinator (then the left compound is an ordinary
+  fused match over the parent-keyed protoset). Tree-root subjects (no parent) drop out.
+  """
+  @spec lift_to_parent(DOM.CSS.context(), protoset()) :: protoset()
+  def lift_to_parent(%{index: index}, protoset) do
+    index |> IndexTable.span_parents(protoset) |> merge_pairs()
+  end
+
+  @doc """
   Containment join over start-sorted extents: a subject matches when some LEFT window (same
   `root`) strictly contains it (`left.start < subject.start and subject.stop < left.stop`).
   `projection` is `:subject` (key = subject id, the final step) or `:current` (key = the

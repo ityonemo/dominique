@@ -301,6 +301,20 @@ defmodule DOM.NodeData.IndexTable do
       {s, root, parent, node_id, :erlang.map_get(node_id, protoset)}
   end
 
+  @doc """
+  For each node in `protoset`, its `{parent, leaves}` — the PARENT id (free from the `:start`
+  span row key) paired with the node's protoset value. One scan; backs the CSS `:child`
+  combinator (lift each subject to its parent). A tree-root (`parent == nil`) is skipped.
+  """
+  @spec span_parents(tid, protoset) :: [{id, term()}]
+  def span_parents(index, protoset), do: :ets.select(index, span_parents_spec(protoset))
+
+  defmatchspec span_parents_spec(protoset) do
+    {{:span, _root, _s, :start, parent}, {node_id, _type}}
+    when is_map_key(protoset, node_id) and parent != nil ->
+      {parent, :erlang.map_get(node_id, protoset)}
+  end
+
   @doc false
   # Every span row as `{root, key, kind, parent, node_id, type}` — used by the consistency
   # checker (in DOM.NodeData).

@@ -164,6 +164,27 @@ defmodule DOM.CSS.ProtosetPrimitivesTest do
     end
   end
 
+  describe "lift_to_parent (:child support)" do
+    test "lifts each subject to its parent, merging leaves for a shared parent", %{
+      context: context,
+      ids: ids,
+      root: root
+    } do
+      # a, b, c all share `root` as parent — their leaves must accumulate under root.
+      subject = %{ids.a => [:la], ids.b => [:lb], ids.c => [:lc]}
+      %{^root => leaves} = Query.lift_to_parent(context, subject)
+      assert Enum.sort(leaves) == Enum.sort([:la, :lb, :lc])
+    end
+
+    test "a tree root (no parent) drops out", %{context: context, root: root} do
+      assert Query.lift_to_parent(context, %{root => [:lr]}) == %{}
+    end
+
+    test "aa lifts to a (its parent), not root", %{context: context, ids: ids, aa: aa} do
+      assert Query.lift_to_parent(context, %{aa => [:leaf_aa]}) == %{ids.a => [:leaf_aa]}
+    end
+  end
+
   describe "resolve_child (parent hash-join)" do
     test "aa's parent is a -> matches", %{context: context, ids: ids, aa: aa} do
       left = Query.resolve_extents(context, %{ids.a => [:la]})
