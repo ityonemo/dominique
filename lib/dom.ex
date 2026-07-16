@@ -2888,6 +2888,14 @@ defmodule DOM do
   end
 
   @doc false
+  def _node_remove_event_listener_by_ref(server, node_id, ref) do
+    _atomic_ets_op(server, fn _nodes, index ->
+      IndexTable.listener_delete_by_ref(index, node_id, ref)
+      :ok
+    end)
+  end
+
+  @doc false
   def _node_listeners(server, node_id) do
     _atomic_ets_op(server, fn _nodes, index -> IndexTable.listeners_of(index, node_id) end)
   end

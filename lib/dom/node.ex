@@ -559,23 +559,55 @@ defmodule DOM.Node do
   # ==========================================================================
 
   @doc """
-  Registers `fun` as a listener for `type` events on `node`. `opts`: `:capture`
-  (fire in the capturing phase), `:once` (auto-remove after one dispatch),
-  `:passive` (`preventDefault` from the listener is ignored). Re-registering the
-  same `(type, fun, capture)` is a no-op, per the DOM.
-  """
-  @spec add_event_listener(t(), String.t(), (DOM.Event.t() -> any()), keyword()) :: :ok
-  def add_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
-      when is_binary(type) and is_function(fun, 1) do
-    signal = Keyword.get(opts, :signal)
+  Registers `fun` as a listener for `type` events on `node`, returning a `ref` handle.
+  `opts`: `:capture` (fire in the capturing phase), `:once` (auto-remove after one
+  dispatch), `:passive` (`preventDefault` from the listener is ignored), `:signal`
+  (an `DOM.AbortSignal` — the listener is removed when the signal aborts).
+  Re-registering the same `(type, fun, capture)` is a no-op, per the DOM.
 
-    # A listener registered with an already-aborted signal is never added (per spec).
-    if signal && DOM.AbortSignal.aborted?(signal) do
-      :ok
-    else
+  `fun` is arity 1 (`fn event -> … end`) or arity 2 (`fn event, ref -> … end`); the
+  arity-2 form receives the listener's OWN `ref` when it fires, so it can remove
+  itself with `remove_event_listener(node, ref)`.
+
+  ## Listener lifetime
+
+  A listener lives with the NODE and fires on the document server — so it **persists
+  after the process that registered it exits** (matching browsers, where a listener
+  is not tied to any "caller"). To bind a listener to a process's lifetime, use the
+  arity-2 form and self-remove — the "exfiltration listener" pattern:
+
+      me = self()
+
+      DOM.Node.add_event_listener(node, "click", fn _event, ref ->
+        if Process.alive?(me) do
+          send(me, exfiltrate(node))
+        else
+          DOM.Node.remove_event_listener(node, ref)
+        end
+      end)
+
+  (For a named process use `Process.whereis(name) != nil` instead of `Process.alive?/1`.)
+  The `:signal` option is the other explicit cleanup route.
+  """
+  @spec add_event_listener(
+          t(),
+          String.t(),
+          (DOM.Event.t() -> any()) | (DOM.Event.t(), reference() -> any()),
+          keyword()
+        ) :: reference()
+  def add_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
+      when is_binary(type) and (is_function(fun, 1) or is_function(fun, 2)) do
+    signal = Keyword.get(opts, :signal)
+    ref = make_ref()
+    aborted? = signal != nil and DOM.AbortSignal.aborted?(signal)
+
+    # A listener registered with an already-aborted signal is never added (per spec) —
+    # but we still return a (dangling) handle for a uniform API; removing it is a no-op.
+    if not aborted? do
       listener = %DOM.Listener{
         type: type,
         fn: fun,
+        ref: ref,
         capture: Keyword.get(opts, :capture, false),
         once: Keyword.get(opts, :once, false),
         passive: Keyword.get(opts, :passive, false),
@@ -584,15 +616,31 @@ defmodule DOM.Node do
 
       DOM._node_add_event_listener(node.server, node.node_id, listener)
     end
+
+    ref
+  end
+
+  @doc """
+  Removes the listener with handle `ref` (the value returned by `add_event_listener/4`,
+  or the ref passed to an arity-2 listener) from `node`. A no-op when none matches.
+  """
+  @spec remove_event_listener(t(), reference()) :: :ok
+  def remove_event_listener(%__MODULE__{} = node, ref) when is_reference(ref) do
+    DOM._node_remove_event_listener_by_ref(node.server, node.node_id, ref)
   end
 
   @doc """
   Removes the listener matching `(type, fun, capture)` from `node`. A no-op when
   none matches. Only `:capture` is significant for the match (per the DOM).
   """
-  @spec remove_event_listener(t(), String.t(), (DOM.Event.t() -> any()), keyword()) :: :ok
+  @spec remove_event_listener(
+          t(),
+          String.t(),
+          (DOM.Event.t() -> any()) | (DOM.Event.t(), reference() -> any()),
+          keyword()
+        ) :: :ok
   def remove_event_listener(%__MODULE__{} = node, type, fun, opts \\ [])
-      when is_binary(type) and is_function(fun, 1) do
+      when is_binary(type) and (is_function(fun, 1) or is_function(fun, 2)) do
     capture = Keyword.get(opts, :capture, false)
     DOM._node_remove_event_listener(node.server, node.node_id, type, fun, capture)
   end
