@@ -46,6 +46,28 @@ defmodule DOM.Event.AddRemoveListenerTest do
     assert Node.__listeners(d) == []
   end
 
+  test "fire order stays registration order across interleaved add/remove" do
+    # The seq allocator (a monotonic counter) must keep fire order == registration
+    # order even as listeners are added and removed in between.
+    doc = new_document("<div id='d'></div>")
+    d = DOM.query_selector(doc, "#d")
+    {:ok, log} = Agent.start_link(fn -> [] end)
+    tag = fn name -> fn _ -> Agent.update(log, &[name | &1]) end end
+
+    a = tag.("a")
+    b = tag.("b")
+    Node.add_event_listener(d, "click", a)
+    Node.add_event_listener(d, "click", b)
+    Node.remove_event_listener(d, "click", a)
+    Node.add_event_listener(d, "click", tag.("c"))
+    Node.remove_event_listener(d, "click", b)
+    Node.add_event_listener(d, "click", tag.("e"))
+
+    Node.dispatch_event(d, DOM.Event.new("click"))
+    # survivors b, c, e fired in the order they were (last) registered
+    assert Agent.get(log, &Enum.reverse/1) == ["c", "e"]
+  end
+
   test "removeChild detaches but KEEPS listeners (the node is still alive)" do
     # Per the DOM, removeChild does not drop listeners — a detached node retains
     # them and can be re-inserted. Only actual destruction (e.g. replacing a
