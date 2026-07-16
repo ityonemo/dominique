@@ -157,9 +157,14 @@ defmodule DOM do
   @doc """
   Convenience over `start_link/1`: create a document and return its handle. With
   no argument the document is empty; given an HTML string it is parsed (WHATWG
-  tree construction) into the document's table before it is returned. Prefer
-  `start_link/1` directly (e.g. under a supervisor); this wraps it and mints the
-  `%DOM.Node{type: :document}` handle.
+  tree construction) into the document's table before it is returned.
+
+  `DOM.new` starts an **unsupervised** process — ideal for scripts, tests, and the
+  REPL. For anything long-lived, prefer `start_link/1` under a supervisor; it takes
+  the same build options, and you mint the document handle yourself:
+
+      {:ok, server} = DOM.start_link(parse: DOM.HTML.tokens(html), document_id: id)
+      document = %DOM.Node{server: server, node_id: id, type: :document}
   """
   def new(html \\ nil)
 

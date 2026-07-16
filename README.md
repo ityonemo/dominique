@@ -18,6 +18,16 @@ DOM.Node.add_event_listener(item, "click", fn _event -> IO.puts("clicked") end)
 DOM.Node.dispatch_event(item, DOM.Event.new("click", bubbles: true))
 ```
 
+`DOM.new/0,1` starts an **unsupervised** document and returns its handle — convenient for
+scripts, tests, and the REPL. For a long-lived document, use `DOM.start_link/1` under a
+supervisor (it takes the same options; you mint the `%DOM.Node{type: :document}` handle
+from the returned server):
+
+```elixir
+{:ok, server} = DOM.start_link(parse: DOM.HTML.tokens(html), document_id: id)
+document = %DOM.Node{server: server, node_id: id, type: :document}
+```
+
 ## Architecture
 
 - **Two struct layers.** `DOM.Node` is the one user-facing handle — a struct carrying
@@ -52,6 +62,38 @@ DOM.Node.dispatch_event(item, DOM.Event.new("click", bubbles: true))
 Everything browser-observable is checked against a Chromium+Firefox oracle via
 Playwright, and every document verifies an internal consistency invariant on teardown.
 
+## Completeness
+
+Dominique aims to be a **faithful, thorough implementation of the DOM core** — the parts
+of the WHATWG DOM (and the DOM-facing slices of HTML and CSS Selectors) that are derivable
+from the tree, its attributes, and the event loop. That surface is broad and
+browser-verified: tree mutation and traversal, the full attribute model, CSS Level-4
+selector matching, Shadow DOM, events with shadow retargeting, the microtask/task event
+loop, custom elements, ranges, and traversal objects all behave as Chromium and Firefox do.
+
+What it does **not** implement is anything that requires a subsystem a pure DOM library
+doesn't have. These are deliberate omissions, not bugs:
+
+- **No layout or rendering.** `getBoundingClientRect`, `scrollIntoView`, `innerText`
+  (needs layout), and the rendering/presentation pseudo-classes (`:modal`, `:fullscreen`,
+  `:picture-in-picture`, `:popover-open`) are out of scope.
+- **No navigation, history, or live URL.** `:visited`, `:target`-by-navigation,
+  `:local-link`, link-follows-on-click, and form submission are not modeled (the
+  `:target` fragment and click activations that *are* derivable — checkbox/radio toggle,
+  `<summary>`→`<details>`— are implemented).
+- **No media, autofill, or live-editing engine.** `HTMLMediaElement` playback state
+  (`:playing`/`:paused`/…), `:autofill`, `:user-valid`/`:user-invalid`, and the finer
+  constraint-validation edges (`step`, `minlength` under live editing) are absent.
+- **No `Window`.** Timers and `queueMicrotask` live on `DOM` as a documented convenience
+  (the document server owns the event loop), but there is no `Window`, `Location`, or
+  `Selection`/XPath subsystem.
+
+Where a selector references something unmodelable (`:playing`, `:visited`, …) it matches
+**nothing** rather than erroring — mirroring how a browser `querySelector` returns no
+elements. And a few browser divergences are intentional design choices for a testing
+library (a listener/microtask that raises crashes the document server; handles go stale
+after cross-document adoption) — see the notes below.
+
 ## API index — WHATWG member → Dominique
 
 Dominique does **not** put every DOM method on one module; each WHATWG interface maps
@@ -63,7 +105,7 @@ handle (or another handle struct) as their first argument.
 
 | WHATWG | Dominique |
 |---|---|
-| `new Document()` / parse | `DOM.new/0,1` |
+| `new Document()` / parse | `DOM.new/0,1` / `DOM.start_link/1` (`start_link` preferred) |
 | `documentElement` | `DOM.document_element/1` |
 | `body` / `head` | `DOM.body/1` / `DOM.head/1` |
 | `createElement` | `DOM.create_element/2` |
