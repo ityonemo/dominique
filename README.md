@@ -1,6 +1,56 @@
 # Dominique
 
-**TODO: Add description**
+An Elixir implementation of the browser **DOM**. A document is a `GenServer` that
+owns a private ETS table of per-type node records; you manipulate it through
+immutable **handles** (`%DOM.Node{server, node_id, type}`) rather than live objects.
+It exists to **test DOM interactions from Elixir** — the tree, CSS selectors, events,
+and the WHATWG event loop — without a browser, with behavior verified against real
+Chromium and Firefox.
+
+```elixir
+doc = DOM.new("<ul id='list'><li class='item'>a</li><li class='item'>b</li></ul>")
+
+DOM.query_selector_all(doc, "#list > .item")   # [%DOM.Node{}, %DOM.Node{}]
+item = DOM.query_selector(doc, "li.item")
+DOM.Element.get_attribute(item, "class")       # "item"
+
+DOM.Node.add_event_listener(item, "click", fn _event -> IO.puts("clicked") end)
+DOM.Node.dispatch_event(item, DOM.Event.new("click", bubbles: true))
+```
+
+## Architecture
+
+- **Two struct layers.** `DOM.Node` is the one user-facing handle — a struct carrying
+  `{server, node_id, type}`, never a live object. Internally, six per-type
+  `DOM.NodeData.*` records live in the server's ETS tuple space. Operations are
+  `type`-guarded function clauses on the handle, never a protocol over the handle.
+- **Scoped dispatch.** Generic node operations → `DOM.Node`; element-intrinsic ones
+  (attributes, `local_name`) → `DOM.Element`; whole-document / query operations →
+  `DOM` (which is also the GenServer). `querySelector` is scoped per `ParentNode`
+  kind (`DOM`, `Element`, `DocumentFragment`, `ShadowRoot`).
+- **Nested-set tree.** Child order and containment are encoded in binary extent keys
+  in an `:ordered_set` index, so `querySelectorAll`, ancestor/containment tests, and
+  `compareDocumentPosition` are index range scans, not tree walks.
+
+## What's implemented
+
+- **Tree & attributes** — the everyday node/element surface, the attribute API
+  (including namespaced attributes and live `Attr` nodes), `cloneNode`, cross-document
+  adoption.
+- **CSS selectors** — the full CSS Level-4 grammar parses and matches for everything
+  derivable from the tree (type/id/class/attribute, all combinators, selector lists,
+  `:not`/`:is`/`:where`/`:has`, the structural and `*-of-type` families, and the
+  derivable UI/form-state pseudo-classes). The combinator engine is index-fused (no
+  per-candidate re-query).
+- **Shadow DOM** — shadow roots, maintained slot assignment, shadow-scoped CSS.
+- **Events & the event loop** — full capture→target→bubble dispatch with shadow
+  retargeting; microtasks, `MutationObserver`, `slotchange`, timers
+  (`setTimeout`/`setInterval`); custom elements with synchronous reactions;
+  `AbortController`/`AbortSignal`; focus and other interaction state.
+- **Ranges & traversal** — `Range`, `TreeWalker`, `NodeIterator`.
+
+Everything browser-observable is checked against a Chromium+Firefox oracle via
+Playwright, and every document verifies an internal consistency invariant on teardown.
 
 ## Node handle freshness
 
