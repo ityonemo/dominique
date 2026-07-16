@@ -344,6 +344,18 @@ fork); an in-flight event's mutable state lives in a ref-keyed `:active_event` r
 (`lib/dom/_events.ex`). Verified against the Chromium+Firefox oracle
 (`test/integration/event_test.exs`).
 
+**Listener handles (ref).** `add_event_listener` returns a `ref()`; the listener `fn`
+may be arity 1 (`fn event`) or arity 2 (`fn event, ref`) — the arity-2 form receives its
+OWN ref at fire time (`call_listener` dispatches on arity), so a running listener can
+remove itself via `remove_event_listener(node, ref)` (the new ref form;
+`IndexTable.listener_delete_by_ref`). Because a listener OUTLIVES the process that
+registered it, this backs the "exfiltration listener" self-detach pattern (a listener that
+`send`s DOM data to `this = self()` and self-removes once `this` dies) — see
+`add_event_listener/4`'s doc and `test/dom/event/self_removing_listener_test.exs`. `ref` is
+a stored field on `%DOM.Listener{}`, NOT the ordered_set row key: the key stays
+`{:listener, node_id, seq}` with `seq` from a document-wide `:counters` cell (`:listener_seq`
+in the process dict) — refs are not order-stable, so `seq` is the registration/fire-order key.
+
 **Microtasks (implemented):** the microtask/event-loop layer is built. A one-shot
 FIFO `{:microtask, seq}` index-row queue; `DOM._enqueue_microtask/2` is dual (like
 `_atomic_ets_op`). The checkpoint is `handle_continue(:drain_microtasks)` — it runs
