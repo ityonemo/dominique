@@ -249,13 +249,13 @@ listener would hide exactly the defects this library exists to surface.
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
+This package is NOT available on hex and can be installed
 by adding `dominique` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:dominique, "~> 0.1.0"}
+    {:dominique, "~> 0.1.0", git: "https://github.com/ityonemo/dominique"}
   ]
 end
 ```
