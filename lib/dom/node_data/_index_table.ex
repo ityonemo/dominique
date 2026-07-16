@@ -516,6 +516,22 @@ defmodule DOM.NodeData.IndexTable do
     {{:listener, ^node_id, seq}, listener} -> {{:listener, node_id, seq}, listener}
   end
 
+  @doc "Delete `node_id`'s listener whose own handle is `ref` (the `remove_event_listener/2` form)."
+  @spec listener_delete_by_ref(tid, id, reference()) :: :ok
+  def listener_delete_by_ref(index, node_id, ref) do
+    for key <- :ets.select(index, listener_by_ref_spec(node_id, ref)) do
+      :ets.delete(index, key)
+    end
+
+    :ok
+  end
+
+  # The row KEY of `node_id`'s listener carrying `ref` (subset match on the struct's ref field).
+  defmatchspecp listener_by_ref_spec(node_id, ref) do
+    {{:listener, ^node_id, seq}, %{__struct__: DOM.Listener, ref: ^ref}} ->
+      {:listener, node_id, seq}
+  end
+
   @doc "Drop all listener rows for `node_id` (node removed / adopted away)."
   @spec listeners_retract(tid, id) :: :ok
   def listeners_retract(index, node_id) do

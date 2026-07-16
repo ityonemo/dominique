@@ -162,9 +162,11 @@ defmodule DOM.Events do
     end
   end
 
-  # Run one listener's lambda with the event. Listener exceptions currently
+  # Run one listener's lambda with the event. An arity-2 fn also receives the
+  # listener's own ref (so it can remove itself). Listener exceptions currently
   # propagate (crashing the server) — event-loop isolation is a later concern.
-  defp call_listener(listener, event), do: listener.fn.(event)
+  defp call_listener(%{fn: fun, ref: ref}, event) when is_function(fun, 2), do: fun.(event, ref)
+  defp call_listener(%{fn: fun}, event), do: fun.(event)
 
   defp handle(nodes, server, node_id) do
     %DOM.Node{server: server, node_id: node_id, type: NodesTable.type(nodes, node_id)}
